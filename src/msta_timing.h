@@ -41,6 +41,7 @@
 typedef struct {
     double Slack;
     double Arrival, Required;
+    int    fDataRise;         /* 获胜路径的数据边沿：1 = rise，0 = fall */
     /* 要求时间的组成成分，报告层直接拿来打印（不让报告层重新推导一遍） */
     double CheckTime, Uncertainty;
     double Borrow;            /* set_max_time_borrow 给锁存器放宽的那部分 */

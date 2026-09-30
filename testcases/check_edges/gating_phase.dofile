@@ -1,0 +1,6 @@
+read_liberty gating_phase.lib
+read_verilog gating_phase.v
+current_design gating_phase
+read_sdc gating_phase.sdc
+report_checks -setup
+report_checks -hold

@@ -4025,6 +4025,13 @@ static int Msta_SdcEdgeMatches( char RF, int fRises )
     return RF == ( fRises ? 'r' : 'f' );
 }
 
+/* 时钟集合限定参考时钟边沿；引脚/端口集合限定该对象的数据边沿。 */
+static int Msta_SdcEndpointEdge( const MstaSdcEndpoint *pEnd, char Kind )
+{
+    if ( pEnd == NULL ) return -1;
+    return Kind == 'C' || pEnd->pObj == NULL ? pEnd->fRises : pEnd->pObj->fRises;
+}
+
 /* -through 匹配：每个分组按顺序在路径上找第一个命中的对象，组内取"或"。
    -rise_through/-fall_through 还要求那个点上的信号边沿对上。
    pnHits / pRF 记下每个分组命中的路径对象下标和它的边沿要求（找次优路径时用），
@@ -4087,8 +4094,8 @@ static int Msta_SdcExceptionHits( MstaSdc *p, MstaDesign *pDes, MstaException *p
     if ( !Msta_SdcMatchObject(pDes,pEx->ToText,pEx->ToKind,
                               pTo ? pTo->pObj : NULL, pTo ? pTo->pClock : NULL) )
         return 0;
-    if ( !Msta_SdcEdgeMatches(pEx->FromRF, pFrom ? pFrom->fRises : -1) ||
-         !Msta_SdcEdgeMatches(pEx->ToRF,   pTo   ? pTo->fRises   : -1) )
+    if ( !Msta_SdcEdgeMatches(pEx->FromRF, Msta_SdcEndpointEdge(pFrom,pEx->FromKind)) ||
+         !Msta_SdcEdgeMatches(pEx->ToRF, Msta_SdcEndpointEdge(pTo,pEx->ToKind)) )
         return 0;
     return Msta_SdcMatchThrough( pDes, pEx, pObjects, nObjects, NULL, NULL, NULL );
 }
@@ -4544,8 +4551,8 @@ static int Msta_SdcPathGroupHits( MstaSdc *p, MstaDesign *pDes, MstaPathGroup *p
     if ( !Msta_SdcMatchObject(pDes,pGroup->ToText,pGroup->ToKind,
                               pTo ? pTo->pObj : NULL, pTo ? pTo->pClock : NULL) )
         return 0;
-    if ( !Msta_SdcEdgeMatches(pGroup->FromRF, pFrom ? pFrom->fRises : -1) ||
-         !Msta_SdcEdgeMatches(pGroup->ToRF,   pTo   ? pTo->fRises   : -1) )
+    if ( !Msta_SdcEdgeMatches(pGroup->FromRF, Msta_SdcEndpointEdge(pFrom,pGroup->FromKind)) ||
+         !Msta_SdcEdgeMatches(pGroup->ToRF, Msta_SdcEndpointEdge(pTo,pGroup->ToKind)) )
         return 0;
     return Msta_SdcMatchThroughList( pDes, pGroup->Thru, pGroup->nThru,
                                      pObjects, nObjects, NULL, NULL, NULL );

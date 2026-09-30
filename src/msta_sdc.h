@@ -225,7 +225,7 @@ typedef struct {
 typedef struct {
     const MstaSdcObject *pObj;
     const char          *pClock;
-    int                  fRises;  /* 1=上升沿, 0=下降沿, -1=边沿未知 */
+    int                  fRises;  /* 参考时钟边沿；pObj->fRises 是数据边沿 */
 } MstaSdcEndpoint;
 
 typedef struct {

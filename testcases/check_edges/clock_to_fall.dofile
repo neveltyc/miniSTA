@@ -1,0 +1,6 @@
+read_liberty normal.lib
+read_verilog netlist.v
+current_design check_edges
+read_sdc clock_to_fall.sdc
+report_checks -setup
+report_checks -hold

@@ -1,0 +1,49 @@
+library (check_edges) {
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  capacitive_load_unit (1,pf);
+  nom_voltage : 1; nom_temperature : 25; nom_process : 1;
+  slew_lower_threshold_pct_rise : 20; slew_upper_threshold_pct_rise : 80;
+  slew_lower_threshold_pct_fall : 20; slew_upper_threshold_pct_fall : 80;
+  input_threshold_pct_rise : 50; input_threshold_pct_fall : 50;
+  output_threshold_pct_rise : 50; output_threshold_pct_fall : 50;
+  lu_table_template (check) {
+    variable_1 : constrained_pin_transition;
+    index_1 ("0.1, 0.5");
+  }
+  cell (BUF) {
+    area : 1;
+    pin (A) { direction : input; capacitance : 0.001; }
+    pin (Y) { direction : output; function : "A";
+      timing () { related_pin : "A"; timing_sense : positive_unate;
+        cell_rise (scalar) { values ("2"); }
+        cell_fall (scalar) { values ("1"); }
+        rise_transition (scalar) { values ("0.2"); }
+        fall_transition (scalar) { values ("0.4"); }
+      }
+    }
+  }
+  cell (DFF) {
+    area : 1;
+    ff (IQ, IQN) { clocked_on : "CLK"; next_state : "D"; }
+    pin (CLK) { direction : input; clock : true; capacitance : 0.001; }
+    pin (D) { direction : input; capacitance : 0.001;
+      timing () { related_pin : "CLK"; timing_type : setup_rising;
+        rise_constraint (check) { values ("0.2, 0.6"); }
+        fall_constraint (check) { values ("3.2, 3.6"); }
+      }
+      timing () { related_pin : "CLK"; timing_type : hold_rising;
+        rise_constraint (check) { values ("2.2, 2.6"); }
+        fall_constraint (check) { values ("0.2, 0.6"); }
+      }
+    }
+    pin (Q) { direction : output; function : "IQ";
+      timing () { related_pin : "CLK"; timing_type : rising_edge; timing_sense : non_unate;
+        cell_rise (scalar) { values ("0.1"); }
+        cell_fall (scalar) { values ("0.1"); }
+        rise_transition (scalar) { values ("0.1"); }
+        fall_transition (scalar) { values ("0.1"); }
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+create_clock -name core -period 10 [get_ports clk]
+set_clock_transition 0.1 [get_clocks core]
+set_input_delay -clock core -max 1 [get_ports d]
+set_input_delay -clock core -min 1 [get_ports d]
+set_input_transition 0.1 [get_ports d]
+set_false_path -rise_to [get_pins u_ff/D]

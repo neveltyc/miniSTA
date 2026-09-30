@@ -129,4 +129,7 @@ if (( failures > 0 )); then
     echo "==> compare failed: ${failures} difference(s)" >&2
     exit 1
 fi
+if [[ -x "${OPENSTA_BIN}" ]]; then
+    python3 "${ROOT}/scripts/compare_check_edges.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
+fi
 echo "==> compare passed"

@@ -30,3 +30,4 @@ done < <(find "${ROOT}/testcases" -name '*.dofile' -type f | sort)
 
 echo "==> ${count} testcases passed"
 bash "${ROOT}/scripts/check_sdc.sh"
+bash "${ROOT}/scripts/check_edges.sh"

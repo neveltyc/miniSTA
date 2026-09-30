@@ -76,9 +76,9 @@ if grep -Fq '未约束 1 个' "${LOG}/testcases_sdc_features_through_edge.dofile
     echo 'through_edge: 端点被整条切掉了（应该换到次优路径）' >&2
     exit 1
 fi
-# 最差路径在 X 上本来就是下降沿，-rise_through 不切任何路径：slack 与基准一致。
+# 最差 setup 路径在 X 上是下降沿，setup 不变；hold 独立选取未被切掉的边沿。
 grep -Fq 'setup : WNS   15.505 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
-grep -Fq 'hold  : WNS    0.420 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
+grep -Fq 'hold  : WNS    0.477 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
 for edge_case in through_edge through_edge_rise; do
     if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_${edge_case}.dofile.log"; then
         echo "through_edge: ${edge_case} 产生了 sdc 告警" >&2
@@ -192,8 +192,8 @@ grep -Fq 'Libraries    : 3' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq 'ics55_LLSC_H7CL_typ_tt_1p2_25' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq 'ics55_LLSC_H7CR_typ_tt_1p2_25' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq 'ics55_LLSC_H7CH_typ_tt_1p2_25' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
-grep -Fq 'setup : WNS   13.652 ns' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
-grep -Fq 'hold  : WNS    0.089 ns' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
+grep -Fq 'setup : WNS   13.593 ns' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
+grep -Fq 'hold  : WNS    0.077 ns' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq '寄存器 1613 个' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 # 三方库的单元都要真的出现在网表里（综合时按块用了不同阈值库）。
 for flavor in H7L H7R H7H; do
@@ -205,7 +205,7 @@ if grep -Fq 'set_driving_cell: cell' "${LOG}/testcases_multi_vt_driving_cell_lib
     echo 'multi_vt: 限定库名的 set_driving_cell 没查到 cell' >&2
     exit 1
 fi
-grep -Fq 'setup : WNS    3.597 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"
+grep -Fq 'setup : WNS    3.599 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"
 
 # 理想网络（set_ideal_network）：不累计延迟。同一张网表的对照——4 级缓冲的时钟树
 # 插入延迟 0.599 ns，把时钟端口标成理想网络后整棵树都是 0，-no_propagate 只去掉
@@ -242,7 +242,7 @@ grep -Fq '  时钟 slow       网络 1 根，算出插入延迟的 1 根，最�
 grep -Fq 'launch clock : slow @ 0.000 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 grep -Fq 'capture clock: slow @ 50.000 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 grep -Fq 'setup : WNS    4.754 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
-grep -Fq 'hold  : WNS    0.038 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
+grep -Fq 'hold  : WNS    0.050 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_clock_add.dofile.log"; then
     echo 'clock_add: 标准写法不应该产生 sdc 告警' >&2
     exit 1
@@ -253,7 +253,7 @@ fi
 grep -Fq 'launch clock : slow @ 50.000 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 grep -Fq 'capture clock: core @ 60.000 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 grep -Fq 'setup : WNS  -35.246 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
-grep -Fq 'hold  : WNS    0.038 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
+grep -Fq 'hold  : WNS    0.050 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"; then
     echo 'clock_add_align: 标准写法不应该产生 sdc 告警' >&2
     exit 1
@@ -299,10 +299,10 @@ done
 # 与 OpenSTA / OpenTimer 的对照见 docs/compare_sta.md。
 grep -Fq 'setup : WNS   -0.018 ns' "${LOG}/testcases_opentimer_c17_c17.dofile.log"
 grep -Fq 'hold  : WNS    0.004 ns' "${LOG}/testcases_opentimer_c17_c17.dofile.log"
-grep -Fq 'setup : WNS   -0.058 ns' "${LOG}/testcases_opentimer_simple_simple.dofile.log"
+grep -Fq 'setup : WNS   -0.057 ns' "${LOG}/testcases_opentimer_simple_simple.dofile.log"
 grep -Fq 'hold  : WNS    0.038 ns' "${LOG}/testcases_opentimer_simple_simple.dofile.log"
 grep -Fq 'setup : WNS   -0.396 ns' "${LOG}/testcases_opentimer_s27_s27.dofile.log"
-grep -Fq 'hold  : WNS   -0.258 ns' "${LOG}/testcases_opentimer_s27_s27.dofile.log"
+grep -Fq 'hold  : WNS   -0.248 ns' "${LOG}/testcases_opentimer_s27_s27.dofile.log"
 grep -Fq '寄存器 3 个   端点 4 个' "${LOG}/testcases_opentimer_s27_s27.dofile.log"
 
 # 自己的用例一律写 SDC 1.8 语法：standard_ports 用显式端口列表表达"除时钟外的输入"。

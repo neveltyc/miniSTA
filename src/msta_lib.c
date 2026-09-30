@@ -819,12 +819,17 @@ static void Msta_LibReadLibraryAttrs( Scl_Tree_t *pTree, Scl_Item_t *pLibrary, M
         pT->fColIsSlew = pVar2 && ( !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
                                                  "input_net_transition")
                                   || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                  "constrained_pin_transition") );
-        pT->fRowUsesSecond = pT->fRowIsLoad;
+                                                  "constrained_pin_transition")
+                                  || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
+                                                  "related_pin_transition") );
+        pT->fRowUsesSecond = pT->fRowIsLoad || (pVar1 &&
+            !strcasecmp(Scl_LibertyItemName(pTree,pVar1), "constrained_pin_transition"));
         pT->fColUsesFirst = pVar2 && ( !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
                                                   "input_net_transition")
                                       || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                     "input_transition_time") );
+                                                     "input_transition_time")
+                                      || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
+                                                     "related_pin_transition") );
     }
 }
 

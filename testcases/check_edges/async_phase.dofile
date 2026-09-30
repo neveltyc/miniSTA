@@ -1,0 +1,6 @@
+read_liberty async_phase.lib
+read_verilog async_phase.v
+current_design repro
+read_sdc async_phase.sdc
+report_checks -setup -max_paths 5
+report_checks -hold -max_paths 5
