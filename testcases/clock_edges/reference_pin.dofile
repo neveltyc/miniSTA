@@ -1,0 +1,6 @@
+read_liberty normal.lib
+read_verilog reference.v
+current_design reference
+read_sdc reference_pin.sdc
+report_checks -setup
+report_checks -hold

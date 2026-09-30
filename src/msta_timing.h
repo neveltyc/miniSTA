@@ -89,11 +89,14 @@ static inline MstaCheckCorner *Msta_CheckCorner( MstaCheck *pCheck, int fSetup )
 
 /* 时钟网络上的一个 FF 时钟脚的信息 */
 typedef struct {
-    double MaxArrival;        /* ps：最慢那条时钟路的插入延迟 */
+    double Arrival[2][2];    /* [min/max][fall/rise]，引脚上的本地边沿 */
+    double Slew[2][2];
+    double MaxArrival;        /* 以下合并值仅用于时钟树摘要和 DRC */
     double MinArrival;        /* ps：最快那条 */
     double MaxSlew;           /* ps：该时钟网络的最大/最小摆率 */
     double MinSlew;
     int    fReached;
+    int    fSourceOnly;      /* 主时钟到生成时钟源的延迟，只供 source 继承 */
     int    nThroughGates;     /* 时钟路径经过的组合级数 */
     int    Polarity;          /* +1 / -1：这个点上时钟相对源是不是反相的 */
 } MstaClockArr;

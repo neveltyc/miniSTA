@@ -131,5 +131,6 @@ if (( failures > 0 )); then
 fi
 if [[ -x "${OPENSTA_BIN}" ]]; then
     python3 "${ROOT}/scripts/compare_check_edges.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
+    python3 "${ROOT}/scripts/check_clock_edges.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
 fi
 echo "==> compare passed"

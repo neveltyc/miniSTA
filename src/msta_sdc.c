@@ -466,6 +466,8 @@ static MstaClock *Msta_SdcNewClock( MstaSdc *p, const char *pName )
     pClock->SourceNet  = MSTA_NO_ID;
     pClock->SourceText = MSTA_NO_ID;
     pClock->SlewMax = pClock->SlewMin = MSTA_UNSET;
+    pClock->Slew[0][0] = pClock->Slew[0][1] = MSTA_UNSET;
+    pClock->Slew[1][0] = pClock->Slew[1][1] = MSTA_UNSET;
     Msta_IntMapSet( &p->clockMap, pClock->Name, p->vClocks.nSize - 1 );
     return pClock;
 }
@@ -801,7 +803,7 @@ static void Msta_SdcSetClockLatency( MstaSdc *p, int argc, char **argv )
     MstaSdcArgs A;
     char **pRest = Msta_SdcArgBuffer( argc );
     const char *pClockOpt;
-    int nRest, i, fSource, fMax, fMin;
+    int nRest, i, fSource, fMax, fMin, fRise, fFall, m, e;
     double Delay;
     Msta_SdcArgsStart( &A, argc );
     /* 手册允许用 -clock clock_list 代替对象列表。 */
@@ -811,9 +813,8 @@ static void Msta_SdcSetClockLatency( MstaSdc *p, int argc, char **argv )
            Msta_SdcTakeFlag(argc,argv,&A,"-late");
     fMin = Msta_SdcTakeFlag(argc,argv,&A,"-min") ||
            Msta_SdcTakeFlag(argc,argv,&A,"-early");
-    if ( Msta_SdcTakeFlag(argc,argv,&A,"-rise") ||
-         Msta_SdcTakeFlag(argc,argv,&A,"-fall") )
-        Msta_WarnOnce("set_clock_latency: rise/fall values are merged");
+    fRise = Msta_SdcTakeFlag(argc,argv,&A,"-rise");
+    fFall = Msta_SdcTakeFlag(argc,argv,&A,"-fall");
     nRest = Msta_SdcRest(argc,argv,&A,pRest, argc );
     if ( nRest < 1 || !Msta_SdcIsNumber(pRest[0]) )
     { Msta_WarnOnce("set_clock_latency needs a delay and clock objects"); return; }
@@ -826,15 +827,23 @@ static void Msta_SdcSetClockLatency( MstaSdc *p, int argc, char **argv )
         pClock = Msta_SdcFindClock(p,pName);
         if ( pClock == NULL )
         { Msta_WarnOnce("set_clock_latency: unknown clock \"%s\"",pName); continue; }
+        for ( m = 0; m < 2; m++ )
+            if ( m ? (fMax || !fMin) : (fMin || !fMax) )
+                for ( e = 0; e < 2; e++ )
+                    if ( e ? (fRise || !fFall) : (fFall || !fRise) )
+                    {
+                        if ( fSource ) pClock->SourceLatency[m][e] = Delay;
+                        else pClock->NetworkLatency[m][e] = Delay;
+                    }
         if ( fSource )
         {
-            if ( fMax || !fMin ) pClock->SourceLatencyMax = Delay;
-            if ( fMin || !fMax ) pClock->SourceLatencyMin = Delay;
+            pClock->SourceLatencyMax = fmax(pClock->SourceLatency[1][0],pClock->SourceLatency[1][1]);
+            pClock->SourceLatencyMin = fmin(pClock->SourceLatency[0][0],pClock->SourceLatency[0][1]);
         }
         else
         {
-            if ( fMax || !fMin ) pClock->NetworkLatencyMax = Delay;
-            if ( fMin || !fMax ) pClock->NetworkLatencyMin = Delay;
+            pClock->NetworkLatencyMax = fmax(pClock->NetworkLatency[1][0],pClock->NetworkLatency[1][1]);
+            pClock->NetworkLatencyMin = fmin(pClock->NetworkLatency[0][0],pClock->NetworkLatency[0][1]);
             pClock->fPropagated = 0;
         }
     }
@@ -954,14 +963,14 @@ static void Msta_SdcSetClockTransition( MstaSdc *p, int argc, char **argv )
 {
     MstaSdcArgs A;
     char **pRest = Msta_SdcArgBuffer( argc );
-    int nRest, i, fMax, fMin;
+    int nRest, i, fMax, fMin, fRise, fFall, m, e;
     double Slew;
     Msta_SdcArgsStart( &A, argc );
 
     fMax = Msta_SdcTakeFlag(argc,argv,&A,"-max");
     fMin = Msta_SdcTakeFlag(argc,argv,&A,"-min");
-    if ( Msta_SdcTakeFlag(argc,argv,&A,"-rise") || Msta_SdcTakeFlag(argc,argv,&A,"-fall") )
-        Msta_WarnOnce("set_clock_transition: rise/fall values are merged");
+    fRise = Msta_SdcTakeFlag(argc,argv,&A,"-rise");
+    fFall = Msta_SdcTakeFlag(argc,argv,&A,"-fall");
     nRest = Msta_SdcRest(argc,argv,&A,pRest, argc );
     if ( nRest < 2 || !Msta_SdcIsNumber(pRest[0]) )
     { Msta_WarnOnce("set_clock_transition needs a value and clock objects"); return; }
@@ -973,6 +982,11 @@ static void Msta_SdcSetClockTransition( MstaSdc *p, int argc, char **argv )
         { Msta_WarnOnce("set_clock_transition: unknown clock \"%s\"",pRest[i]); continue; }
         if ( pClock->SourceNet < 0 )
         { Msta_WarnOnce("set_clock_transition on virtual clock \"%s\" is ignored",pRest[i]); continue; }
+        for ( m = 0; m < 2; m++ )
+            if ( m ? (fMax || !fMin) : (fMin || !fMax) )
+                for ( e = 0; e < 2; e++ )
+                    if ( e ? (fRise || !fFall) : (fFall || !fRise) )
+                        pClock->Slew[m][e] = Slew;
         if ( fMax || !fMin ) pClock->SlewMax = Slew;
         if ( fMin || !fMax ) pClock->SlewMin = Slew;
     }

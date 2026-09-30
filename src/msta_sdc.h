@@ -42,7 +42,9 @@ typedef struct {
     double RiseEdge, FallEdge; /* 一个周期内的边沿相位，ps */
     double SourceLatencyMax, SourceLatencyMin;
     double NetworkLatencyMax, NetworkLatencyMin;
-    double SlewMax, SlewMin;   /* set_clock_transition：时钟源上的摆率，ps */
+    double SlewMax, SlewMin;   /* 报告用的合并值 */
+    double SourceLatency[2][2], NetworkLatency[2][2]; /* [min/max][fall/rise] */
+    double Slew[2][2];        /* set_clock_transition，未设为 MSTA_UNSET */
     int    fPropagated;
     MstaId MasterClock;      /* generated clock 的主时钟名；普通时钟为 -1 */
     int    SourceNet;         /* create_clock 挂在哪个全局网络上；-1 是虚拟时钟 */

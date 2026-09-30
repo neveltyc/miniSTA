@@ -1,0 +1,8 @@
+create_clock -name core -period 10 [get_ports clk]
+create_generated_clock -name derived -master_clock core -source [get_pins divider/CLK] -divide_by 2 [get_pins divider/QN]
+set_clock_transition 0.1 [get_clocks core]
+set_propagated_clock [get_clocks {core derived}]
+set_input_delay -clock core -max 1 [get_ports d]
+set_input_delay -clock core -min 1 [get_ports d]
+set_input_transition 0.1 [get_ports d]
+set_false_path -to [get_pins divider/D]

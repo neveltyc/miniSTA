@@ -1,0 +1,6 @@
+read_liberty qn.lib
+read_verilog seq_qn.v
+current_design seq_qn
+read_sdc generated_ideal_qn.sdc
+report_checks -setup
+report_checks -hold

@@ -39,7 +39,7 @@ get_nets -filter {fanout > 1}
 | --- | --- |
 | `create_clock` | `-period`、`-name`、`-waveform`、`-add` |
 | `create_generated_clock` | `-divide_by`、`-multiply_by`、`-invert`、`-duty_cycle`、`-edges`、`-edge_shift` |
-| `set_clock_latency`、`set_clock_transition` | 时钟延迟和源转换时间；支持 max/min 限定 |
+| `set_clock_latency`、`set_clock_transition` | 时钟延迟和源转换时间；支持 max/min 与 rise/fall 限定 |
 | `set_propagated_clock` | 标记传播时钟 |
 | `set_clock_sense` | `-positive`、`-negative`、`-stop_propagation`、`-clock` |
 | `set_ideal_network`、`set_ideal_latency`、`set_ideal_transition` | 理想网络及其延迟、转换时间 |
@@ -49,9 +49,9 @@ get_nets -filter {fanout > 1}
 | `set_clock_gating_check`、`set_max_time_borrow` | 时钟门控检查与锁存器借时限制 |
 | `set_units` | 时间和电容单位 |
 
-`create_generated_clock -edges {e1 e2 e3}` 的边号从 1 开始：1 是首个上升沿，2 是首个下降沿，3 是下一个上升沿。三个边沿定义生成时钟的上升沿、下降沿及下一次上升沿；`-edge_shift` 可分别施加偏移。`-edges` 不可与分频、倍频或占空比选项同时使用。生成时钟源位于 PLL 等黑盒时，可用 `set_clock_latency` 显式给出延迟。
+`create_generated_clock -edges {e1 e2 e3}` 的边号从 1 开始：1 是首个上升沿，2 是首个下降沿，3 是下一个上升沿。三个边沿定义生成时钟的上升沿、下降沿及下一次上升沿；`-edge_shift` 可分别施加偏移。`-edges` 不可与分频、倍频或占空比选项同时使用。生成时钟源位于 PLL 等黑盒时，可用 `set_clock_latency` 显式给出延迟。理想生成时钟仍继承主时钟到生成源的延迟，只将自身网络分发视为理想；`set_disable_timing` 禁用的 CLK→Q/QN 弧不参与源延迟和数据 launch。
 
-时钟默认沿 Liberty 时序弧传播。`create_clock -add` 允许同一源网络上有多个时钟；跨时钟检查会查找最紧的出发和捕获边沿对。`set_ideal_network` 标记的网络不累计时序弧延迟；`-no_propagate` 限制理想属性继续传递。
+时钟默认沿 Liberty 时序弧传播，到达时间和摆率按 min/max × rise/fall 分开保存；反相弧交换输入边沿，launch/capture 使用对应的本地时钟边沿。`create_clock -add` 允许同一源网络上有多个时钟；跨时钟检查会查找最紧的出发和捕获边沿对。`set_ideal_network` 标记的网络不累计时序弧延迟；`-no_propagate` 限制理想属性继续传递。
 
 ## I/O、负载与工作条件
 

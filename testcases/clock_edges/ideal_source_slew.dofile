@@ -1,0 +1,6 @@
+read_liberty normal.lib
+read_verilog capture.v
+current_design capture
+read_sdc ideal_source_slew.sdc
+report_checks -setup
+report_checks -hold

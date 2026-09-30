@@ -1,0 +1,6 @@
+read_liberty zero_output.lib
+read_verilog zero_output.v
+current_design capture
+read_sdc zero_output.sdc
+report_checks -setup
+report_checks -hold
