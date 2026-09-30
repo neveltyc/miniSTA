@@ -172,12 +172,14 @@ static int Msta_LibReadTable( Scl_Tree_t *pTree, Scl_Item_t *pItem,
         MstaTemplate *pT = Msta_LibFindTemplate( pTemplates, Scl_LibertyItemName(pTree, pItem) );
         if ( pT )
         {
-            if ( nRow == 0 )
+            if ( nRow == 0 && pT->nRow > 0 )
             {   nRow = pT->nRow;
+                free( pRow );
                 pRow = (double*)malloc( (size_t)nRow * sizeof(double) );
                 memcpy( pRow, pT->pRow, (size_t)nRow * sizeof(double) );  }
-            if ( nCol == 0 )
+            if ( nCol == 0 && pT->nCol > 0 )
             {   nCol = pT->nCol;
+                free( pCol );
                 pCol = (double*)malloc( (size_t)nCol * sizeof(double) );
                 memcpy( pCol, pT->pCol, (size_t)nCol * sizeof(double) );  }
         }
@@ -277,18 +279,8 @@ static void Msta_LibReadTiming( Scl_Tree_t *pTree, Scl_Item_t *pTiming,
        少数库写成 cell_rise/cell_fall。只有 timing_type 是 setup/hold 时才去读它们，
        否则组合弧的 cell_rise 会被同时当成 setup，产生 "延迟==setup" 的假数据。 */
     if ( pArc->Type == MSTA_TT_SETUP_RISING || pArc->Type == MSTA_TT_SETUP_FALLING ||
-         pArc->Type == MSTA_TT_RECOVERY_RISING || pArc->Type == MSTA_TT_RECOVERY_FALLING )
-    {
-        if ( !Msta_LibReadTable( pTree, Scl_LibertyFindChild(pTree, pTiming, "rise_constraint"),
-                                 "rise_constraint", pLib, pTemplates, &pArc->ConstraintRise ) )
-            Msta_LibReadTable( pTree, Scl_LibertyFindChild(pTree, pTiming, "cell_rise"),
-                               "cell_rise", pLib, pTemplates, &pArc->ConstraintRise );
-        if ( !Msta_LibReadTable( pTree, Scl_LibertyFindChild(pTree, pTiming, "fall_constraint"),
-                                 "fall_constraint", pLib, pTemplates, &pArc->ConstraintFall ) )
-            Msta_LibReadTable( pTree, Scl_LibertyFindChild(pTree, pTiming, "cell_fall"),
-                               "cell_fall", pLib, pTemplates, &pArc->ConstraintFall );
-    }
-    if ( pArc->Type == MSTA_TT_HOLD_RISING || pArc->Type == MSTA_TT_HOLD_FALLING ||
+         pArc->Type == MSTA_TT_RECOVERY_RISING || pArc->Type == MSTA_TT_RECOVERY_FALLING ||
+         pArc->Type == MSTA_TT_HOLD_RISING || pArc->Type == MSTA_TT_HOLD_FALLING ||
          pArc->Type == MSTA_TT_REMOVAL_RISING || pArc->Type == MSTA_TT_REMOVAL_FALLING )
     {
         if ( !Msta_LibReadTable( pTree, Scl_LibertyFindChild(pTree, pTiming, "rise_constraint"),
@@ -615,7 +607,7 @@ static void Msta_LibCellFinish( MstaCell *pCell )
         }
     }
 
-    /* ---- Recovery/removal arcs describe asynchronous control release checks. ---- */
+    /* ---- recovery/removal 弧描述的是异步控制信号释放时的检查。 ---- */
     for ( i = 0; i < pCell->vArcs.nSize; i++ )
     {
         MstaArc *pArc = MstaArcArrayAt(&pCell->vArcs,i);
@@ -1176,6 +1168,7 @@ static void Msta_CellFree( MstaCell *pCell )
     MstaArcArrayFree( &pCell->vArcs );
     MstaRegCheckArrayFree( &pCell->vRegs );
     MstaAsyncCheckArrayFree( &pCell->vAsync );
+    MstaGateCheckArrayFree( &pCell->vGates );
 }
 
 void Msta_LibFree( MstaLib *pLib )

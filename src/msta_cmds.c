@@ -13,9 +13,7 @@
 #include "msta_timing.h"
 #include "msta_report.h"
 #include <stdlib.h>
-
-/* read_verilog 生成的 Yosys JSON 输出路径。 */
-#define MSTA_FRONTEND_JSON "build/msta_frontend.json"
+#include <unistd.h>
 
 /* ---------------------------------------------------------------------
    全局开关（-q / -o）
@@ -171,7 +169,9 @@ static int Msta_CmdReadVerilog( MstaApp *pApp, int argc, char **argv )
 {
     char sResolved[MSTA_MAX_FILES_PER_COMMAND][512];
     const char *pFiles[MSTA_MAX_FILES_PER_COMMAND];
-    int i;
+    const char *pTmp = getenv( "TMPDIR" );
+    char sWorkDir[512];
+    int i, fOk;
     if ( argc < 2 || argc - 1 > MSTA_MAX_FILES_PER_COMMAND )
     {
         Msta_Error( "usage: read_verilog <a.v> [b.v ...]  (最多 %d 个文件)\n",
@@ -184,8 +184,16 @@ static int Msta_CmdReadVerilog( MstaApp *pApp, int argc, char **argv )
         Msta_ResolvePath( argv[i], sResolved[i-1], (int)sizeof(sResolved[0]) );
         pFiles[i-1] = sResolved[i-1];
     }
-    return Msta_DesignReadVerilog( pApp->pNet, pFiles, argc - 1,
-                                   MSTA_FRONTEND_JSON, !pApp->fQuiet );
+    snprintf( sWorkDir, sizeof(sWorkDir), "%s/msta-XXXXXX",
+              ( pTmp != NULL && pTmp[0] != 0 ) ? pTmp : "/tmp" );
+    if ( mkdtemp( sWorkDir ) == NULL )
+    {
+        Msta_Error( "read_verilog: cannot create a work directory \"%s\"\n", sWorkDir );
+        return 0;
+    }
+    fOk = Msta_DesignReadVerilog( pApp->pNet, pFiles, argc - 1, sWorkDir, !pApp->fQuiet );
+    rmdir( sWorkDir );
+    return fOk;
 }
 
 static int Msta_CmdReadJson( MstaApp *pApp, int argc, char **argv )

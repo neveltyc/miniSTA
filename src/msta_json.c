@@ -310,7 +310,11 @@ void Msta_JsonFree( MJsonValue *p )
     if ( p == NULL )
         return;
     for ( i = 0; i < p->nItems; i++ )
+    {
         Msta_JsonFree( p->ppItems[i] );
+        if ( p->pKeys )
+            free( p->pKeys[i] );
+    }
     free( p->ppItems );
     free( p->pKeys );          /* key 字符串与 pKeys 同生命周期，一起释放 */
     free( p->pStr );

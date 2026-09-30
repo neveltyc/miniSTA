@@ -12,6 +12,7 @@
 ***********************************************************************/
 
 #include <ctype.h>
+#include <unistd.h>
 #include "msta_net.h"
 #include "msta_json.h"
 #include "msta_util.h"
@@ -224,7 +225,7 @@ static int Msta_IsShellSafePath( const char *pPath )
 }
 
 int Msta_DesignReadVerilog( MstaDesign *pDes, const char **ppFiles, int nFiles,
-                            const char *pWorkJson, int fVerbose )
+                            const char *pWorkDir, int fVerbose )
 {
     /* 命令形如
          yosys -q -l work.log -p ' read_verilog "a.v"; write_json "out.json"'
@@ -232,13 +233,22 @@ int Msta_DesignReadVerilog( MstaDesign *pDes, const char **ppFiles, int nFiles,
        信号名，在 -sv 模式下会被当成类型关键字而报语法错。 */
     char sReads[16384];
     char sCmd[24576];
-    int i, nRet, nLen = 0;
+    char sJson[1024], sLog[1024];
+    int i, nRet, nLen = 0, fOk;
 
-    if ( nFiles <= 0 || pWorkJson == NULL )
+    if ( nFiles <= 0 || pWorkDir == NULL )
     {
         Msta_Error( "read_verilog: no file given.\n" );
         return 0;
     }
+    if ( !Msta_IsShellSafePath(pWorkDir) )
+    {
+        Msta_Error( "work directory contains characters msta will not pass to the shell: \"%s\"\n",
+                    pWorkDir );
+        return 0;
+    }
+    snprintf( sJson, sizeof(sJson), "%s/netlist.json", pWorkDir );
+    snprintf( sLog, sizeof(sLog), "%s/yosys.log", pWorkDir );
     for ( i = 0; i < nFiles; i++ )
     {
         if ( !Msta_IsShellSafePath(ppFiles[i]) )
@@ -255,17 +265,21 @@ int Msta_DesignReadVerilog( MstaDesign *pDes, const char **ppFiles, int nFiles,
             return 0;
         }
     }
-    snprintf( sCmd, sizeof(sCmd), "yosys -q -l build/yosys.log -p '%s write_json \"%s\"'",
-              sReads, pWorkJson );
+    snprintf( sCmd, sizeof(sCmd), "yosys -q -l \"%s\" -p '%s write_json \"%s\"'",
+              sLog, sReads, sJson );
     if ( fVerbose )
         Msta_Info( "front-end: %s\n", sCmd );
     nRet = system( sCmd );
     if ( nRet != 0 )
     {
-        Msta_Error( "yosys failed (exit %d); see build/yosys.log\n", nRet );
+        unlink( sJson );
+        Msta_Error( "yosys failed (exit %d); see %s\n", nRet, sLog );
         return 0;
     }
-    return Msta_DesignReadYosysJson( pDes, pWorkJson, fVerbose );
+    fOk = Msta_DesignReadYosysJson( pDes, sJson, fVerbose );
+    unlink( sJson );
+    unlink( sLog );
+    return fOk;
 }
 
 /* =====================================================================

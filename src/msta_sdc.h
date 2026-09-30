@@ -58,7 +58,7 @@ typedef struct {
     /* 分对象的 DRC 限制（set_max_transition/-capacitance/-fanout 带对象时）。 */
     double   DrcMaxTransition, DrcMaxCapacitance, DrcMaxFanout;
     double   DrcMinCapacitance;   /* set_min_capacitance 的分对象限制 */
-    double   InputSlewMax, InputSlewMin; /* input transition / driving cell, ps */
+    double   InputSlewMax, InputSlewMin; /* 输入摆率 / 驱动单元，ps */
     double   InputSlewMaxRise, InputSlewMaxFall;
     double   InputSlewMinRise, InputSlewMinFall;
     /* set_driving_cell：外部驱动单元。分析时按端口实际负载查它的延迟与摆率，
@@ -93,8 +93,8 @@ typedef struct {
     MstaId Clock;
     double Max, Min;
     int ClockFall;
-    int DataRise; /* -1=both, 0=fall, 1=rise */
-    int RefNetMax, RefNetMin; /* -1=clock source reference */
+    int DataRise; /* -1=两个边沿, 0=下降, 1=上升 */
+    int RefNetMax, RefNetMin; /* -1=以时钟源为参照 */
     int SourceLatencyIncludedMax, SourceLatencyIncludedMin;
     int NetworkLatencyIncludedMax, NetworkLatencyIncludedMin;
 } MstaIoDelay;
@@ -145,7 +145,7 @@ typedef struct {
 typedef struct {
     MstaId FromText;          /* 原样存名字，分析时再按名字匹配 */
     MstaId ToText;
-    char   FromKind, ToKind; /* C=clock, I=cell, P=port, N=pin/net */
+    char   FromKind, ToKind; /* C=时钟, I=单元, P=端口, N=引脚/网络 */
     char   FromRF, ToRF;     /* 0=两个边沿都算，'r'=只看上升，'f'=只看下降 */
     MstaThruObject Thru[MSTA_SDC_MAX_THRU];
     int    nThru;
@@ -228,6 +228,15 @@ typedef struct {
     int                  fRises;  /* 1=上升沿, 0=下降沿, -1=边沿未知 */
 } MstaSdcEndpoint;
 
+typedef struct {
+    int   *pHead;
+    int   *pNext;
+    int   *pAlways;
+    char  *pfAlways;
+    int    nAlways;
+    int    nHeadCap;
+} MstaSdcExIndex;
+
 typedef struct MstaSdc {
     MstaClockArray     vClocks;
     MstaIntMap         clockMap;      /* 时钟名 nameId -> vClocks 下标 */
@@ -238,6 +247,8 @@ typedef struct MstaSdc {
     MstaDisabledArcArray vDisabledArcs;
     MstaIntMap         netConsMap;    /* 全局网络号 -> vNets 下标 */
     MstaExceptionArray vExceptions;
+    MstaSdcExIndex     ExIndexTo, ExIndexFrom;
+    int                nExIndexed;
     MstaPathGroupArray vPathGroups;
     MstaClockGatingSdcArray vClockGating;
     MstaBorrowSdcArray vBorrow;
@@ -339,6 +350,10 @@ int  Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
                              int fSetup, const MstaSdcObject *pObjects, int nObjects,
                              MstaPathExclude *pOut, int nCap );
 int  Msta_SdcNeedsStartpointPartition( MstaSdc *p );
+int  Msta_SdcExceptionCount( MstaSdc *p );
+int  Msta_SdcFromExceptionGroups( MstaSdc *p, int *pGroups );
+int  Msta_SdcFromExceptionMatches( MstaSdc *p, MstaDesign *pDes, const MstaSdcObject *pObj,
+                                   const int **ppExceptions );
 
 /* group_path：路径分组。分组只影响报告怎么组织、按组统计 WNS/TNS，
    不改变任何 slack。 */

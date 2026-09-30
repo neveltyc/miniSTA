@@ -65,29 +65,17 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
     int nNets[MSTA_PATH_MAX];
     int nCount, i;
     int fMax = fSetup;
-    double Arrival, Required, Slack;
-    MstaId nLaunchClock = fSetup ? pCheck->LaunchClock : pCheck->HoldLaunchClock;
-    double LaunchTime = fSetup ? pCheck->LaunchTime : pCheck->HoldLaunchTime;
-    double CaptureTime = fSetup ? pCheck->CaptureTime : pCheck->HoldCaptureTime;
+    const MstaCheckCorner *pCorner = Msta_CheckCorner( pCheck, fSetup );
+    double Arrival = pCorner->Arrival, Required = pCorner->Required, Slack = pCorner->Slack;
+    MstaId nLaunchClock = pCorner->LaunchClock;
+    double LaunchTime = pCorner->LaunchTime;
+    double CaptureTime = pCorner->CaptureTime;
     /* 跨时钟搜索把出发沿推到第 k 拍时，路径上的时间整体平移（见 LaunchCycleShift）。 */
-    double LaunchShift = fSetup ? pCheck->SetupLaunchShift : pCheck->HoldLaunchShift;
+    double LaunchShift = pCorner->LaunchShift;
     const char *pKind = pCheck->fAsync
                       ? (pCheck->fRecovery ? "recovery" : "removal")
                       : (fSetup ? "setup" : "hold");
     char sBuf[3][16];
-
-    if ( fSetup )
-    {
-        Arrival  = pCheck->SetupArrival;
-        Required = pCheck->SetupRequired;
-        Slack    = pCheck->SetupSlack;
-    }
-    else
-    {
-        Arrival  = pCheck->HoldArrival;
-        Required = pCheck->HoldRequired;
-        Slack    = pCheck->HoldSlack;
-    }
 
     fprintf( pFile, "\n===== %s path (%s, %s) =====\n", pKind,
              fSetup ? "max corner" : "min corner",
@@ -110,7 +98,7 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
     }
     if ( Msta_SdcPathGroupsUsed( p->pSdc ) )
     {
-        MstaId nGroup = fSetup ? pCheck->SetupGroup : pCheck->HoldGroup;
+        MstaId nGroup = pCorner->Group;
         if ( nGroup == MSTA_NO_ID ) nGroup = pCheck->CaptureClock;
         if ( nGroup != MSTA_NO_ID )
             fprintf( pFile, "path group   : %s\n", Msta_NameStr( nGroup ) );
@@ -124,7 +112,7 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
         double Prev = 0.0;
         for ( i = nCount - 1; i >= 0; i-- )
         {
-            double *pSaved = fMax ? pCheck->pSetupPathArrival : pCheck->pHoldPathArrival;
+            double *pSaved = pCorner->pPathArrival;
             double Arr = ( pSaved ? pSaved[i] : Msta_TimingNetArrival( p, nNets[i], fMax ) )
                        + LaunchShift;
             Msta_PrintPathPoint( p, pFile, nNets[i], fMax, Arr, Prev, -1.0 );
@@ -140,13 +128,13 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
                  Msta_PeriodText( CaptureTime, sBuf[1], sizeof(sBuf[1]) ) );
         fprintf( pFile, "  - setup check (%s)                    %10s\n",
                  pCheck->fToRegister ? "from lib" : "output delay",
-                 Msta_PeriodText( -pCheck->SetupCheckTime, sBuf[2], sizeof(sBuf[2]) ) );
+                 Msta_PeriodText( -pCorner->CheckTime, sBuf[2], sizeof(sBuf[2]) ) );
         fprintf( pFile, "  - clock uncertainty                   %10s\n",
-                 Msta_PeriodText( -pCheck->SetupUncertainty, sBuf[1], sizeof(sBuf[1]) ) );
-        if ( pCheck->fToRegister && Msta_IsSet(pCheck->SetupBorrow) &&
+                 Msta_PeriodText( -pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
+        if ( pCheck->fToRegister && Msta_IsSet(pCorner->Borrow) &&
              MstaInstArrayAt(&pDes->vInsts,pCheck->InstId)->pCell->fLatch )
             fprintf( pFile, "  (锁存器：开沿起算，max_time_borrow %s ns 取代上面的关闭沿要求)\n",
-                     Msta_PeriodText( pCheck->SetupBorrow, sBuf[2], sizeof(sBuf[2]) ) );
+                     Msta_PeriodText( pCorner->Borrow, sBuf[2], sizeof(sBuf[2]) ) );
     }
     else
     {
@@ -154,9 +142,9 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
                  Msta_PeriodText( CaptureTime, sBuf[1], sizeof(sBuf[1]) ) );
         fprintf( pFile, "  + %-35s %10s\n",
                  pCheck->fToRegister ? "hold check" : "output delay",
-                 Msta_PeriodText( pCheck->HoldCheckTime, sBuf[2], sizeof(sBuf[2]) ) );
+                 Msta_PeriodText( pCorner->CheckTime, sBuf[2], sizeof(sBuf[2]) ) );
         fprintf( pFile, "  + clock uncertainty                   %10s\n",
-                 Msta_PeriodText( pCheck->HoldUncertainty, sBuf[1], sizeof(sBuf[1]) ) );
+                 Msta_PeriodText( pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
     }
     fprintf( pFile, "data required time                      %10s\n",
              Msta_PeriodText( Required, sBuf[0], sizeof(sBuf[0]) ) );
@@ -179,7 +167,7 @@ void Msta_ReportChecks( MstaTiming *p, FILE *pFile, int nMaxPaths, int fSetup )
     for ( i = 0; i < p->vChecks.nSize && n < nMaxPaths; i++ )
     {
         MstaCheck *pCheck = MstaCheckArrayAt( &p->vChecks, i );
-        if ( fSetup ? !pCheck->fSetupChecked : !pCheck->fHoldChecked )
+        if ( !Msta_CheckCorner( pCheck, fSetup )->fChecked )
             continue;
         n++;
         Msta_PrintOnePath( p, pCheck, fSetup, pFile );
@@ -191,10 +179,14 @@ void Msta_ReportChecks( MstaTiming *p, FILE *pFile, int nMaxPaths, int fSetup )
 
 /* 一个路径分组的累计结果。分组只影响报告的组织方式，WNS/TNS 的算法和整体一致。 */
 typedef struct {
+    int    nChecks;
+    double Worst, Total;
+} MstaGroupStat;
+
+typedef struct {
     MstaId Name;
     double Weight;
-    int    nSetup, nHold;
-    double WorstSetup, TotalSetup, WorstHold, TotalHold;
+    MstaGroupStat Setup, Hold;
 } MstaGroupRow;
 
 /* 找到分组行，没有就按给定权重新建一条；表满了返回 NULL。 */
@@ -211,10 +203,19 @@ static MstaGroupRow *Msta_GroupRow( MstaGroupRow *pRows, int *pnRows, int nCap,
     pRow = &pRows[(*pnRows)++];
     pRow->Name = Name;
     pRow->Weight = Weight;
-    pRow->nSetup = pRow->nHold = 0;
-    pRow->WorstSetup = pRow->WorstHold = MSTA_UNSET;
-    pRow->TotalSetup = pRow->TotalHold = 0.0;
+    pRow->Setup.nChecks = pRow->Hold.nChecks = 0;
+    pRow->Setup.Worst = pRow->Hold.Worst = MSTA_UNSET;
+    pRow->Setup.Total = pRow->Hold.Total = 0.0;
     return pRow;
+}
+
+static void Msta_PrintGroupStat( FILE *pFile, const MstaGroupStat *pStat )
+{
+    fprintf( pFile, " %7d", pStat->nChecks );
+    if ( Msta_IsSet(pStat->Worst) )
+        fprintf( pFile, " %11.3f %11.3f", pStat->Worst/1000.0, pStat->Total/1000.0 );
+    else
+        fprintf( pFile, " %11s %11s", "-", "-" );
 }
 
 /* 按 group_path 分组的 WNS/TNS：没写 group_path 时不打这一节。 */
@@ -239,33 +240,23 @@ static void Msta_ReportGroups( MstaTiming *p, FILE *pFile )
     for ( i = 0; i < p->vChecks.nSize; i++ )
     {
         MstaCheck *pCheck = MstaCheckArrayAt( &p->vChecks, i );
-        if ( pCheck->fSetupChecked )
+        int fSetup;
+        for ( fSetup = 1; fSetup >= 0; fSetup-- )
         {
-            MstaId nName = ( pCheck->SetupGroup != MSTA_NO_ID ) ? pCheck->SetupGroup
-                                                                : pCheck->CaptureClock;
-            MstaGroupRow *pRow = ( nName != MSTA_NO_ID )
-                ? Msta_GroupRow( pRows, &nRows, nCap, nName,
-                                 Msta_SdcPathGroupWeight(pSdc,nName) ) : NULL;
-            if ( pRow != NULL )
-            {
-                pRow->nSetup++;
-                if ( pCheck->SetupSlack < pRow->WorstSetup ) pRow->WorstSetup = pCheck->SetupSlack;
-                if ( pCheck->SetupSlack < 0.0 ) pRow->TotalSetup += pCheck->SetupSlack;
-            }
-        }
-        if ( pCheck->fHoldChecked )
-        {
-            MstaId nName = ( pCheck->HoldGroup != MSTA_NO_ID ) ? pCheck->HoldGroup
-                                                               : pCheck->CaptureClock;
-            MstaGroupRow *pRow = ( nName != MSTA_NO_ID )
-                ? Msta_GroupRow( pRows, &nRows, nCap, nName,
-                                 Msta_SdcPathGroupWeight(pSdc,nName) ) : NULL;
-            if ( pRow != NULL )
-            {
-                pRow->nHold++;
-                if ( pCheck->HoldSlack < pRow->WorstHold ) pRow->WorstHold = pCheck->HoldSlack;
-                if ( pCheck->HoldSlack < 0.0 ) pRow->TotalHold += pCheck->HoldSlack;
-            }
+            const MstaCheckCorner *pCorner = Msta_CheckCorner( pCheck, fSetup );
+            MstaId nName = ( pCorner->Group != MSTA_NO_ID ) ? pCorner->Group
+                                                            : pCheck->CaptureClock;
+            MstaGroupRow *pRow;
+            MstaGroupStat *pStat;
+            if ( !pCorner->fChecked || nName == MSTA_NO_ID )
+                continue;
+            pRow = Msta_GroupRow( pRows, &nRows, nCap, nName, Msta_SdcPathGroupWeight(pSdc,nName) );
+            if ( pRow == NULL )
+                continue;
+            pStat = fSetup ? &pRow->Setup : &pRow->Hold;
+            pStat->nChecks++;
+            if ( pCorner->Slack < pStat->Worst ) pStat->Worst = pCorner->Slack;
+            if ( pCorner->Slack < 0.0 ) pStat->Total += pCorner->Slack;
         }
     }
     if ( p->nDataChecks > 0 && Msta_IsSet(p->WorstDataCheckSetupSlack) )
@@ -274,10 +265,10 @@ static void Msta_ReportGroups( MstaTiming *p, FILE *pFile )
                                             Msta_NameId(MSTA_REPORT_DATA_GROUP), 1.0 );
         if ( pRow != NULL )
         {
-            pRow->nSetup = p->nDataChecks;
-            pRow->WorstSetup = p->WorstDataCheckSetupSlack;
+            pRow->Setup.nChecks = p->nDataChecks;
+            pRow->Setup.Worst = p->WorstDataCheckSetupSlack;
             if ( p->WorstDataCheckSetupSlack < 0.0 )
-                pRow->TotalSetup = p->WorstDataCheckSetupSlack;
+                pRow->Setup.Total = p->WorstDataCheckSetupSlack;
         }
     }
     if ( p->nClkGatingChecks > 0 )
@@ -286,13 +277,13 @@ static void Msta_ReportGroups( MstaTiming *p, FILE *pFile )
                                             Msta_NameId(MSTA_REPORT_GATING_GROUP), 1.0 );
         if ( pRow != NULL )
         {
-            pRow->nSetup = pRow->nHold = p->nClkGatingChecks;
-            pRow->WorstSetup = p->WorstClkGatingSetupSlack;
-            pRow->WorstHold  = p->WorstClkGatingHoldSlack;
+            pRow->Setup.nChecks = pRow->Hold.nChecks = p->nClkGatingChecks;
+            pRow->Setup.Worst = p->WorstClkGatingSetupSlack;
+            pRow->Hold.Worst  = p->WorstClkGatingHoldSlack;
             if ( Msta_IsSet(p->WorstClkGatingSetupSlack) && p->WorstClkGatingSetupSlack < 0.0 )
-                pRow->TotalSetup = p->WorstClkGatingSetupSlack;
+                pRow->Setup.Total = p->WorstClkGatingSetupSlack;
             if ( Msta_IsSet(p->WorstClkGatingHoldSlack) && p->WorstClkGatingHoldSlack < 0.0 )
-                pRow->TotalHold = p->WorstClkGatingHoldSlack;
+                pRow->Hold.Total = p->WorstClkGatingHoldSlack;
         }
     }
 
@@ -302,19 +293,9 @@ static void Msta_ReportGroups( MstaTiming *p, FILE *pFile )
     for ( i = 0; i < nRows; i++ )
     {
         MstaGroupRow *pRow = &pRows[i];
-        fprintf( pFile, "%-18s %5.2f %7d", Msta_NameStr(pRow->Name), pRow->Weight,
-                 pRow->nSetup );
-        if ( Msta_IsSet(pRow->WorstSetup) )
-            fprintf( pFile, " %11.3f %11.3f", pRow->WorstSetup/1000.0,
-                     pRow->TotalSetup/1000.0 );
-        else
-            fprintf( pFile, " %11s %11s", "-", "-" );
-        fprintf( pFile, " %7d", pRow->nHold );
-        if ( Msta_IsSet(pRow->WorstHold) )
-            fprintf( pFile, " %11.3f %11.3f", pRow->WorstHold/1000.0,
-                     pRow->TotalHold/1000.0 );
-        else
-            fprintf( pFile, " %11s %11s", "-", "-" );
+        fprintf( pFile, "%-18s %5.2f", Msta_NameStr(pRow->Name), pRow->Weight );
+        Msta_PrintGroupStat( pFile, &pRow->Setup );
+        Msta_PrintGroupStat( pFile, &pRow->Hold );
         fprintf( pFile, "\n" );
     }
     free( pRows );

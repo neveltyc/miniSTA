@@ -12,7 +12,7 @@ if [[ ! -x "${MSTA}" ]]; then
     exit 1
 fi
 
-if ! find "${ROOT}/testcases" -name '*.dofile' -type f | grep -q .; then
+if [[ -z "$(find "${ROOT}/testcases" -name '*.dofile' -type f -print -quit)" ]]; then
     echo "error: no testcases/*.dofile found" >&2
     exit 1
 fi

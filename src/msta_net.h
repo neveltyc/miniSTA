@@ -141,9 +141,9 @@ void        Msta_DesignFree( MstaDesign *p );
 int         Msta_DesignReadYosysJson( MstaDesign *p, const char *pJsonFile, int fVerbose );
 
 /* 调用 yosys 把 Verilog 转成 JSON 再读进来。pVerilogFiles 是以 NULL 结尾的数组。
-   pWorkJson 为中间 JSON 的落盘位置（保留下来便于复现）。 */
+   pWorkDir 为中间 JSON 与 yosys 日志所在的目录。 */
 int         Msta_DesignReadVerilog( MstaDesign *p, const char **ppVerilogFiles, int nFiles,
-                                    const char *pWorkJson, int fVerbose );
+                                    const char *pWorkDir, int fVerbose );
 
 /* ---- 展平与查询 ---- */
 int         Msta_DesignFlatten( MstaDesign *p, MstaLib *pLib, const char *pTopName, int fVerbose );

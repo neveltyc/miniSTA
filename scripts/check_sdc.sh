@@ -85,7 +85,7 @@ for edge_case in through_edge through_edge_rise; do
         exit 1
     fi
 done
-# rise/fall I/O delays merge conservatively, independent of SDC command order.
+# rise/fall 的 I/O 延迟按保守方式合并，结果与 SDC 命令顺序无关。
 grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_io_edge_rise_first.dofile.log"
 grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_io_edge_fall_first.dofile.log"
 

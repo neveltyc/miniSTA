@@ -38,6 +38,27 @@
 #include "msta_net.h"
 #include "msta_sdc.h"
 
+typedef struct {
+    double Slack;
+    double Arrival, Required;
+    /* 要求时间的组成成分，报告层直接拿来打印（不让报告层重新推导一遍） */
+    double CheckTime, Uncertainty;
+    double Borrow;            /* set_max_time_borrow 给锁存器放宽的那部分 */
+    int    fChecked;          /* 0 = 没约束/被 false path 掉 */
+    MstaId LaunchClock;       /* 起点时钟名 nameId */
+    double LaunchTime;        /* 起点那一拍 */
+    double CaptureTime;       /* capture 边沿 */
+    int    *pPath;            /* 终点 -> 起点，获胜路径的快照 */
+    double *pPathArrival;
+    int     nPath;
+    /* 跨时钟时最差的那对边沿不一定都在第 0 拍：出发沿在第 k 拍时，报告里的
+       路径时间整体平移 k 个出发周期（slack 只跟两个边沿的差有关）。 */
+    double LaunchShift;
+    /* 这条检查归在哪个路径分组（group_path）。没有 group_path 时按捕获时钟名字
+       归组，异步检查组是 **async**。分组只影响报告与按组统计，不影响 slack。 */
+    MstaId Group;
+} MstaCheckCorner;
+
 /* 一条时序检查（路径端点）。
    fToRegister=1：终点是某个 FF 的数据脚（reg2reg 或 input2reg）
    fToRegister=0：终点是顶层输出脚（reg2out） */
@@ -53,34 +74,17 @@ typedef struct {
     int    nAsyncCheck;
 
     /* 分析结果（一个端点同时有 setup 与 hold 两条检查） */
-    double SetupSlack, HoldSlack;
-    double SetupArrival, SetupRequired;
-    double HoldArrival,  HoldRequired;
-    /* 要求时间的组成成分，报告层直接拿来打印（不让报告层重新推导一遍） */
-    double SetupCheckTime, SetupUncertainty;
-    double HoldCheckTime,  HoldUncertainty;
-    double SetupBorrow;       /* set_max_time_borrow 给锁存器放宽的那部分 */
-    int    fSetupChecked, fHoldChecked;   /* 0 = 没约束/被 false path 掉 */
+    MstaCheckCorner Setup, Hold;
+    MstaId CaptureClock;      /* 终点时钟名 nameId */
     int    fCutByException;
     int    fPathSaved;        /* 1 = 候选里已经存好逐边沿路径快照，不用再回溯一遍 */
-    MstaId LaunchClock;       /* setup 起点时钟名 nameId */
-    MstaId HoldLaunchClock;   /* hold 最小路径的起点时钟名 */
-    MstaId CaptureClock;      /* 终点时钟名 nameId */
-    double LaunchTime;        /* setup 起点那一拍 */
-    double CaptureTime;       /* setup capture 边沿 */
-    double HoldLaunchTime;    /* hold 起点那一拍 */
-    double HoldCaptureTime;   /* hold capture 边沿 */
-    int    *pSetupPath, *pHoldPath; /* 终点 -> 起点，获胜路径的快照 */
-    double *pSetupPathArrival, *pHoldPathArrival;
-    int     nSetupPath, nHoldPath;
-    /* 跨时钟时最差的那对边沿不一定都在第 0 拍：出发沿在第 k 拍时，报告里的
-       路径时间整体平移 k 个出发周期（slack 只跟两个边沿的差有关）。 */
-    double SetupLaunchShift, HoldLaunchShift;
-    /* 这条检查归在哪个路径分组（group_path）。没有 group_path 时按捕获时钟名字
-       归组，异步检查组是 **async**。分组只影响报告与按组统计，不影响 slack。 */
-    MstaId SetupGroup, HoldGroup;
 } MstaCheck;
 MstaArrayDefine( MstaCheck, MstaCheckArray )
+
+static inline MstaCheckCorner *Msta_CheckCorner( MstaCheck *pCheck, int fSetup )
+{
+    return fSetup ? &pCheck->Setup : &pCheck->Hold;
+}
 
 /* 时钟网络上的一个 FF 时钟脚的信息 */
 typedef struct {
@@ -113,6 +117,24 @@ typedef struct {
     int fValid;
 } MstaClockPair;
 
+typedef struct {
+    double *pArr;              /* [nNets] 到达时间（max 角用于 setup 遍，min 角用于 hold 遍） */
+    double *pArrRise, *pArrFall;
+    double *pSlew;             /* [nNets] 输出摆率，驱动下一级查表用 */
+    double *pSlewRise, *pSlewFall;
+    /* 起点信息：这根网络上的数据是从哪个时钟、哪一拍出发的。
+       检查时要用它决定 setup/hold 落在哪一拍，报告时要打印 startpoint。 */
+    int    *pnLaunchClock;     /* [nNets] 起点时钟在 sdc 里的下标，-1 表示没有 */
+    double *pdLaunchEdge;      /* [nNets] 起点那一拍的到达时间（时钟插入延迟或输入延迟） */
+    char   *pfLaunchRises;     /* [nNets] 1=上升沿 launch，0=下降沿 */
+    /* 路径回溯用的前驱 */
+    int    *pPrevNet;          /* [nNets] 前驱网络 */
+    int    *pPrevInst;         /* [nNets] 驱动它的那个实例 */
+    int    *pPrevPin;          /* [nNets] 该实例的哪个输入脚把最坏到达传进来的 */
+    /* 逐边沿前驱（上升/下降各一份） */
+    MstaPrev *pPrevRise, *pPrevFall;
+} MstaCorner;
+
 typedef struct MstaTiming {
     MstaDesign *pDes;
     MstaLib    *pLib;
@@ -132,31 +154,8 @@ typedef struct MstaTiming {
     char   *pfIdealNet;        /* [nNets] */
 
     /* 数据到达 */
-    double *pArrMax;           /* [nNets] 最大到达时间（setup 遍） */
-    double *pArrMin;           /* [nNets] 最小到达时间（hold 遍） */
-    double *pArrMaxRise, *pArrMaxFall;
-    double *pArrMinRise, *pArrMinFall;
-    double *pSlewMax;          /* [nNets] 最大输出摆率，驱动下一级查表用 */
-    double *pSlewMin;
-    double *pSlewMaxRise, *pSlewMaxFall;
-    double *pSlewMinRise, *pSlewMinFall;
-    /* 起点信息：这根网络上的数据是从哪个时钟、哪一拍出发的。
-       检查时要用它决定 setup/hold 落在哪一拍，报告时要打印 startpoint。 */
-    int    *pnLaunchClockMax;  /* [nNets] 起点时钟在 sdc 里的下标，-1 表示没有 */
-    int    *pnLaunchClockMin;
-    double *pdLaunchEdgeMax;   /* [nNets] 起点那一拍的到达时间（时钟插入延迟或输入延迟） */
-    double *pdLaunchEdgeMin;
-    char   *pfLaunchRisesMax;  /* [nNets] 1=上升沿 launch，0=下降沿 */
-    char   *pfLaunchRisesMin;
-    /* 路径回溯用的前驱 */
-    int    *pPrevNetMax;       /* [nNets] 前驱网络 */
-    int    *pPrevInstMax;      /* [nNets] 驱动它的那个实例 */
-    int    *pPrevPinMax;       /* [nNets] 该实例的哪个输入脚把最坏到达传进来的 */
-    int    *pPrevNetMin;
-    int    *pPrevInstMin;
-    int    *pPrevPinMin;
-    /* 逐边沿前驱（按上面四个槽）与"找次优路径"用的排除表 */
-    MstaPrev *pPrevMaxRise, *pPrevMaxFall, *pPrevMinRise, *pPrevMinFall;
+    MstaCorner CornerMax, CornerMin;
+    /* "找次优路径"用的排除表 */
     MstaPathExclude vPathExclude[MSTA_MAX_PATH_EXCLUDE];
     int     nPathExclude;
     MstaClockPair vClockPairs[MSTA_MAX_CLOCK_PAIRS];
@@ -165,6 +164,7 @@ typedef struct MstaTiming {
     int    *pTopoOrder;        /* [nNets] 拓扑序：网络编号的数组 */
     int     nTopoOrder;
     int    *pState;            /* DFS 用的 0/1/2 标记 */
+    int    *pStartClass;
     int     nCombLoops;
 
     /* 统计 */
