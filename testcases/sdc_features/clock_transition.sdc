@@ -1,0 +1,11 @@
+# set_clock_transition：时钟源摆率，参与时钟树第一级的延迟查表。
+create_clock -name core -period 50.0 [get_ports tau2015_clk]
+set_clock_transition 0.4 [get_clocks core]
+set_input_delay -clock core -max 5.0 [get_ports inp1]
+set_input_delay -clock core -min 0.0 [get_ports inp1]
+set_input_delay -clock core -max 1.0 [get_ports inp2]
+set_input_delay -clock core -min 0.0 [get_ports inp2]
+set_input_transition 0.05 [get_ports {inp1 inp2}]
+set_load 0.05 [get_ports out]
+set_output_delay -clock core -max 30.0 [get_ports out]
+set_output_delay -clock core -min -10.0 [get_ports out]

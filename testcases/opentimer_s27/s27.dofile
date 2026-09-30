@@ -1,0 +1,8 @@
+# OpenTimer benchmark（MIT 许可，见 THIRD_PARTY_NOTICES.md）：s27
+read_liberty lib/s27_Early.lib
+read_verilog netlist/s27.v
+current_design s27
+read_sdc s27.sdc
+report_design
+report_checks -max_paths 2 -setup
+report_checks -max_paths 2 -hold

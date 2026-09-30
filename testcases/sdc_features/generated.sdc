@@ -1,0 +1,10 @@
+set p 10.0
+create_clock -name master -period $p -waveform {1.0 4.0} [get_ports clk]
+create_generated_clock -name slow -source [get_ports clk] -divide_by 2 [get_pins divider/Q]
+set_input_delay -clock master -max 1.0 [get_ports d]
+set_input_delay -clock master -min 0.0 [get_ports d]
+set_output_delay -clock slow -max 2.0 [get_ports q]
+set_output_delay -clock slow -min 0.0 [get_ports q]
+set_clock_latency -source -max 0.5 [get_clocks master]
+set_clock_latency -source -min 0.2 [get_clocks master]
+set_clock_uncertainty -setup -hold 0.1 [get_clocks slow]

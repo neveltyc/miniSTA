@@ -1,0 +1,5 @@
+read_liberty ../sta_compare/lib/osu018_stdcells.lib
+read_verilog ../sta_compare/netlist.v
+current_design simple
+read_sdc io_edge_rise_first.sdc
+report_checks -max_paths 2 -setup

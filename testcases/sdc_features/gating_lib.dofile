@@ -1,0 +1,6 @@
+read_liberty ../lib/sky130.lib
+read_verilog gating.v
+current_design gating_demo
+read_sdc gating_lib.sdc
+report_checks -max_paths 2 -setup
+report_checks -max_paths 2 -hold

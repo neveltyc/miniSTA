@@ -1,0 +1,12 @@
+# ac97_ctrl 的 msta 脚本（相对路径按本文件所在目录解释）
+
+read_liberty   ../lib/sky130.lib
+read_verilog   netlist/ac97_ctrl.v
+current_design ac97_top
+read_sdc       ac97.sdc
+
+report_design
+report_clocks
+report_clock_tree
+report_checks -max_paths 1 -setup
+report_checks -max_paths 1 -hold

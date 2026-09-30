@@ -1,0 +1,8 @@
+read_liberty lib/ics55_LLSC_H7CL_typ_tt.lib lib/ics55_LLSC_H7CR_typ_tt.lib lib/ics55_LLSC_H7CH_typ_tt.lib
+read_verilog netlist/multi_vt_soc.v
+current_design soc_top
+read_sdc multi_vt_soc.sdc
+report_lib
+report_design
+report_checks -max_paths 2 -setup
+report_checks -max_paths 2 -hold

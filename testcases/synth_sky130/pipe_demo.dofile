@@ -1,0 +1,11 @@
+# 对 rtl/pipe_demo.v 综合出的网表跑一遍 STA。
+read_liberty   ../lib/sky130.lib
+read_verilog   netlist/pipe_demo.v
+current_design pipe_demo
+read_sdc       pipe_demo.sdc
+
+report_design
+report_clocks
+report_clock_tree
+report_checks -max_paths 2 -setup
+report_checks -max_paths 2 -hold

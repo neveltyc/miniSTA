@@ -1,0 +1,7 @@
+create_clock -name core -period 50.0 -waveform {5.0 20.0} [get_ports tau2015_clk]
+set_input_delay -clock core -max -fall 5.0 [get_ports inp1]
+set_input_delay -clock core -min -fall 0.0 [get_ports inp1]
+set_input_delay -clock core -max -rise 1.0 [get_ports inp2]
+set_input_delay -clock core -min -rise 0.0 [get_ports inp2]
+set_output_delay -clock core -clock_fall -max 30.0 [get_ports out]
+set_output_delay -clock core -clock_fall -min -10.0 [get_ports out]

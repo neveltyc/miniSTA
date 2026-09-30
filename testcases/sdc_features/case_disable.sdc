@@ -1,0 +1,7 @@
+create_clock -name core -period 50.0 [get_ports tau2015_clk]
+set_input_delay -clock core -max 5.0 [get_ports {inp1 inp2}]
+set_input_delay -clock core -min 0.0 [get_ports {inp1 inp2}]
+set_output_delay -clock core -max 30.0 [get_ports out]
+set_output_delay -clock core -min -10.0 [get_ports out]
+set_case_analysis 0 [get_ports inp1]
+set_disable_timing -from A -to Y [get_cells u1]

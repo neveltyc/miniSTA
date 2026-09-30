@@ -1,0 +1,6 @@
+read_liberty ../lib/sky130.lib
+read_verilog latch.v
+current_design latch_demo
+read_sdc latch_borrow.sdc
+report_checks -max_paths 3 -setup
+report_checks -max_paths 3 -hold

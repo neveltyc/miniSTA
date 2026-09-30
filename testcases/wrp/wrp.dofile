@@ -1,0 +1,10 @@
+# dedicated_wrp_cell：只有 1 个 mux + 1 个扫描 FF 的最小用例，适合讲解路径结构
+read_liberty   ../lib/sky130.lib
+read_verilog   netlist.v
+current_design dedicated_wrp_cell
+read_sdc       wrp.sdc
+
+report_design
+report_clocks
+report_checks -max_paths 2 -setup
+report_checks -max_paths 2 -hold

@@ -1,0 +1,6 @@
+read_liberty ../lib/sky130.lib
+read_verilog ../synth_sky130/netlist/pipe_demo.v
+current_design pipe_demo
+read_sdc async_exception.sdc
+report_checks -max_paths 1 -setup
+report_checks -max_paths 1 -hold

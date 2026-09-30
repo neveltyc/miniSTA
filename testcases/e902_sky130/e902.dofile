@@ -1,0 +1,11 @@
+# 真实 sky130 网表：OpenE902 RISC-V 内核，两个时钟域。
+read_liberty   ../lib/sky130.lib
+read_verilog   netlist/opene902.v
+current_design openE902
+read_sdc       e902.sdc
+
+report_design
+report_clocks
+report_clock_tree
+report_checks -max_paths 2 -setup
+report_checks -max_paths 2 -hold

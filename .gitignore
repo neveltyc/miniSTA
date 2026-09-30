@@ -1,0 +1,13 @@
+# 构建产物与编辑器/系统文件
+build/
+*.o
+*.a
+.DS_Store
+__pycache__/
+
+# 本地编译的参考工具与供应商文档（都不随仓库分发）
+vendor/
+docs/**/*.pdf
+
+# 本地会话笔记
+HANDOFF.md

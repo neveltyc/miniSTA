@@ -1,0 +1,15 @@
+# set_ideal_latency / set_ideal_transition：理想网络上的延迟和摆率直接取给定值，
+# 不再用传播算出来的数（摆率也只认 0.03 ns，不认缓冲器放大后的值）。
+create_clock -name core -period 10.0 [get_ports clk]
+set_propagated_clock [get_clocks core]
+set_ideal_network [get_ports clk]
+set_ideal_latency -max 0.5 [get_ports clk]
+set_ideal_latency -min 0.2 [get_ports clk]
+set_ideal_transition -max 0.03 [get_ports clk]
+set_ideal_transition -min 0.02 [get_ports clk]
+set_input_delay -clock core -max 1.0 [get_ports d_in]
+set_input_delay -clock core -min 0.0 [get_ports d_in]
+set_input_transition 0.05 [get_ports d_in]
+set_output_delay -clock core -max 1.0 [get_ports q_out]
+set_output_delay -clock core -min 0.0 [get_ports q_out]
+set_load 0.01 [get_ports q_out]

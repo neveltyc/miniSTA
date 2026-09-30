@@ -1,0 +1,6 @@
+read_liberty ../lib/sky130.lib
+read_verilog ../wrp/netlist.v
+current_design dedicated_wrp_cell
+read_sdc data_check.sdc
+report_checks -max_paths 1 -setup
+report_checks -max_paths 1 -hold

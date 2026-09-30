@@ -1,0 +1,10 @@
+set_input_delay -clock tau2015_clk -max 5000 [get_ports inp1]
+set_input_delay -clock tau2015_clk -min 0 [get_ports inp1]
+set_input_delay -clock tau2015_clk -max 1000 [get_ports inp2]
+set_input_delay -clock tau2015_clk -min 0 [get_ports inp2]
+set_input_transition 50 [get_ports {inp1 inp2}]
+set_input_transition 30 [get_ports tau2015_clk]
+set_load 0.05 [get_ports out]
+set_output_delay -clock tau2015_clk -max 30000 \
+    [get_ports out]
+set_output_delay -clock tau2015_clk -min -10000 [get_ports out]
