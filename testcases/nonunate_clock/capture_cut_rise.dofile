@@ -1,0 +1,6 @@
+read_liberty clock.lib
+read_verilog capture.v
+current_design capture
+read_sdc capture_cut_rise.sdc
+report_checks -setup
+report_checks -hold

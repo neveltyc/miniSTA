@@ -1,0 +1,7 @@
+create_clock -name core -period 10 [get_ports clk]
+set_clock_transition 0.1 [get_clocks core]
+set_propagated_clock [get_clocks core]
+set_input_delay -clock core -max 1 [get_ports d]
+set_input_delay -clock core -min 1 [get_ports d]
+set_input_transition 0.1 [get_ports d]
+set_clock_uncertainty -setup 0.4 -rise_from [get_clocks core] -fall_to [get_clocks core]

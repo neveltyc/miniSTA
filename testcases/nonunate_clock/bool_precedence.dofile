@@ -1,0 +1,6 @@
+read_liberty clock_precedence.lib
+read_verilog precedence.v
+current_design precedence
+read_sdc bool_precedence.sdc
+report_checks -setup
+report_checks -hold

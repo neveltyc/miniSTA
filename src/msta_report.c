@@ -89,6 +89,8 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
              pCorner->fDataRise ? "^" : "v" );
     fprintf( pFile, "launch clock : %s @ %.3f ns\n",
              Msta_NameStr( nLaunchClock ), LaunchTime / 1000.0 );
+    fprintf( pFile, "launch source edge : %s\n", pCorner->LaunchSourceRise ? "rise" : "fall" );
+    fprintf( pFile, "capture source edge: %s\n", pCorner->CaptureSourceRise ? "rise" : "fall" );
     fprintf( pFile, "capture clock: %s @ %.3f ns\n",
              Msta_NameStr( pCheck->CaptureClock ), CaptureTime / 1000.0 );
     if ( !pCheck->fToRegister )

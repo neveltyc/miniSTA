@@ -1,0 +1,6 @@
+read_liberty clock_gate.lib
+read_verilog gate.v
+current_design gate
+read_sdc xor_gate.sdc
+report_checks -setup
+report_checks -hold

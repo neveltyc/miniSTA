@@ -1061,6 +1061,128 @@ int Msta_CellPinIndexOf( MstaCell *pCell, MstaId NameId )
 
 /* 组合弧查找：同一个 (in,out) 可能有多条（不同 timing_type），
    寄存器单元里 in->out 的边沿弧不算组合弧，除非这个单元不是 FF。 */
+/* Liberty function 的小型布尔求值器。只在侧输入已有 case/常量值时用于时钟弧裁剪；
+   未识别的语法或过多自由变量回退声明的 timing_sense，保持保守。 */
+typedef struct {
+    const char *Text;
+    MstaCell *Cell;
+    const signed char *Values;
+    int Valid, Depth;
+} MstaBoolExpr;
+
+static void BoolSpace( MstaBoolExpr *p )
+{ while ( isspace((unsigned char)*p->Text) ) p->Text++; }
+static int BoolOr( MstaBoolExpr *p );
+static int BoolXor( MstaBoolExpr *p );
+static int BoolAtom( MstaBoolExpr *p )
+{
+    int Value = 0, i;
+    if ( ++p->Depth > 256 ) { p->Valid = 0; p->Depth--; return 0; }
+    BoolSpace(p);
+    if ( *p->Text == '!' ) { p->Text++; Value = !BoolAtom(p); }
+    else if ( *p->Text == '(' )
+    {
+        p->Text++; Value = BoolOr(p); BoolSpace(p);
+        if ( *p->Text != ')' ) p->Valid = 0;
+        else p->Text++;
+    }
+    else
+    {
+        const char *Start = p->Text;
+        while ( *p->Text && (isalnum((unsigned char)*p->Text) || strchr("_[].$/",*p->Text)) ) p->Text++;
+        size_t Length = (size_t)(p->Text - Start);
+        if ( Length == 1 && (*Start == '0' || *Start == '1') ) Value = *Start - '0';
+        else
+        {
+            int Found = 0;
+            for ( i = 0; i < p->Cell->vPins.nSize; i++ )
+            {
+                const char *Name = Msta_NameStr(p->Cell->vPins.pData[i].Name);
+                if ( strlen(Name) == Length && !strncmp(Name,Start,Length) )
+                { Value = p->Values[i]; if ( Value < 0 || Value > 1 ) p->Valid = 0; Found = 1; break; }
+            }
+            if ( !Found || Length == 0 ) p->Valid = 0;
+        }
+    }
+    BoolSpace(p);
+    while ( *p->Text == '\'' ) { Value = !Value; p->Text++; BoolSpace(p); }
+    p->Depth--;
+    return Value;
+}
+static int BoolAnd( MstaBoolExpr *p )
+{
+    int Value = BoolXor(p);
+    while ( p->Valid )
+    {
+        BoolSpace(p);
+        char Op = *p->Text;
+        int Implicit = isalnum((unsigned char)Op) || Op == '_' || Op == '(' || Op == '!';
+        if ( Op != '&' && Op != '*' && !Implicit ) break;
+        if ( !Implicit ) p->Text++;
+        Value &= BoolXor(p);
+    }
+    return Value;
+}
+static int BoolXor( MstaBoolExpr *p )
+{
+    int Value = BoolAtom(p);
+    while ( p->Valid )
+    {
+        BoolSpace(p); if ( *p->Text != '^' ) break;
+        p->Text++; Value ^= BoolAtom(p);
+    }
+    return Value;
+}
+static int BoolOr( MstaBoolExpr *p )
+{
+    int Value = BoolAnd(p);
+    while ( p->Valid )
+    {
+        BoolSpace(p); if ( *p->Text != '|' && *p->Text != '+' ) break;
+        p->Text++; Value |= BoolAnd(p);
+    }
+    return Value;
+}
+
+int Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases )
+{
+    int In = Msta_CellPinIndexOf(pCell,pArc->InPin);
+    int Out = Msta_CellPinIndexOf(pCell,pArc->OutPin);
+    int i, nFree = 0, Known = 0, Positive = 0, Negative = 0;
+    int Free[8];
+    signed char *Values;
+    if ( In < 0 || Out < 0 || pCell->vPins.pData[Out].pFunc == NULL ) return pArc->Sense;
+    for ( i = 0; i < pCell->vPins.nSize; i++ )
+        if ( i != In && pCell->vPins.pData[i].Dir != MSTA_DIR_OUTPUT )
+        {
+            if ( pCases[i] >= 0 ) Known = 1;
+            else if ( nFree < 8 ) Free[nFree++] = i;
+            else return pArc->Sense;
+        }
+    if ( !Known ) return pArc->Sense;
+    Values = (signed char *)malloc((size_t)pCell->vPins.nSize);
+    assert(Values);
+    memcpy(Values,pCases,(size_t)pCell->vPins.nSize);
+    for ( i = 0; i < (1 << nFree); i++ )
+    {
+        int k, f, Result[2];
+        for ( k = 0; k < nFree; k++ ) Values[Free[k]] = (i >> k) & 1;
+        for ( f = 0; f < 2; f++ )
+        {
+            MstaBoolExpr Expr = {pCell->vPins.pData[Out].pFunc,pCell,Values,1,0};
+            Values[In] = (signed char)f;
+            Result[f] = BoolOr(&Expr);
+            BoolSpace(&Expr);
+            if ( !Expr.Valid || *Expr.Text ) { free(Values); return pArc->Sense; }
+        }
+        if ( Result[0] == 0 && Result[1] == 1 ) Positive = 1;
+        if ( Result[0] == 1 && Result[1] == 0 ) Negative = 1;
+    }
+    free(Values);
+    return Positive && Negative ? MSTA_SENSE_NONUNATE : Positive ? MSTA_SENSE_POSITIVE
+           : Negative ? MSTA_SENSE_NEGATIVE : -1;
+}
+
 MstaArc *Msta_CellCombArc( MstaCell *pCell, MstaId InPin, MstaId OutPin )
 {
     int i;

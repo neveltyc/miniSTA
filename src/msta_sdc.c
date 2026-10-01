@@ -708,8 +708,8 @@ static void Msta_SdcSetUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     /* -from/-to 形式：指定这对时钟之间的不确定度。 */
     for ( i = 1; i + 1 < argc; i++ )
     {
-        if ( !strcmp(argv[i],"-from") || !strncmp(argv[i],"-rise_from",6) ||
-             !strncmp(argv[i],"-fall_from",6) )
+        if ( !strcmp(argv[i],"-from") || !strcmp(argv[i],"-rise_from") ||
+             !strcmp(argv[i],"-fall_from") )
         {
             pFrom = argv[i+1];
             FromRF = !strncmp(argv[i],"-rise_",6) ? 'r'
@@ -717,8 +717,8 @@ static void Msta_SdcSetUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
             A.Used[i] = A.Used[i+1] = 1;
             i++;
         }
-        else if ( !strcmp(argv[i],"-to") || !strncmp(argv[i],"-rise_to",6) ||
-                  !strncmp(argv[i],"-fall_to",6) )
+        else if ( !strcmp(argv[i],"-to") || !strcmp(argv[i],"-rise_to") ||
+                  !strcmp(argv[i],"-fall_to") )
         {
             pTo = argv[i+1];
             ToRF = !strncmp(argv[i],"-rise_",6) ? 'r'
@@ -2685,6 +2685,24 @@ static int Msta_SdcPortHasClockDelay( MstaSdc *p, int nNet, char *pClock, int fO
     return 0;
 }
 
+/* 集合查询与时序引擎使用相同的 case 条件时钟弧 sense。 */
+static int Msta_SdcClockArcSense( MstaDesign *pDes, MstaInst *pInst, MstaArc *pArc )
+{
+    int i, Sense;
+    signed char *Cases = (signed char *)malloc((size_t)pInst->pCell->vPins.nSize);
+    assert(Cases);
+    for ( i = 0; i < pInst->pCell->vPins.nSize; i++ )
+    {
+        int n = i < pInst->nPins ? pInst->pNets[i] : -1;
+        MstaNet *pNet = n >= 0 ? MstaNetArrayAt(&pDes->vNets,n) : NULL;
+        int v = pNet ? (pNet->fCaseValue ? pNet->fCaseValue : pNet->fConst) : 0;
+        Cases[i] = v == 1 || v == 2 ? (signed char)(v - 1) : -1;
+    }
+    Sense = Msta_LibClockSense(pInst->pCell,pArc,Cases);
+    free(Cases);
+    return Sense;
+}
+
 /* all_registers -clock：把某个时钟树上的网络标出来（pfOnNet），顺便记极性
    （+1/-1，反相缓冲器与 set_clock_sense 都会翻）。规则与 msta_timing.c 的
    MarkClockNets 一致：从时钟源网络沿组合弧前推，遇到时序单元停下。
@@ -2696,15 +2714,23 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
     int *pQueue, nQueue = 0, q;
     if ( nNets <= 0 || pClock->SourceNet < 0 )
         return;
-    pQueue = (int *)malloc( (size_t)nNets * sizeof(int) );
+    pQueue = (int *)malloc( (size_t)(2 * nNets) * sizeof(int) );
     assert( pQueue );
     pfOnNet[pClock->SourceNet] = 1;
-    pPolarity[pClock->SourceNet] = 1;
+    int SourceStop = 0;
+    int SourceSense = Msta_SdcClockSense(pSdc,pClock->SourceNet,
+                                       Msta_SdcClockIndexOf(pSdc,pClock->Name),&SourceStop);
+    pPolarity[pClock->SourceNet] = SourceSense ? (char)SourceSense : 1;
     pQueue[nQueue++] = pClock->SourceNet;
     for ( q = 0; q < nQueue; q++ )
     {
         MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, pQueue[q] );
-        int i;
+        int i, Stop = 0, c = Msta_SdcClockIndexOf(pSdc,pClock->Name);
+        (void)Msta_SdcClockSense(pSdc,pQueue[q],c,&Stop);
+        for ( i = 0; i < pSdc->vClocks.nSize; i++ )
+            if ( pSdc->vClocks.pData[i].MasterClock == pClock->Name &&
+                 pSdc->vClocks.pData[i].SourceNet == pQueue[q] ) Stop = 1;
+        if ( Stop ) continue;
         for ( i = 0; i < pNet->vLoads.nSize; i++ )
         {
             MstaPinRef *pRef = MstaPinRefArrayAt( &pNet->vLoads, i );
@@ -2721,27 +2747,34 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
                 int nOut = pLoad->pNets[k];
                 int Pol = pPolarity[pQueue[q]];
                 int nSet, fStop = 0;
-                if ( pOutPin->Dir != MSTA_DIR_OUTPUT || nOut < 0 || pfOnNet[nOut] )
+                if ( pOutPin->Dir != MSTA_DIR_OUTPUT || nOut < 0 )
                     continue;
                 pArc = Msta_CellCombArc( pCell, pInPin->Name, pOutPin->Name );
                 if ( pArc == NULL )
                     continue;
                 if ( Msta_SdcTimingDisabled( pSdc, pRef->InstId, pInPin->Name, pOutPin->Name ) )
                     continue;
-                if ( pArc->Sense == MSTA_SENSE_NEGATIVE )
-                    Pol = -Pol;
+                int Sense = Msta_SdcClockArcSense(pDes,pLoad,pArc);
+                if ( Sense < 0 ) continue;
+                if ( Sense == MSTA_SENSE_NEGATIVE ) Pol = -Pol;
+                else if ( Sense == MSTA_SENSE_NONUNATE ) Pol = 0;
                 nSet = Msta_SdcClockSense( pSdc, nOut, Msta_SdcClockIndexOf(pSdc,pClock->Name),
                                            &fStop );
                 if ( nSet != 0 )
                     Pol = nSet;
-                if ( fStop )
-                    continue;                   /* -stop_propagation：不往下传 */
-                pfOnNet[nOut] = 1;
-                pPolarity[nOut] = (char)Pol;
-                pQueue[nQueue++] = nOut;
+                int Joined = nSet ? nSet : (!pfOnNet[nOut] || pPolarity[nOut] == Pol ? Pol : 0);
+                if ( !pfOnNet[nOut] || pPolarity[nOut] != Joined )
+                {
+                    pfOnNet[nOut] = 1;
+                    pPolarity[nOut] = (char)Joined;
+                    pQueue[nQueue++] = nOut;
+                }
             }
         }
     }
+    for ( q = 0; q < pSdc->vClocks.nSize; q++ )
+        if ( pSdc->vClocks.pData[q].MasterClock == pClock->Name &&
+             pSdc->vClocks.pData[q].SourceNet >= 0 ) pfOnNet[pSdc->vClocks.pData[q].SourceNet] = 0;
     free( pQueue );
 }
 
@@ -2765,6 +2798,8 @@ static int Msta_SdcRegMatchesClock( MstaDesign *pDes, MstaInst *pInst, MstaCell 
             continue;
         if ( !fRise && !fFall )
             return 1;
+        /* 边沿限定集合只选能确定触发源沿的寄存器；双标签路径由 -rise_to/-fall_to 裁剪。 */
+        if ( pPolarity[nClkNet] == 0 ) continue;
         fRises = pReg->fClkRises ? ( pPolarity[nClkNet] > 0 ) : ( pPolarity[nClkNet] < 0 );
         if ( ( fRise && fRises ) || ( fFall && !fRises ) )
             return 1;

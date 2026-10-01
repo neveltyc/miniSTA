@@ -1,0 +1,6 @@
+read_liberty clock_async.lib
+read_verilog async.v
+current_design async
+read_sdc xor_async.sdc
+report_checks -setup
+report_checks -hold

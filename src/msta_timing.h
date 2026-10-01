@@ -40,6 +40,7 @@
 
 typedef struct {
     double Slack;
+    int LaunchSourceRise, CaptureSourceRise; /* 获胜路径的时钟源边沿标签 */
     double Arrival, Required;
     int    fDataRise;         /* 获胜路径的数据边沿：1 = rise，0 = fall */
     /* 要求时间的组成成分，报告层直接拿来打印（不让报告层重新推导一遍） */
@@ -89,8 +90,9 @@ static inline MstaCheckCorner *Msta_CheckCorner( MstaCheck *pCheck, int fSetup )
 
 /* 时钟网络上的一个 FF 时钟脚的信息 */
 typedef struct {
-    double Arrival[2][2];    /* [min/max][fall/rise]，引脚上的本地边沿 */
-    double Slew[2][2];
+    double Arrival[2][2][2]; /* [min/max][本地 fall/rise][源 fall/rise] */
+    double Slew[2][2][2];
+    unsigned char Tags[2];     /* 本地边沿的源标签掩码：1=源 fall，2=源 rise */
     double MaxArrival;        /* 以下合并值仅用于时钟树摘要和 DRC */
     double MinArrival;        /* ps：最快那条 */
     double MaxSlew;           /* ps：该时钟网络的最大/最小摆率 */
@@ -98,7 +100,7 @@ typedef struct {
     int    fReached;
     int    fSourceOnly;      /* 主时钟到生成时钟源的延迟，只供 source 继承 */
     int    nThroughGates;     /* 时钟路径经过的组合级数 */
-    int    Polarity;          /* +1 / -1：这个点上时钟相对源是不是反相的 */
+    int    Polarity;          /* +1=同相，-1=反相，0=两种都有 */
 } MstaClockArr;
 
 /* 逐边沿的路径前驱：每个网络按 max/min × rise/fall 四个槽各记一份，
@@ -164,6 +166,7 @@ typedef struct MstaTiming {
     int     nPathExclude;
     MstaClockPair vClockPairs[MSTA_MAX_CLOCK_PAIRS];
     int     nClockPairs;
+    int     LaunchClockTag, CaptureClockTag; /* 当前候选标签，-1=辅助合并查询 */
 
     int    *pTopoOrder;        /* [nNets] 拓扑序：网络编号的数组 */
     int     nTopoOrder;

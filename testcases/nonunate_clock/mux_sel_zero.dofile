@@ -1,0 +1,6 @@
+read_liberty clock.lib
+read_verilog mux.v
+current_design mux
+read_sdc mux_sel_zero.sdc
+report_checks -setup
+report_checks -hold

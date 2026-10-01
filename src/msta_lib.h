@@ -126,7 +126,7 @@ typedef struct {
     int         fGateClock;   /* clock_gate_clock_pin：时钟门控单元的时钟脚 */
     int         fGateEnable;  /* clock_gate_enable_pin：门控使能脚 */
     int         fGateOut;     /* clock_gate_out_pin：门控后的时钟输出脚 */
-    char       *pFunc;        /* function 表达式原文，如 "!(A&B)"；只用于打印/调试 */
+    char       *pFunc;        /* function 原文，用于时钟 case 裁剪与报告 */
 } MstaPin;
 
 /* ---------------------------------------------------------------------
@@ -261,6 +261,8 @@ MstaPin  *Msta_LibPinForCorner( MstaLib *p, MstaCell *pCell, MstaId PinId,
 /* ---- 给时序引擎用的查询 ---- */
 int       Msta_CellPinIndexOf( MstaCell *p, MstaId NameId );     /* -1 表示没有这个脚 */
 /* 组合弧：输入脚 InPin 翻转到输出脚 OutPin。找不到返回 NULL。 */
+/* 时钟弧按侧输入 case 值裁剪；-1=无翻转，其他为 MstaSense。pCases: -1/0/1。 */
+int       Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases );
 MstaArc  *Msta_CellCombArc( MstaCell *p, MstaId InPin, MstaId OutPin );
 MstaArc  *Msta_CellArcById( MstaCell *p, MstaId ArcId );
 /* 库统计信息，report_lib 用 */
