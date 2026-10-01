@@ -234,21 +234,6 @@ static const char *Msta_SdcValueOf( int argc, char **argv, MstaSdcArgs *pA, cons
     return NULL;
 }
 
-/* 取一个"值一定跟在选项后面"的选项：不管值是不是以 - 开头都要（-edge_shift
-   {-0.1 0 0} 的值就是一个以 - 开头的列表）。 */
-static const char *Msta_SdcValueRaw( int argc, char **argv, MstaSdcArgs *pA, const char *pFlag )
-{
-    int i;
-    for ( i = 1; i + 1 < argc; i++ )
-        if ( !strcmp( argv[i], pFlag ) )
-        {
-            pA->Used[i] = 1;
-            pA->Used[i+1] = 1;
-            return argv[i+1];
-        }
-    return NULL;
-}
-
 /* 解析 SDC 的列表写法：-edges {1 3 5} 传到 C 侧就是一段 "1 3 5" 文本。
    花括号、逗号、空格都当分隔符；碰到不是数字的地方停下。返回取到的个数。 */
 static int Msta_SdcParseNumberList( const char *pText, double *pOut, int nCap )
@@ -340,6 +325,339 @@ static double Msta_SdcUnitScale( const char *pText, int fTime )
         if ( !strcasecmp(pEnd,"nf") ) return Value * 1000000.0;
     }
     return 0.0;
+}
+
+/* =====================================================================
+   选项表与通用解析器
+
+   每条命令的语法写成一张选项表（MstaSdcOpt 数组）：选项名 + 种类。
+   通用解析器 Msta_SdcParseCmd 按表把 argv 拆成一个 MstaSdcCmd：
+   哪些开关出现了、各选项取到了什么值、剩下哪些位置参数（数值、对象名）。
+   处理函数只通过 Msta_SdcHasFlag / Msta_SdcOptValue 这类访问函数和
+   ppPos 位置参数数组取结果，不再自己遍历 argv。
+   ===================================================================== */
+
+/* 选项的种类：决定解析器怎样认出这个选项、怎样取它的值。 */
+typedef enum {
+    MSTA_SDC_FLAG,         /* 开关，如 -add：出现就算数 */
+    MSTA_SDC_VALUE,        /* 带一个值，如 -period 5。值不能长得像选项（以 - 开头的
+                              非数字），否则这次出现不算；写了多次时只认第一次取到值的 */
+    MSTA_SDC_VALUE_RAW,    /* 带一个值，值可以以 - 开头，如 -edge_shift {-0.1 0 0}；
+                              只认第一次出现 */
+    MSTA_SDC_FLAG_NUMBER,  /* 开关，后面紧跟数值时数值归它，如 -setup 0.1（方言写法）；
+                              带值写了多次时取最后一个 */
+    MSTA_SDC_RF_VALUE,     /* 带一个值，并且认 -rise_/-fall_ 前缀的变体：表里写 -from，
+                              -rise_from / -fall_from 也算它，同时记下边沿 'r' / 'f' */
+    MSTA_SDC_GROUP         /* 可以重复的对象组，如 -group：每出现一次开一个新组，
+                              后面的对象名都归入这个组（只用于顺序模式） */
+} MstaSdcOptKind;
+
+/* 选项表的一行。表以 pName == NULL 的一行结尾。 */
+typedef struct {
+    const char     *pName;
+    MstaSdcOptKind  Kind;
+} MstaSdcOpt;
+
+/* 解析模式：同一种选项表，有三种读 argv 的方式。 */
+typedef enum {
+    MSTA_SDC_SCAN,         /* 扫描：每个选项各自在整条命令里找自己，剩下的数值和
+                              对象名就是位置参数，所以数值可以写在选项之间任意位置 */
+    MSTA_SDC_ORDERED,      /* 顺序：从左到右读，以 - 开头的词都当选项，选项的值就是
+                              紧跟的下一个词；遇到第一个认不出的选项就停下 */
+    MSTA_SDC_WORDS         /* 没有选项：每个词（包括以 - 开头的词和空串）都是位置参数 */
+} MstaSdcParseMode;
+
+/* 解析结果。下标为 k 的数组对应选项表的第 k 行；数组都挂在本条命令的
+   临时内存上（读下一条命令时一起释放）。 */
+typedef struct {
+    const MstaSdcOpt *pOpts;   /* 这条命令的选项表 */
+    int           argc;
+    char        **argv;        /* argv[0] 是命令名 */
+    int          *pUsed;       /* 扫描模式：argv[i] 已被某个选项认领 */
+    int          *pAt;         /* 选项第一次生效的位置（argv 下标），0 = 没出现 */
+    const char  **ppValue;     /* 选项取到的值，NULL = 没取到 */
+    char         *pEdge;       /* MSTA_SDC_RF_VALUE 选项的边沿：'r' / 'f' / 0 */
+    char        **ppPos;       /* 位置参数，按出现顺序 */
+    int          *pPosAt;      /* 位置参数在 argv 里的下标 */
+    int           nPos;
+    char        **ppMember;    /* MSTA_SDC_GROUP 组里的对象名，按出现顺序 */
+    int          *pMemberAt;   /* 它们在 argv 里的下标 */
+    int          *pMemberGroup;/* 它们属于第几组（从 1 数） */
+    int           nMembers;
+    int           nGroups;     /* 一共开了几个组 */
+    int           iBad;        /* 第一个"长得像选项却没被认领"的词的下标：不认识的
+                                  选项，或没取到值的选项。0 = 没有。要不要为此告警
+                                  由各条命令自己决定 */
+} MstaSdcCmd;
+
+/* 命令的处理函数：拿解析结果做语义——查对象、换算单位、写模型。 */
+typedef void (*MstaSdcHandler)( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
+
+/* 分发表的一行：命令名、解析模式、选项表、处理函数。 */
+typedef struct {
+    const char       *pName;
+    MstaSdcParseMode  Mode;
+    const MstaSdcOpt *pOpts;
+    MstaSdcHandler    pfHandler;
+} MstaSdcCmdDef;
+
+/* 在本条命令的临时内存上分配 n 个清零的元素（多给一个，n 为 0 也能用）。 */
+static void *Msta_SdcArenaZeros( int n, size_t nSize )
+{
+    void *pMem = calloc( (size_t)n + 1, nSize );
+    assert( pMem );
+    return Msta_SdcArenaKeep( pMem );
+}
+
+/* 以 - 开头又不是数值的词，才算"长得像选项"；-0.5 这样的负数是普通的值。 */
+static int Msta_SdcLooksLikeOption( const char *pWord )
+{
+    return pWord[0] == '-' && !Msta_SdcIsNumber( pWord );
+}
+
+/* pWord 是不是选项 pOpt：RF_VALUE 选项还认 -rise_/-fall_ 前缀的变体，
+   边沿写进 *pEdge（不带前缀写 0）。 */
+static int Msta_SdcWordIsOpt( const char *pWord, const MstaSdcOpt *pOpt, char *pEdge )
+{
+    *pEdge = 0;
+    if ( !strcmp( pWord, pOpt->pName ) )
+        return 1;
+    if ( pOpt->Kind != MSTA_SDC_RF_VALUE )
+        return 0;
+    /* 选项名去掉开头的 '-' 再接到前缀后面：-from -> -rise_from */
+    if ( !strncmp( pWord, "-rise_", 6 ) && !strcmp( pWord + 6, pOpt->pName + 1 ) )
+    { *pEdge = 'r'; return 1; }
+    if ( !strncmp( pWord, "-fall_", 6 ) && !strcmp( pWord + 6, pOpt->pName + 1 ) )
+    { *pEdge = 'f'; return 1; }
+    return 0;
+}
+
+/* 记下选项 k 在下标 i 处生效（只记第一次的位置）。 */
+static void Msta_SdcCmdSeen( MstaSdcCmd *pCmd, int k, int i )
+{
+    if ( pCmd->pAt[k] == 0 )
+        pCmd->pAt[k] = i;
+}
+
+/* 扫描模式。每个选项各自在整条 argv 里找自己并把用到的词标为"已认领"；
+   最后既没被认领、又不像选项的词就是位置参数。 */
+static void Msta_SdcParseScan( MstaSdcCmd *pCmd )
+{
+    int argc = pCmd->argc, i, k;
+    char **argv = pCmd->argv;
+    char Edge;
+    for ( k = 0; pCmd->pOpts[k].pName; k++ )
+    {
+        const char *pName = pCmd->pOpts[k].pName;
+        MstaSdcOptKind Kind = pCmd->pOpts[k].Kind;
+        if ( Kind == MSTA_SDC_FLAG || Kind == MSTA_SDC_FLAG_NUMBER )
+        {
+            for ( i = 1; i < argc; i++ )
+                if ( !strcmp( argv[i], pName ) )
+                {
+                    pCmd->pUsed[i] = 1;
+                    Msta_SdcCmdSeen( pCmd, k, i );
+                }
+            /* 带数值的开关：每个后面紧跟数值的出现都把数值记下，最后一个留下。 */
+            for ( i = 1; Kind == MSTA_SDC_FLAG_NUMBER && i + 1 < argc; i++ )
+                if ( !strcmp( argv[i], pName ) && Msta_SdcIsNumber( argv[i+1] ) )
+                {
+                    pCmd->ppValue[k] = argv[i+1];
+                    pCmd->pUsed[i+1] = 1;
+                }
+        }
+        else if ( Kind == MSTA_SDC_VALUE || Kind == MSTA_SDC_VALUE_RAW )
+        {
+            for ( i = 1; i + 1 < argc; i++ )
+            {
+                if ( strcmp( argv[i], pName ) )
+                    continue;
+                if ( Kind == MSTA_SDC_VALUE && Msta_SdcLooksLikeOption( argv[i+1] ) )
+                    continue;
+                pCmd->ppValue[k] = argv[i+1];
+                pCmd->pUsed[i] = pCmd->pUsed[i+1] = 1;
+                Msta_SdcCmdSeen( pCmd, k, i );
+                break;
+            }
+        }
+        else
+            assert( Kind == MSTA_SDC_RF_VALUE );    /* 下面一起处理；扫描模式没有组 */
+    }
+    /* RF_VALUE 选项（-from/-to 及其 -rise_/-fall_ 变体）一起从左往右读：紧跟的下一个词
+       不管长什么样都是值，读过的值不再当选项看；同一选项写多次时最后一次算数。 */
+    for ( i = 1; i + 1 < argc; i++ )
+        for ( k = 0; pCmd->pOpts[k].pName; k++ )
+        {
+            if ( pCmd->pOpts[k].Kind != MSTA_SDC_RF_VALUE ||
+                 !Msta_SdcWordIsOpt( argv[i], &pCmd->pOpts[k], &Edge ) )
+                continue;
+            pCmd->ppValue[k] = argv[i+1];
+            pCmd->pEdge[k] = Edge;
+            pCmd->pUsed[i] = pCmd->pUsed[i+1] = 1;
+            Msta_SdcCmdSeen( pCmd, k, i );
+            i++;
+            break;
+        }
+    /* 剩下的词：像选项的记为"没认领"，空串丢掉，其余是位置参数。 */
+    for ( i = 1; i < argc; i++ )
+    {
+        if ( pCmd->pUsed[i] )
+            continue;
+        if ( Msta_SdcLooksLikeOption( argv[i] ) )
+        {
+            if ( pCmd->iBad == 0 )
+                pCmd->iBad = i;
+            continue;
+        }
+        if ( argv[i][0] == 0 )
+            continue;
+        pCmd->pPosAt[pCmd->nPos] = i;
+        pCmd->ppPos[pCmd->nPos++] = argv[i];
+    }
+}
+
+/* 顺序模式。从左到右读：选项按种类吃掉自己的值；不认识的、以 - 开头的词
+   让解析停下（记在 iBad）；其余的词在出现过组选项之后归入最近的组，
+   之前的是位置参数。 */
+static void Msta_SdcParseOrdered( MstaSdcCmd *pCmd )
+{
+    int argc = pCmd->argc, i, k;
+    char **argv = pCmd->argv;
+    char Edge = 0;
+    for ( i = 1; i < argc; i++ )
+    {
+        for ( k = 0; pCmd->pOpts[k].pName; k++ )
+            if ( Msta_SdcWordIsOpt( argv[i], &pCmd->pOpts[k], &Edge ) )
+                break;
+        if ( pCmd->pOpts[k].pName != NULL )
+        {
+            MstaSdcOptKind Kind = pCmd->pOpts[k].Kind;
+            int fTakesValue = Kind == MSTA_SDC_VALUE || Kind == MSTA_SDC_VALUE_RAW ||
+                              Kind == MSTA_SDC_RF_VALUE;
+            if ( fTakesValue && i + 1 >= argc )     /* 选项在末尾、没有值 */
+            {
+                pCmd->iBad = i;
+                return;
+            }
+            Msta_SdcCmdSeen( pCmd, k, i );
+            if ( Kind == MSTA_SDC_GROUP )
+                pCmd->nGroups++;
+            else if ( fTakesValue )
+            {
+                pCmd->ppValue[k] = argv[++i];        /* 紧跟的下一个词就是值，跳过它 */
+                pCmd->pEdge[k] = Edge;
+            }
+            else if ( Kind == MSTA_SDC_FLAG_NUMBER && i + 1 < argc && Msta_SdcIsNumber( argv[i+1] ) )
+                pCmd->ppValue[k] = argv[++i];
+            continue;
+        }
+        if ( argv[i][0] == '-' )
+        {
+            pCmd->iBad = i;
+            return;
+        }
+        if ( pCmd->nGroups > 0 )
+        {
+            pCmd->pMemberAt[pCmd->nMembers] = i;
+            pCmd->pMemberGroup[pCmd->nMembers] = pCmd->nGroups;
+            pCmd->ppMember[pCmd->nMembers++] = argv[i];
+        }
+        else
+        {
+            pCmd->pPosAt[pCmd->nPos] = i;
+            pCmd->ppPos[pCmd->nPos++] = argv[i];
+        }
+    }
+}
+
+/* 通用解析器：按 pDef 的选项表和模式把 argv 拆进 *pCmd。
+   解析本身不告警，所有告警都由处理函数按命令语义给出。 */
+static void Msta_SdcParseCmd( const MstaSdcCmdDef *pDef, int argc, char **argv, MstaSdcCmd *pCmd )
+{
+    int nOpts = 0, i;
+    while ( pDef->pOpts[nOpts].pName )
+        nOpts++;
+    memset( pCmd, 0, sizeof(MstaSdcCmd) );
+    pCmd->pOpts        = pDef->pOpts;
+    pCmd->argc         = argc;
+    pCmd->argv         = argv;
+    pCmd->pUsed        = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    pCmd->pAt          = (int *)Msta_SdcArenaZeros( nOpts, sizeof(int) );
+    pCmd->ppValue      = (const char **)Msta_SdcArenaZeros( nOpts, sizeof(char *) );
+    pCmd->pEdge        = (char *)Msta_SdcArenaZeros( nOpts, sizeof(char) );
+    pCmd->ppPos        = (char **)Msta_SdcArenaZeros( argc, sizeof(char *) );
+    pCmd->pPosAt       = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    pCmd->ppMember     = (char **)Msta_SdcArenaZeros( argc, sizeof(char *) );
+    pCmd->pMemberAt    = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    pCmd->pMemberGroup = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    if ( pDef->Mode == MSTA_SDC_SCAN )
+        Msta_SdcParseScan( pCmd );
+    else if ( pDef->Mode == MSTA_SDC_ORDERED )
+        Msta_SdcParseOrdered( pCmd );
+    else
+        for ( i = 1; i < argc; i++ )
+        {
+            pCmd->pPosAt[pCmd->nPos] = i;
+            pCmd->ppPos[pCmd->nPos++] = argv[i];
+        }
+}
+
+/* 选项名在表里的下标。名字不在表里说明处理函数和选项表对不上，是代码错误。 */
+static int Msta_SdcOptIndex( const MstaSdcCmd *pCmd, const char *pName )
+{
+    int k;
+    for ( k = 0; pCmd->pOpts[k].pName; k++ )
+        if ( !strcmp( pCmd->pOpts[k].pName, pName ) )
+            return k;
+    assert( 0 );
+    return 0;
+}
+
+/* 选项是否生效过：开关出现过，或带值的选项取到了值。 */
+static int Msta_SdcHasFlag( const MstaSdcCmd *pCmd, const char *pName )
+{
+    return pCmd->pAt[ Msta_SdcOptIndex( pCmd, pName ) ] > 0;
+}
+
+/* 选项第一次生效的位置（argv 下标），0 = 没出现。需要按出现顺序处理时用。 */
+static int Msta_SdcOptAt( const MstaSdcCmd *pCmd, const char *pName )
+{
+    return pCmd->pAt[ Msta_SdcOptIndex( pCmd, pName ) ];
+}
+
+/* 选项的值，没取到返回 NULL。 */
+static const char *Msta_SdcOptValue( const MstaSdcCmd *pCmd, const char *pName )
+{
+    return pCmd->ppValue[ Msta_SdcOptIndex( pCmd, pName ) ];
+}
+
+/* RF_VALUE 选项是用哪种写法给的：-rise_xxx 返回 'r'，-fall_xxx 返回 'f'，否则 0。 */
+static char Msta_SdcOptEdge( const MstaSdcCmd *pCmd, const char *pName )
+{
+    return pCmd->pEdge[ Msta_SdcOptIndex( pCmd, pName ) ];
+}
+
+/* 公共子语法：-min/-max 与 -rise/-fall 决定一个值落在哪几个 [角][边沿] 格子里。
+   角 0 = min、1 = max；边沿 0 = fall、1 = rise（与 MstaClock::Slew 等数组的下标一致）。
+   一对限定都没写等于两个都选：只写 -max 选中 max 的 rise 和 fall 两格，
+   什么都不写四格全选。 */
+static void Msta_SdcMinMaxRiseFall( int fMin, int fMax, int fRise, int fFall, int Sel[2][2] )
+{
+    int m, e;
+    for ( m = 0; m < 2; m++ )
+        for ( e = 0; e < 2; e++ )
+            Sel[m][e] = ( m ? ( fMax || !fMin ) : ( fMin || !fMax ) ) &&
+                        ( e ? ( fRise || !fFall ) : ( fFall || !fRise ) );
+}
+
+/* 把 Value 写进 Target 里被 Sel 选中的格子。 */
+static void Msta_SdcStoreMinMaxRiseFall( double Target[2][2], int Sel[2][2], double Value )
+{
+    int m, e;
+    for ( m = 0; m < 2; m++ )
+        for ( e = 0; e < 2; e++ )
+            if ( Sel[m][e] )
+                Target[m][e] = Value;
 }
 
 /* 把 set_units 的值用到后面命令的数值上。 */
@@ -476,21 +794,26 @@ static MstaClock *Msta_SdcNewClock( MstaSdc *p, const char *pName )
    各条命令
    ===================================================================== */
 
-/* create_clock -name C -period 5 [get_ports clk]
+/* create_clock [-name 名字] -period 周期 [-waveform {上升 下降}] [-add] [源端口]
    -period 的 "多周期波形"（{4 8}）写法不支持；只认标量。 */
-static void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
-{
-    MstaSdcArgs A;
-    char **pTargets = Msta_SdcArgBuffer( argc );
-    const char *pPeriod, *pName, *pWave;
-    double Rise = 0.0, Fall = -1.0;
-    int nTargets, nSource = MSTA_NO_ID, i, fAdd;
-    Msta_SdcArgsStart( &A, argc );
-    (void)pLib;
+static const MstaSdcOpt s_vCreateClockOpts[] = {
+    { "-name",     MSTA_SDC_VALUE },
+    { "-period",   MSTA_SDC_VALUE },
+    { "-waveform", MSTA_SDC_VALUE },
+    { "-add",      MSTA_SDC_FLAG  },
+    { NULL,        MSTA_SDC_FLAG  } };
 
-    pPeriod = Msta_SdcValueOf( argc, argv, &A, "-period" );
-    pName   = Msta_SdcValueOf( argc, argv, &A, "-name" );
-    fAdd = Msta_SdcTakeFlag(argc,argv,&A,"-add");
+static void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    const char *pPeriod = Msta_SdcOptValue( pCmd, "-period" );
+    const char *pName   = Msta_SdcOptValue( pCmd, "-name" );
+    const char *pWave   = Msta_SdcOptValue( pCmd, "-waveform" );
+    int fAdd = Msta_SdcHasFlag( pCmd, "-add" );
+    char **pTargets = pCmd->ppPos;          /* 位置参数就是源端口/引脚 */
+    int nTargets = pCmd->nPos;
+    double Rise = 0.0, Fall = -1.0;
+    int nSource = MSTA_NO_ID, i;
+
     if ( pPeriod == NULL )
     {
         Msta_WarnOnce( "create_clock without -period is ignored" );
@@ -501,7 +824,6 @@ static void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, in
         Msta_WarnOnce( "create_clock needs a positive numeric -period" );
         return;
     }
-    pWave = Msta_SdcValueOf( argc, argv, &A, "-waveform" );
     if ( pWave )
     {
         char Extra;
@@ -513,7 +835,6 @@ static void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, in
         Msta_WarnOnce("create_clock: waveform must satisfy 0 <= rise < fall < period");
         return;
     }
-    nTargets = Msta_SdcRest( argc, argv, &A, pTargets, argc );
     if ( nTargets > 1 )
     { Msta_WarnOnce("create_clock with multiple source pins is not modeled; clock rejected"); return; }
     if ( pName == NULL && nTargets == 0 )
@@ -561,33 +882,45 @@ static void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, in
     }
 }
 
-/* 创建支持分频、倍频和反相的生成时钟。 */
-static void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes,
-                                           int argc, char **argv )
+/* create_generated_clock [-name 名字] -source 主时钟源 [-master_clock 主时钟]
+       [-divide_by n | -multiply_by n] [-duty_cycle d] [-invert]
+       [-edges {e1 e2 e3} [-edge_shift {s1 s2 s3}]] 目标引脚
+   创建支持分频、倍频和反相的生成时钟。-add / -combinational 认得但不建模。 */
+static const MstaSdcOpt s_vGeneratedClockOpts[] = {
+    { "-name",          MSTA_SDC_VALUE     },
+    { "-source",        MSTA_SDC_VALUE     },
+    { "-master_clock",  MSTA_SDC_VALUE     },
+    { "-divide_by",     MSTA_SDC_VALUE     },
+    { "-multiply_by",   MSTA_SDC_VALUE     },
+    { "-duty_cycle",    MSTA_SDC_VALUE     },
+    { "-edges",         MSTA_SDC_VALUE_RAW },
+    { "-edge_shift",    MSTA_SDC_VALUE_RAW },   /* 值常以负数开头，如 {-0.1 0 0} */
+    { "-invert",        MSTA_SDC_FLAG      },
+    { "-add",           MSTA_SDC_FLAG      },
+    { "-combinational", MSTA_SDC_FLAG      },
+    { NULL,             MSTA_SDC_FLAG      } };
+
+static void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    MstaSdcArgs A;
-    char **pTargets = Msta_SdcArgBuffer( argc );
-    const char *pName, *pSource, *pMasterName, *pDivide, *pMultiply, *pDuty;
-    const char *pEdges, *pShifts;
+    const char *pName       = Msta_SdcOptValue( pCmd, "-name" );
+    const char *pSource     = Msta_SdcOptValue( pCmd, "-source" );
+    const char *pMasterName = Msta_SdcOptValue( pCmd, "-master_clock" );
+    const char *pDivide     = Msta_SdcOptValue( pCmd, "-divide_by" );
+    const char *pMultiply   = Msta_SdcOptValue( pCmd, "-multiply_by" );
+    const char *pDuty       = Msta_SdcOptValue( pCmd, "-duty_cycle" );
+    const char *pEdges      = Msta_SdcOptValue( pCmd, "-edges" );
+    const char *pShifts     = Msta_SdcOptValue( pCmd, "-edge_shift" );
+    int fInvert = Msta_SdcHasFlag( pCmd, "-invert" );
+    char **pTargets = pCmd->ppPos;          /* 位置参数就是目标引脚/端口 */
+    int nTargets = pCmd->nPos;
     MstaClock *pMaster, *pClock;
-    int nTargets, *pNets, nCount, i, fInvert, fEdges = 0;
+    int *pNets, nCount, i, fEdges = 0;
     double Div = 1.0, Mult = 1.0, Duty = 50.0;
     double vEdges[3], vShifts[3];
-    Msta_SdcArgsStart( &A, argc );
-    pName = Msta_SdcValueOf(argc,argv,&A,"-name");
-    pSource = Msta_SdcValueOf(argc,argv,&A,"-source");
-    pMasterName = Msta_SdcValueOf(argc,argv,&A,"-master_clock");
-    pDivide = Msta_SdcValueOf(argc,argv,&A,"-divide_by");
-    pMultiply = Msta_SdcValueOf(argc,argv,&A,"-multiply_by");
-    pDuty = Msta_SdcValueOf(argc,argv,&A,"-duty_cycle");
-    pEdges = Msta_SdcValueRaw(argc,argv,&A,"-edges");
-    pShifts = Msta_SdcValueRaw(argc,argv,&A,"-edge_shift");
-    fInvert = Msta_SdcTakeFlag(argc,argv,&A,"-invert");
-    if ( Msta_SdcTakeFlag(argc,argv,&A,"-add") )
+    if ( Msta_SdcHasFlag( pCmd, "-add" ) )
     { Msta_WarnOnce("create_generated_clock: -add is not modeled; clock rejected"); return; }
-    if ( Msta_SdcTakeFlag(argc,argv,&A,"-combinational") )
+    if ( Msta_SdcHasFlag( pCmd, "-combinational" ) )
     { Msta_WarnOnce("create_generated_clock: -combinational is not modeled; clock rejected"); return; }
-    nTargets = Msta_SdcRest(argc,argv,&A,pTargets, argc );
     if ( pSource == NULL || nTargets != 1 )
     { Msta_WarnOnce("create_generated_clock needs -source and one target pin/port"); return; }
     if ( pDivide && pMultiply )
@@ -680,56 +1013,40 @@ static void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes,
     }
 }
 
-/* set_clock_uncertainty 0.1 [get_clocks CLK]
-   set_clock_uncertainty -setup 0.1 -hold 0.05 [get_clocks CLK] */
-/* 给一个或多个时钟设置 setup/hold 不确定度。 */
-static void Msta_SdcSetUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
-{
-    MstaSdcArgs A;
-    char **pRest = Msta_SdcArgBuffer( argc );
-    const char *pSetup = NULL, *pHold = NULL;
-    const char *pFrom = NULL, *pTo = NULL;
-    char FromRF = 0, ToRF = 0;
-    int nRest, i, fSetup, fHold, fRise, fFall;
-    Msta_SdcArgsStart( &A, argc );
-    (void)pDes; (void)pLib;
+/* set_clock_uncertainty [-setup] [-hold] [-rise|-fall] 值 时钟列表
+   set_clock_uncertainty [-setup] [-hold] -from|-rise_from|-fall_from 时钟
+                         -to|-rise_to|-fall_to 时钟 值
+   给一个或多个时钟、或者一对时钟之间设置 setup/hold 不确定度。
+   -setup 0.1 -hold 0.05 这种把值直接跟在 -setup/-hold 后面的写法是方言，也接受。 */
+static const MstaSdcOpt s_vClockUncertaintyOpts[] = {
+    { "-setup", MSTA_SDC_FLAG_NUMBER },
+    { "-hold",  MSTA_SDC_FLAG_NUMBER },
+    { "-rise",  MSTA_SDC_FLAG        },
+    { "-fall",  MSTA_SDC_FLAG        },
+    { "-from",  MSTA_SDC_RF_VALUE    },
+    { "-to",    MSTA_SDC_RF_VALUE    },
+    { NULL,     MSTA_SDC_FLAG        } };
 
-    fSetup = Msta_SdcTakeFlag(argc,argv,&A,"-setup");
-    fHold = Msta_SdcTakeFlag(argc,argv,&A,"-hold");
-    fRise = Msta_SdcTakeFlag(argc,argv,&A,"-rise");
-    fFall = Msta_SdcTakeFlag(argc,argv,&A,"-fall");
-    for ( i = 1; i + 1 < argc; i++ )
-    {
-        if ( !strcmp(argv[i],"-setup") && Msta_SdcIsNumber(argv[i+1]) )
-        { pSetup = argv[i+1]; A.Used[i+1] = 1; }
-        if ( !strcmp(argv[i],"-hold") && Msta_SdcIsNumber(argv[i+1]) )
-        { pHold = argv[i+1]; A.Used[i+1] = 1; }
-    }
-    /* -from/-to 形式：指定这对时钟之间的不确定度。 */
-    for ( i = 1; i + 1 < argc; i++ )
-    {
-        if ( !strcmp(argv[i],"-from") || !strcmp(argv[i],"-rise_from") ||
-             !strcmp(argv[i],"-fall_from") )
-        {
-            pFrom = argv[i+1];
-            FromRF = !strncmp(argv[i],"-rise_",6) ? 'r'
-                   : !strncmp(argv[i],"-fall_",6) ? 'f' : 0;
-            A.Used[i] = A.Used[i+1] = 1;
-            i++;
-        }
-        else if ( !strcmp(argv[i],"-to") || !strcmp(argv[i],"-rise_to") ||
-                  !strcmp(argv[i],"-fall_to") )
-        {
-            pTo = argv[i+1];
-            ToRF = !strncmp(argv[i],"-rise_",6) ? 'r'
-                 : !strncmp(argv[i],"-fall_",6) ? 'f' : 0;
-            A.Used[i] = A.Used[i+1] = 1;
-            i++;
-        }
-    }
+static void Msta_SdcSetUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    const char *pSetup = Msta_SdcOptValue( pCmd, "-setup" );
+    const char *pHold  = Msta_SdcOptValue( pCmd, "-hold" );
+    const char *pFrom  = Msta_SdcOptValue( pCmd, "-from" );
+    const char *pTo    = Msta_SdcOptValue( pCmd, "-to" );
+    char FromRF = Msta_SdcOptEdge( pCmd, "-from" );
+    char ToRF   = Msta_SdcOptEdge( pCmd, "-to" );
+    int fSetup = Msta_SdcHasFlag( pCmd, "-setup" );
+    int fHold  = Msta_SdcHasFlag( pCmd, "-hold" );
+    int fRise  = Msta_SdcHasFlag( pCmd, "-rise" );
+    int fFall  = Msta_SdcHasFlag( pCmd, "-fall" );
+    char **pRest = pCmd->ppPos;
+    int nRest = pCmd->nPos, i;
+
+    /* 裸 -rise/-fall 限定的是 -to 一侧（捕获沿）的边沿。 */
     if ( fRise && !fFall && ToRF == 0 ) ToRF = 'r';
     if ( fFall && !fRise && ToRF == 0 ) ToRF = 'f';
-    nRest  = Msta_SdcRest( argc, argv, &A, pRest, argc );
+    /* 第一个位置参数是数值时，它就是不确定度：没写 -setup/-hold 时两者都用它，
+       否则补给还没取到值的那个。剩下的位置参数是时钟。 */
     if ( nRest > 0 && Msta_SdcIsNumber(pRest[0]) )
     {
         if ( !fSetup && !fHold ) pSetup = pHold = pRest[0];
@@ -738,8 +1055,7 @@ static void Msta_SdcSetUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
             if ( fSetup && pSetup == NULL ) pSetup = pRest[0];
             if ( fHold && pHold == NULL ) pHold = pRest[0];
         }
-        for ( i = 1; i < nRest; i++ )
-            pRest[i-1] = pRest[i];
+        pRest++;
         nRest--;
     }
     if ( fSetup && fHold )
@@ -797,51 +1113,50 @@ static void Msta_SdcSetUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     }
 }
 
-/* 设置理想时钟分析的源延迟 / 网络延迟。 */
-static void Msta_SdcSetClockLatency( MstaSdc *p, int argc, char **argv )
+/* set_clock_latency [-source] [-min|-max|-early|-late] [-rise|-fall] [-clock 时钟] 延迟 时钟列表
+   设置理想时钟分析的源延迟 / 网络延迟。-early/-late 与 -min/-max 同义；
+   手册允许用 -clock clock_list 代替对象列表。 */
+static const MstaSdcOpt s_vClockLatencyOpts[] = {
+    { "-clock",  MSTA_SDC_VALUE },
+    { "-source", MSTA_SDC_FLAG  },
+    { "-min",    MSTA_SDC_FLAG  },
+    { "-max",    MSTA_SDC_FLAG  },
+    { "-early",  MSTA_SDC_FLAG  },
+    { "-late",   MSTA_SDC_FLAG  },
+    { "-rise",   MSTA_SDC_FLAG  },
+    { "-fall",   MSTA_SDC_FLAG  },
+    { NULL,      MSTA_SDC_FLAG  } };
+
+static void Msta_SdcSetClockLatency( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    MstaSdcArgs A;
-    char **pRest = Msta_SdcArgBuffer( argc );
-    const char *pClockOpt;
-    int nRest, i, fSource, fMax, fMin, fRise, fFall, m, e;
+    const char *pClockOpt = Msta_SdcOptValue( pCmd, "-clock" );
+    int fSource = Msta_SdcHasFlag( pCmd, "-source" );
+    int fMax = Msta_SdcHasFlag( pCmd, "-max" ) || Msta_SdcHasFlag( pCmd, "-late" );
+    int fMin = Msta_SdcHasFlag( pCmd, "-min" ) || Msta_SdcHasFlag( pCmd, "-early" );
+    int Sel[2][2], i;
     double Delay;
-    Msta_SdcArgsStart( &A, argc );
-    /* 手册允许用 -clock clock_list 代替对象列表。 */
-    pClockOpt = Msta_SdcValueOf(argc,argv,&A,"-clock");
-    fSource = Msta_SdcTakeFlag(argc,argv,&A,"-source");
-    fMax = Msta_SdcTakeFlag(argc,argv,&A,"-max") ||
-           Msta_SdcTakeFlag(argc,argv,&A,"-late");
-    fMin = Msta_SdcTakeFlag(argc,argv,&A,"-min") ||
-           Msta_SdcTakeFlag(argc,argv,&A,"-early");
-    fRise = Msta_SdcTakeFlag(argc,argv,&A,"-rise");
-    fFall = Msta_SdcTakeFlag(argc,argv,&A,"-fall");
-    nRest = Msta_SdcRest(argc,argv,&A,pRest, argc );
-    if ( nRest < 1 || !Msta_SdcIsNumber(pRest[0]) )
+    if ( pCmd->nPos < 1 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
     { Msta_WarnOnce("set_clock_latency needs a delay and clock objects"); return; }
-    Delay = Msta_SdcToPs(p,pRest[0]);
-    for ( i = 0; i < nRest - 1 + ( pClockOpt ? 1 : 0 ); i++ )
+    Delay = Msta_SdcToPs(p,pCmd->ppPos[0]);
+    Msta_SdcMinMaxRiseFall( fMin, fMax, Msta_SdcHasFlag( pCmd, "-rise" ),
+                            Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
+    /* 要设的时钟：-clock 的值（写了的话）排第一，然后是延迟值后面的位置参数。
+       下标 0 留给 -clock，位置参数从 1 开始正好跳过延迟值。 */
+    for ( i = pClockOpt ? 0 : 1; i < pCmd->nPos; i++ )
     {
-        const char *pName = ( i == 0 && pClockOpt ) ? pClockOpt
-                                                    : pRest[i + 1 - (pClockOpt ? 1 : 0)];
-        MstaClock *pClock;
-        pClock = Msta_SdcFindClock(p,pName);
+        const char *pName = i == 0 ? pClockOpt : pCmd->ppPos[i];
+        MstaClock *pClock = Msta_SdcFindClock(p,pName);
         if ( pClock == NULL )
         { Msta_WarnOnce("set_clock_latency: unknown clock \"%s\"",pName); continue; }
-        for ( m = 0; m < 2; m++ )
-            if ( m ? (fMax || !fMin) : (fMin || !fMax) )
-                for ( e = 0; e < 2; e++ )
-                    if ( e ? (fRise || !fFall) : (fFall || !fRise) )
-                    {
-                        if ( fSource ) pClock->SourceLatency[m][e] = Delay;
-                        else pClock->NetworkLatency[m][e] = Delay;
-                    }
         if ( fSource )
         {
+            Msta_SdcStoreMinMaxRiseFall( pClock->SourceLatency, Sel, Delay );
             pClock->SourceLatencyMax = fmax(pClock->SourceLatency[1][0],pClock->SourceLatency[1][1]);
             pClock->SourceLatencyMin = fmin(pClock->SourceLatency[0][0],pClock->SourceLatency[0][1]);
         }
         else
         {
+            Msta_SdcStoreMinMaxRiseFall( pClock->NetworkLatency, Sel, Delay );
             pClock->NetworkLatencyMax = fmax(pClock->NetworkLatency[1][0],pClock->NetworkLatency[1][1]);
             pClock->NetworkLatencyMin = fmin(pClock->NetworkLatency[0][0],pClock->NetworkLatency[0][1]);
             /* 网络延迟是对时钟树延迟的估计，只对理想时钟有意义：给了它就是要用
@@ -945,50 +1260,51 @@ static void Msta_SdcSetDrcLimit( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     }
 }
 
-/* 把选中的时钟改成按时钟树传播。 */
-static void Msta_SdcSetPropagatedClock( MstaSdc *p, int argc, char **argv )
+/* set_propagated_clock 时钟列表
+   把选中的时钟改成按时钟树传播。这条命令没有选项，每个词都当时钟名查。 */
+static const MstaSdcOpt s_vPropagatedClockOpts[] = {
+    { NULL, MSTA_SDC_FLAG } };
+
+static void Msta_SdcSetPropagatedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     int i;
-    if ( argc < 2 )
+    if ( pCmd->nPos == 0 )
     { Msta_WarnOnce("set_propagated_clock needs clock objects"); return; }
-    for ( i = 1; i < argc; i++ )
+    for ( i = 0; i < pCmd->nPos; i++ )
     {
-        MstaClock *pClock = Msta_SdcFindClock(p,argv[i]);
+        MstaClock *pClock = Msta_SdcFindClock(p,pCmd->ppPos[i]);
         if ( pClock ) pClock->fPropagated = pClock->fPropagatedSet = 1;
-        else Msta_WarnOnce("set_propagated_clock: unknown clock \"%s\"",argv[i]);
+        else Msta_WarnOnce("set_propagated_clock: unknown clock \"%s\"",pCmd->ppPos[i]);
     }
 }
 
-/* set_clock_transition [-rise|-fall] [-min|-max] value [get_clocks ...]
+/* set_clock_transition [-rise|-fall] [-min|-max] 摆率 时钟列表
    给时钟源指定摆率；不写这里就用时钟网络上的输入摆率或默认值。 */
-static void Msta_SdcSetClockTransition( MstaSdc *p, int argc, char **argv )
-{
-    MstaSdcArgs A;
-    char **pRest = Msta_SdcArgBuffer( argc );
-    int nRest, i, fMax, fMin, fRise, fFall, m, e;
-    double Slew;
-    Msta_SdcArgsStart( &A, argc );
+static const MstaSdcOpt s_vClockTransitionOpts[] = {
+    { "-min",  MSTA_SDC_FLAG },
+    { "-max",  MSTA_SDC_FLAG },
+    { "-rise", MSTA_SDC_FLAG },
+    { "-fall", MSTA_SDC_FLAG },
+    { NULL,    MSTA_SDC_FLAG } };
 
-    fMax = Msta_SdcTakeFlag(argc,argv,&A,"-max");
-    fMin = Msta_SdcTakeFlag(argc,argv,&A,"-min");
-    fRise = Msta_SdcTakeFlag(argc,argv,&A,"-rise");
-    fFall = Msta_SdcTakeFlag(argc,argv,&A,"-fall");
-    nRest = Msta_SdcRest(argc,argv,&A,pRest, argc );
-    if ( nRest < 2 || !Msta_SdcIsNumber(pRest[0]) )
+static void Msta_SdcSetClockTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    int Sel[2][2], i;
+    double Slew;
+    if ( pCmd->nPos < 2 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
     { Msta_WarnOnce("set_clock_transition needs a value and clock objects"); return; }
-    Slew = Msta_SdcToPs(p,pRest[0]);
-    for ( i = 1; i < nRest; i++ )
+    Slew = Msta_SdcToPs(p,pCmd->ppPos[0]);
+    Msta_SdcMinMaxRiseFall( Msta_SdcHasFlag( pCmd, "-min" ), Msta_SdcHasFlag( pCmd, "-max" ),
+                            Msta_SdcHasFlag( pCmd, "-rise" ), Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
+    for ( i = 1; i < pCmd->nPos; i++ )
     {
-        MstaClock *pClock = Msta_SdcFindClock(p,pRest[i]);
+        const char *pName = pCmd->ppPos[i];
+        MstaClock *pClock = Msta_SdcFindClock(p,pName);
         if ( pClock == NULL )
-        { Msta_WarnOnce("set_clock_transition: unknown clock \"%s\"",pRest[i]); continue; }
+        { Msta_WarnOnce("set_clock_transition: unknown clock \"%s\"",pName); continue; }
         if ( pClock->SourceNet < 0 )
-        { Msta_WarnOnce("set_clock_transition on virtual clock \"%s\" is ignored",pRest[i]); continue; }
-        for ( m = 0; m < 2; m++ )
-            if ( m ? (fMax || !fMin) : (fMin || !fMax) )
-                for ( e = 0; e < 2; e++ )
-                    if ( e ? (fRise || !fFall) : (fFall || !fRise) )
-                        pClock->Slew[m][e] = Slew;
+        { Msta_WarnOnce("set_clock_transition on virtual clock \"%s\" is ignored",pName); continue; }
+        Msta_SdcStoreMinMaxRiseFall( pClock->Slew, Sel, Slew );
     }
 }
 
@@ -1169,20 +1485,26 @@ static const char *Msta_SdcNextClockName( const char **ppList, char *pName, size
 }
 
 /* set_clock_sense [-positive|-negative] [-stop_propagation] [-clock clock_list] pin_list
-   记下某个脚/网络上的时钟极性（-negative）和"这个时钟到这里不再往下传"。 */
-static void Msta_SdcSetClockSense( MstaSdc *p, MstaDesign *pDes, int argc, char **argv )
-{
-    MstaSdcArgs A;
-    char **pRest = Msta_SdcArgBuffer( argc );
-    const char *pClockList;
-    int nRest, i, j, fPos, fNeg, fStop;
-    Msta_SdcArgsStart( &A, argc );
+   记下某个脚/网络上的时钟极性（-negative）和"这个时钟到这里不再往下传"。
+   -pulse 认得但不建模。 */
+static const MstaSdcOpt s_vClockSenseOpts[] = {
+    { "-positive",         MSTA_SDC_FLAG  },
+    { "-negative",         MSTA_SDC_FLAG  },
+    { "-stop_propagation", MSTA_SDC_FLAG  },
+    { "-clock",            MSTA_SDC_VALUE },
+    { "-pulse",            MSTA_SDC_VALUE },
+    { NULL,                MSTA_SDC_FLAG  } };
 
-    fPos  = Msta_SdcTakeFlag( argc, argv, &A, "-positive" );
-    fNeg  = Msta_SdcTakeFlag( argc, argv, &A, "-negative" );
-    fStop = Msta_SdcTakeFlag( argc, argv, &A, "-stop_propagation" );
-    pClockList = Msta_SdcValueOf( argc, argv, &A, "-clock" );
-    if ( Msta_SdcValueOf( argc, argv, &A, "-pulse" ) )
+static void Msta_SdcSetClockSense( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    const char *pClockList = Msta_SdcOptValue( pCmd, "-clock" );
+    int fPos  = Msta_SdcHasFlag( pCmd, "-positive" );
+    int fNeg  = Msta_SdcHasFlag( pCmd, "-negative" );
+    int fStop = Msta_SdcHasFlag( pCmd, "-stop_propagation" );
+    char **pRest = pCmd->ppPos;             /* 位置参数是引脚/网络 */
+    int nRest = pCmd->nPos, i, j;
+
+    if ( Msta_SdcOptValue( pCmd, "-pulse" ) )
     {
         Msta_WarnOnce( "set_clock_sense -pulse is not modeled; constraint rejected" );
         p->nCommandsIgnored++;
@@ -1200,7 +1522,6 @@ static void Msta_SdcSetClockSense( MstaSdc *p, MstaDesign *pDes, int argc, char 
         Msta_WarnOnce( "set_clock_sense needs -positive, -negative or -stop_propagation" );
         return;
     }
-    nRest = Msta_SdcRest( argc, argv, &A, pRest, argc );
     if ( nRest < 1 )
     {
         Msta_WarnOnce( "set_clock_sense needs a pin" );
@@ -2546,31 +2867,52 @@ static void Msta_SdcSetDisableTiming( MstaSdc *p, MstaDesign *pDes, int argc, ch
     }
 }
 
-/* 不同时钟组之间没有 setup/hold 关系，两两展开成例外。 */
-static void Msta_SdcSetClockGroups( MstaSdc *p, int argc, char **argv )
+/* set_clock_groups -asynchronous|-logically_exclusive|-physically_exclusive
+                    [-name 名字] -group 时钟列表 -group 时钟列表 ...
+   不同时钟组之间没有 setup/hold 关系，两两展开成例外。-allow_paths 认得但不建模。
+   这条命令按顺序模式读：-group 之后、下一个 -group 之前的时钟都归这一组。 */
+static const MstaSdcOpt s_vClockGroupsOpts[] = {
+    { "-asynchronous",         MSTA_SDC_FLAG      },
+    { "-logically_exclusive",  MSTA_SDC_FLAG      },
+    { "-physically_exclusive", MSTA_SDC_FLAG      },
+    { "-name",                 MSTA_SDC_VALUE_RAW },
+    { "-allow_paths",          MSTA_SDC_FLAG      },
+    { "-group",                MSTA_SDC_GROUP     },
+    { NULL,                    MSTA_SDC_FLAG      } };
+
+static void Msta_SdcSetClockGroups( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     int *pGroups = (int *)calloc((size_t)(p->vClocks.nSize > 0 ? p->vClocks.nSize : 1),sizeof(int));
-    int i, j, g = 0, fMode = 0;
+    int i, j, iStop = pCmd->argc, iAllow = Msta_SdcOptAt( pCmd, "-allow_paths" );
+    int fMode = Msta_SdcHasFlag( pCmd, "-asynchronous" ) ||
+                Msta_SdcHasFlag( pCmd, "-logically_exclusive" ) ||
+                Msta_SdcHasFlag( pCmd, "-physically_exclusive" );
     assert(pGroups);
-    for ( i = 1; i < argc; i++ )
+    /* 命令从左到右生效：碰到 -allow_paths、不认识的选项、或第一个 -group 之前的
+       对象，整条作废；在那之前组里的时钟已经查过（未知时钟已经告警）。
+       所以先求出最早的"停止位置"，只处理它前面的组成员。 */
+    if ( iAllow > 0 )
+        iStop = iAllow;
+    if ( pCmd->iBad > 0 && pCmd->iBad < iStop )
+        iStop = pCmd->iBad;
+    if ( pCmd->nPos > 0 && pCmd->pPosAt[0] < iStop )
+        iStop = pCmd->pPosAt[0];
+    for ( i = 0; i < pCmd->nMembers && pCmd->pMemberAt[i] < iStop; i++ )
     {
-        if ( !strcmp(argv[i],"-asynchronous") ||
-             !strcmp(argv[i],"-logically_exclusive") ||
-             !strcmp(argv[i],"-physically_exclusive") )
-        { fMode = 1; continue; }
-        if ( !strcmp(argv[i],"-name") && i + 1 < argc )
-        { i++; continue; }
-        if ( !strcmp(argv[i],"-allow_paths") )
-        { Msta_WarnOnce("set_clock_groups -allow_paths is not modeled; constraint rejected"); free(pGroups); return; }
-        if ( !strcmp(argv[i],"-group") )
-        { g++; continue; }
-        if ( argv[i][0] == '-' || g == 0 )
-        { Msta_WarnOnce("set_clock_groups: unexpected argument \"%s\"",argv[i]); free(pGroups); return; }
-        j = Msta_SdcClockIndexOf(p,Msta_NameId(argv[i]));
-        if ( j < 0 ) Msta_WarnOnce("set_clock_groups: unknown clock \"%s\"",argv[i]);
-        else pGroups[j] = g;
+        j = Msta_SdcClockIndexOf(p,Msta_NameId(pCmd->ppMember[i]));
+        if ( j < 0 ) Msta_WarnOnce("set_clock_groups: unknown clock \"%s\"",pCmd->ppMember[i]);
+        else pGroups[j] = pCmd->pMemberGroup[i];
     }
-    if ( !fMode || g < 2 )
+    if ( iStop < pCmd->argc )
+    {
+        if ( iStop == iAllow )
+            Msta_WarnOnce("set_clock_groups -allow_paths is not modeled; constraint rejected");
+        else
+            Msta_WarnOnce("set_clock_groups: unexpected argument \"%s\"",pCmd->argv[iStop]);
+        free(pGroups);
+        return;
+    }
+    if ( !fMode || pCmd->nGroups < 2 )
         Msta_WarnOnce("set_clock_groups needs a mode and at least two -group lists");
     else
     {
@@ -3536,15 +3878,35 @@ static const struct { const char *pName; const char *pNote; } s_vIgnoredCommands
     { "set_max_leakage_power", "not an STA constraint (power)" },
     { NULL, NULL } };
 
+/* 分发表：已经写成选项表的命令。{ 命令名, 解析模式, 选项表, 处理函数 }。 */
+static const MstaSdcCmdDef s_vSdcCommands[] = {
+    { "create_clock",           MSTA_SDC_SCAN,    s_vCreateClockOpts,      Msta_SdcCreateClock          },
+    { "create_generated_clock", MSTA_SDC_SCAN,    s_vGeneratedClockOpts,   Msta_SdcCreateGeneratedClock },
+    { "set_clock_uncertainty",  MSTA_SDC_SCAN,    s_vClockUncertaintyOpts, Msta_SdcSetUncertainty       },
+    { "set_clock_latency",      MSTA_SDC_SCAN,    s_vClockLatencyOpts,     Msta_SdcSetClockLatency      },
+    { "set_propagated_clock",   MSTA_SDC_WORDS,   s_vPropagatedClockOpts,  Msta_SdcSetPropagatedClock   },
+    { "set_clock_transition",   MSTA_SDC_SCAN,    s_vClockTransitionOpts,  Msta_SdcSetClockTransition   },
+    { "set_clock_sense",        MSTA_SDC_SCAN,    s_vClockSenseOpts,       Msta_SdcSetClockSense        },
+    { "set_clock_groups",       MSTA_SDC_ORDERED, s_vClockGroupsOpts,      Msta_SdcSetClockGroups       },
+    { NULL,                     MSTA_SDC_SCAN,    NULL,                    NULL                         } };
+
 static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
 {
     const char *pCmd = argv[0];
     int i;
 
-    if      ( !strcmp(pCmd, "create_clock") )          p->nCommandsRead++, Msta_SdcCreateClock( p, pDes, pLib, argc, argv );
-    else if ( !strcmp(pCmd, "create_generated_clock") ) p->nCommandsRead++, Msta_SdcCreateGeneratedClock( p, pDes, argc, argv );
-    else if ( !strcmp(pCmd, "set_clock_uncertainty") ) p->nCommandsRead++, Msta_SdcSetUncertainty( p, pDes, pLib, argc, argv );
-    else if ( !strcmp(pCmd, "set_input_delay") )       p->nCommandsRead++, Msta_SdcSetPortDelay( p, pDes, 0, argc, argv );
+    /* 分发表里的命令：先按选项表解析，再交给处理函数。 */
+    for ( i = 0; s_vSdcCommands[i].pName; i++ )
+        if ( !strcmp( pCmd, s_vSdcCommands[i].pName ) )
+        {
+            MstaSdcCmd Cmd;
+            p->nCommandsRead++;
+            Msta_SdcParseCmd( &s_vSdcCommands[i], argc, argv, &Cmd );
+            s_vSdcCommands[i].pfHandler( p, pDes, pLib, &Cmd );
+            return 1;
+        }
+    /* 其余命令还没有选项表，由各自的函数直接解析 argv。 */
+    if      ( !strcmp(pCmd, "set_input_delay") )       p->nCommandsRead++, Msta_SdcSetPortDelay( p, pDes, 0, argc, argv );
     else if ( !strcmp(pCmd, "set_output_delay") )      p->nCommandsRead++, Msta_SdcSetPortDelay( p, pDes, 1, argc, argv );
     else if ( !strcmp(pCmd, "set_load") )              p->nCommandsRead++, Msta_SdcSetLoad( p, pDes, pLib, argc, argv );
     else if ( !strcmp(pCmd, "set_input_transition") )  p->nCommandsRead++, Msta_SdcSetInputSlew( p, pDes, pLib, argc, argv );
@@ -3558,11 +3920,6 @@ static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc
     else if ( !strcmp(pCmd, "set_logic_one") )         p->nCommandsRead++, Msta_SdcSetLogic( p, pDes, 1, argc, argv );
     else if ( !strcmp(pCmd, "set_logic_dc") )          p->nCommandsRead++, Msta_SdcSetLogic( p, pDes, 2, argc, argv );
     else if ( !strcmp(pCmd, "set_disable_timing") )    p->nCommandsRead++, Msta_SdcSetDisableTiming( p, pDes, argc, argv );
-    else if ( !strcmp(pCmd, "set_clock_groups") )      p->nCommandsRead++, Msta_SdcSetClockGroups( p, argc, argv );
-    else if ( !strcmp(pCmd, "set_clock_latency") )     p->nCommandsRead++, Msta_SdcSetClockLatency( p, argc, argv );
-    else if ( !strcmp(pCmd, "set_propagated_clock") )  p->nCommandsRead++, Msta_SdcSetPropagatedClock( p, argc, argv );
-    else if ( !strcmp(pCmd, "set_clock_transition") )  p->nCommandsRead++, Msta_SdcSetClockTransition( p, argc, argv );
-    else if ( !strcmp(pCmd, "set_clock_sense") )       p->nCommandsRead++, Msta_SdcSetClockSense( p, pDes, argc, argv );
     else if ( !strcmp(pCmd, "set_ideal_network") )     p->nCommandsRead++, Msta_SdcSetIdealNetwork( p, pDes, argc, argv );
     else if ( !strcmp(pCmd, "set_ideal_latency") )     p->nCommandsRead++, Msta_SdcSetIdealLatency( p, pDes, argc, argv );
     else if ( !strcmp(pCmd, "set_ideal_transition") )  p->nCommandsRead++, Msta_SdcSetIdealTransition( p, pDes, argc, argv );
