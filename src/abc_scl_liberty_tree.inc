@@ -24,6 +24,9 @@
     4) 删掉 msta 不调用的调试/辅助函数：Scl_LibertyItemKey、Scl_LibertyItemIsEqua、
        Scl_LibertyCountChildren、Scl_LibertyDump/DumpItem/DumpChildren，
        以及只供它们使用的 Scl_ItemForEachChild 宏。
+    5) 加固输入检查：括号/花括号不配对（文件被截断）时按语法错误退出，
+       不越过文件末尾读；没有任何条目时 Scl_LibertyRoot 返回 NULL；
+       节点池用 assert 守住"不会用尽"的不变式。
 
   ABC 的 sclLiberty 只有语法层和工艺映射用的语义层（不读 ff/latch、不认
   timing_type），STA 需要的 setup/hold、时钟脚等信息它没有，因此这里只复用
@@ -97,8 +100,10 @@ static const char *Scl_LibertyReadString( Scl_Tree_t *pTree, Scl_Pair_t Range );
    小工具（对应 ABC sclLiberty.c:85-102）
    --------------------------------------------------------------------- */
 
+/* 空文件、只有注释或第一个条目就解析失败时一个条目都没有，返回 NULL
+   （池子是 calloc 的，第 0 项的 Next 为 0，直接当根用会在顶层链上原地打转）。 */
 static inline Scl_Item_t *Scl_LibertyRoot( Scl_Tree_t *p )
-{   return p->pItems;  }
+{   return p->nItems > 0 ? p->pItems : NULL;  }
 
 static inline Scl_Item_t *Scl_LibertyItem( Scl_Tree_t *p, ssize_t v )
 {   assert( v <= p->nItems ); return v < 0 ? NULL : p->pItems + v;  }
@@ -249,7 +254,11 @@ static inline Scl_Pair_t Scl_LibertyUpdateHead( Scl_Tree_t *p, Scl_Pair_t Head )
 
 static inline Scl_Item_t *Scl_LibertyNewItem( Scl_Tree_t *p, int Type )
 {
-    Scl_Item_t *pItem = p->pItems + p->nItems++;
+    Scl_Item_t *pItem;
+    /* 每个条目都消耗一个不同的 '(' 或 ':'，池子按它们的个数分配，不会用尽；
+       这里只是守住这个不变式。 */
+    assert( p->nItems < p->nItemsAlloc );
+    pItem = p->pItems + p->nItems++;
     pItem->iLine = p->nLines;
     pItem->Type  = Type;
     pItem->Child = -1;
@@ -321,6 +330,8 @@ static ssize_t Scl_LibertyBuildItem( Scl_Tree_t *p, char **ppPos, char *pEnd )
     if ( *pNext == '(' )
     {
         pStop    = Scl_LibertyFindMatch( pNext, pEnd );
+        if ( pStop >= pEnd )            /* 括号没配对（文件被截断）：不能越过 pEnd 往后读 */
+            goto exit;
         Head.Beg = pNext - p->pContents + 1;
         Head.End = pStop - p->pContents;
         *ppPos   = pStop + 1;
@@ -336,6 +347,8 @@ static ssize_t Scl_LibertyBuildItem( Scl_Tree_t *p, char **ppPos, char *pEnd )
         {   /* 带 body 的过程：递归解析 body 里的条目 */
             ssize_t nChild, nNext;
             pStop    = Scl_LibertyFindMatch( pNext, pEnd );
+            if ( pStop >= pEnd )        /* 花括号没配对：同上 */
+                goto exit;
             Body.Beg = pNext - p->pContents + 1;
             Body.End = pStop - p->pContents;
             pItem = Scl_LibertyNewItem( p, SCL_LIBERTY_PROC );
@@ -385,9 +398,9 @@ exit:
     return -1;
 }
 
-/* 数一数文件里大概有多少个条目，一次把节点池子分足（ABC 的优化：
-   每个 '(' 或 ':' 大致对应一个条目）。这里把 ';' 也计入，宁多勿少：
-   Scl_LibertyNewItem 不检查池子是否用尽。 */
+/* 数一数文件里大概有多少个条目，一次把节点池子分足（ABC 的优化）。
+   建树时每个条目都由一个不同的 '(' 或 ':' 触发，所以这个计数是上界；
+   ';' 也计入只是多留余量。 */
 static ssize_t Scl_LibertyCountItems( const char *pBeg, const char *pEnd )
 {
     ssize_t nCounter = 0;

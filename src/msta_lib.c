@@ -639,8 +639,8 @@ static void Msta_LibCellFinish( MstaCell *pCell )
         }
     }
 
-    /* 注：库里没有 setup 表的检查（有些竞赛/老库只写 hold）仍然保留成端点，
-       setup 检查值按 0 处理。 */
+    /* 注：库里只有 hold 弧、没有 setup 弧的检查（有些竞赛/老库只写 hold）仍然
+       保留成端点，但只做 hold 检查；setup 一侧没有检查弧就不查，反之亦然。 */
 }
 
 /* =====================================================================
@@ -821,7 +821,7 @@ int Msta_LibRead( MstaLib *pLib, const char *pFileName, int fVerbose )
        绝大多数库里 library 就是文件的第一个条目（ABC 也这么假定）。
        个别库会先写几行 define/version，所以不满足时再沿顶层链找一次。 */
     pRoot    = Scl_LibertyRoot( pTree );
-    pLibrary = ( Scl_LibertyCompare(pTree, pRoot->Key, "library") == 0 )
+    pLibrary = ( pRoot != NULL && Scl_LibertyCompare(pTree, pRoot->Key, "library") == 0 )
              ? pRoot : Scl_LibertyFindTop( pTree, "library" );
     if ( pLibrary == NULL )
     {
@@ -1159,7 +1159,9 @@ int Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char 
 }
 
 /* 组合弧查找：同一个 (in,out) 可能有多条（不同 timing_type），
-   FF 单元里只认 combinational 弧；非 FF 单元取第一条匹配的。 */
+   FF 单元里只认 combinational 弧；非 FF 单元取第一条匹配的，但异步
+   clear/preset 弧一律不算（没有检查弧、被当成透明缓冲的 latch 也有这种弧，
+   当组合弧会让复位脚到输出凭空多出一条数据路径）。 */
 MstaArc *Msta_CellCombArc( MstaCell *pCell, MstaId InPin, MstaId OutPin )
 {
     int i;
@@ -1170,10 +1172,27 @@ MstaArc *Msta_CellCombArc( MstaCell *pCell, MstaId InPin, MstaId OutPin )
             continue;
         if ( pCell->fSequential && pArc->Type != MSTA_TT_COMBINATIONAL )
             continue;
+        if ( pArc->Type == MSTA_TT_CLEAR || pArc->Type == MSTA_TT_PRESET )
+            continue;
         return pArc;
     }
     /* FF 内部时钟脚->Q 之类在组合查找里查不到，返回 NULL 由调用方决定怎么办。 */
     return NULL;
+}
+
+/* (in,out) 之间是否有异步 clear/preset 弧。组合查找不认这种弧，调用方据此区分
+   "这对脚之间本来就不是组合关系"和"库里缺了弧"。 */
+int Msta_CellHasAsyncArc( MstaCell *pCell, MstaId InPin, MstaId OutPin )
+{
+    int i;
+    for ( i = 0; i < pCell->vArcs.nSize; i++ )
+    {
+        MstaArc *pArc = MstaArcArrayAt( &pCell->vArcs, i );
+        if ( pArc->InPin == InPin && pArc->OutPin == OutPin &&
+             ( pArc->Type == MSTA_TT_CLEAR || pArc->Type == MSTA_TT_PRESET ) )
+            return 1;
+    }
+    return 0;
 }
 
 MstaArc *Msta_CellArcById( MstaCell *pCell, MstaId ArcId )

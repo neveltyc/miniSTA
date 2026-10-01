@@ -322,8 +322,8 @@ static const MstaArc *CheckArcForCorner( MstaTiming *p, const MstaArc *pArc,
     return pArc;
 }
 
-/* 约束弧只给了一个数据边沿的表时，另一个边沿不做这项检查；弧不存在或
-   两张表都没有时照常检查，检查值按 0 算（见 CheckTime）。 */
+/* 约束弧只给了一个数据边沿的表时，另一个边沿不做这项检查；弧在但两张表
+   都没有时照常检查，检查值按 0 算（见 CheckTime）。弧不存在时调用方不查。 */
 static int CheckHasEdge( MstaTiming *p, const MstaArc *pArc, int nInst,
                          int fMax, int fDataRise )
 {
@@ -1266,6 +1266,9 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                         pArc = TimingCombArc( p,pCell,pIn->Name,pOutPin->Name,fMax );
                         if ( Msta_SdcTimingDisabled( p->pSdc, nDriverInst, pIn->Name, pOutPin->Name ) )
                             continue;
+                        /* 只有异步 clear/preset 弧的脚对不是数据通路，不传播。 */
+                        if ( pArc == NULL && Msta_CellHasAsyncArc( pCell, pIn->Name, pOutPin->Name ) )
+                            continue;
                         if ( pArc == NULL && !pCell->fBlackBox )
                             Msta_WarnOnce( "cell \"%s\" has no timing arc from pin \"%s\" to \"%s\"",
                                            Msta_NameStr(pCell->Name), Msta_NameStr(pIn->Name),
@@ -2035,8 +2038,11 @@ static void EvaluateCheckCorner( MstaTiming *p, MstaCheck *pCheck, int fSetup,
                     ? ( ( pReg->SetupArc != MSTA_NO_ID ) ? pReg->SetupArc : pReg->SetupFallArc )
                     : ( ( pReg->HoldArc != MSTA_NO_ID ) ? pReg->HoldArc : pReg->HoldFallArc );
         MstaArc *pArc = Msta_CellArcById( pCell, nArc );
+        /* 库里没有这一侧的检查弧（例如只写了 hold）就不做这一侧的检查，
+           不按 0 凭空造一条出来。 */
+        if ( pArc == NULL ) return;
         if ( !CheckHasEdge(p,pArc,pCheck->InstId,fSetup,fDataRise) ) return;
-        Check = ( pArc != NULL ) ? CheckTime( p, pArc, pCheck->InstId, nCaptureClock, nCaptureNet, nEndNet, fSetup, fDataRise ) : 0.0;
+        Check = CheckTime( p, pArc, pCheck->InstId, nCaptureClock, nCaptureNet, nEndNet, fSetup, fDataRise );
     }
     else
         Check = fSetup ? OutDelay : -OutDelay;
@@ -2603,8 +2609,9 @@ static void CheckDesignRules( MstaTiming *p )
 
 /* set_data_check：两条数据路径之间的检查。-from 的到达减去它自己的出发沿就是
    "时钟沿到数据"的延迟，加到 -to 那条路径的出发沿上作为要求时间；
-   两条路径必须由同一个时钟出发（跨时钟的数据检查未建模，直接跳过）。 */
-static void CheckDataChecks( MstaTiming *p, int nClock )
+   两条路径必须由同一个时钟出发（跨时钟的数据检查未建模，跳过；所有时钟都
+   做完后由调用方对一次也没查成的检查告警）。pfDone[i] 记下第 i 条是否查过。 */
+static void CheckDataChecks( MstaTiming *p, int nClock, char *pfDone )
 {
     int i;
     if ( Msta_SdcDataCheckCount(p->pSdc) == 0 )
@@ -2622,6 +2629,7 @@ static void CheckDataChecks( MstaTiming *p, int nClock )
         if ( p->CornerMax.pnLaunchClock[nFrom] != nClock || p->CornerMax.pnLaunchClock[nTo] != nClock ||
              p->CornerMin.pnLaunchClock[nFrom] != nClock || p->CornerMin.pnLaunchClock[nTo] != nClock )
             continue;                   /* 这个 pass 不是这两条路径的出发时钟 */
+        pfDone[i] = 1;
         p->nDataChecks++;
         if ( pCheck->fSetup )
         {
@@ -2939,7 +2947,7 @@ static void AddCheckSlack( double Slack, double *pWorst, double *pTotal, int *pn
 int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
 {
     int i, nStartClasses;
-    char *pfClassUsed = NULL;
+    char *pfClassUsed = NULL, *pfDataCheckDone = NULL;
 
     if ( p->pDes->vNets.nSize == 0 )
     {
@@ -2977,6 +2985,8 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
     nStartClasses = BuildStartClasses(p);
     pfClassUsed = (char *)malloc((size_t)(nStartClasses + 1));
     assert(pfClassUsed);
+    pfDataCheckDone = (char *)calloc((size_t)Msta_SdcDataCheckCount(p->pSdc) + 1, 1);
+    assert(pfDataCheckDone);
     for ( i = 0; i < Msta_SdcClockCount(p->pSdc); i++ )
     {
         int n, c;
@@ -2996,10 +3006,22 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
                     }
                 }
         p->LaunchClockTag = -1;
-        CheckDataChecks(p,i);
+        CheckDataChecks(p,i,pfDataCheckDone);
         CheckClockGating(p,i,nStartClasses);
     }
     free( pfClassUsed );
+    /* 两条路径不是同一个时钟出发（或有一端没有时钟到达）的数据检查一条也没查，
+       不告警的话用户会以为约束已生效。 */
+    for ( i = 0; i < Msta_SdcDataCheckCount(p->pSdc); i++ )
+        if ( !pfDataCheckDone[i] )
+        {
+            MstaDataCheck *pCheck = Msta_SdcDataCheckByIndex( p->pSdc, i );
+            Msta_WarnOnce( "set_data_check -from %s -to %s was not checked: both paths must "
+                           "be timed and launched by the same clock (cross-clock data checks "
+                           "are not modeled)", Msta_NameStr(pCheck->FromText),
+                           Msta_NameStr(pCheck->ToText) );
+        }
+    free( pfDataCheckDone );
 
     /* 7. 汇总：WNS/TNS（含数据检查、门控检查）、面积、DRC */
     p->WorstSetupSlack = p->WorstHoldSlack = MSTA_NO_TIME;

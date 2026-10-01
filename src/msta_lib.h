@@ -265,6 +265,7 @@ int       Msta_CellPinIndexOf( MstaCell *p, MstaId NameId );     /* -1 表示没
 int       Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases );
 /* 组合弧：输入脚 InPin 翻转到输出脚 OutPin。找不到返回 NULL。 */
 MstaArc  *Msta_CellCombArc( MstaCell *p, MstaId InPin, MstaId OutPin );
+int       Msta_CellHasAsyncArc( MstaCell *p, MstaId InPin, MstaId OutPin );
 MstaArc  *Msta_CellArcById( MstaCell *p, MstaId ArcId );
 /* 库统计信息，report_lib 用 */
 void      Msta_LibPrintStats( MstaLib *p, FILE *pFile );
