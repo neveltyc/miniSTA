@@ -23,13 +23,12 @@ grep -Fq '最大插入延迟 0.689 ns' "${LOG}/testcases_sdc_features_generated.
 # 与 generated.sdc 的 -divide_by 2 是同一个波形。
 grep -Eq '^slow[[:space:]]+20\.000' "${LOG}/testcases_sdc_features_generated_edges.dofile.log"
 grep -Fq '  edges 1.000/11.000 ns' "${LOG}/testcases_sdc_features_generated_edges.dofile.log"
-# -edges 还能做出 -divide_by 做不到的波形（与 OpenSTA 的 report_clock_properties
-# 逐位一致：duty30 = 周期 10、1.00/4.00；shifted = 周期 9.8、1.50/4.20）。
+# -edges 还能做出 -divide_by 做不到的波形：duty30 = 周期 10、1.00/4.00；
+# shifted = 周期 9.8、1.50/4.20。
 grep -A1 -E '^duty30' "${LOG}/testcases_sdc_features_generated_edges_duty.dofile.log" \
     | grep -Fq '  edges 1.000/4.000 ns'
 grep -A1 -E '^shifted' "${LOG}/testcases_sdc_features_generated_edges_shift.dofile.log" \
     | grep -Fq '  edges 1.500/4.200 ns'
-# 三份用例的 setup WNS 与 OpenSTA 差小于 0.001 ns（8.512565 / 8.812565 / -0.971893）。
 grep -Fq 'setup : WNS    8.513 ns' "${LOG}/testcases_sdc_features_generated_edges.dofile.log"
 grep -Fq 'setup : WNS    8.813 ns' "${LOG}/testcases_sdc_features_generated_edges_duty.dofile.log"
 grep -Fq 'setup : WNS   -0.972 ns' "${LOG}/testcases_sdc_features_generated_edges_shift.dofile.log"
@@ -109,8 +108,7 @@ grep -Fq '1 command(s) were not modeled and were ignored' \
     "${LOG}/testcases_sdc_features_bad_driving_library.dofile.log"
 
 # set_data_check：-from 的到达（减去它的出发沿）加 margin 当要求时间，
-# 计入 WNS/TNS。msta -0.995 ns 与 OpenSTA -0.979107 ns 相差 0.016 ns（本设计的
-# 单弧建模差）。
+# 计入 WNS/TNS。
 grep -Fq '数据检查 : 1 条   setup 最差 -0.995 ns（my_cti -> u_sff/D，margin 0.500）' \
     "${LOG}/testcases_sdc_features_data_check.dofile.log"
 grep -Fq 'setup : WNS   -0.995 ns' "${LOG}/testcases_sdc_features_data_check.dofile.log"
@@ -128,7 +126,7 @@ grep -Fq '路径例外排除 4 个' "${LOG}/testcases_sdc_features_async_excepti
 grep -Fq 'hold  : WNS   -0.323 ns   TNS   -11.951 ns' "${LOG}/testcases_sdc_features_async_exception.dofile.log"
 
 grep -Fq 'recovery path' "${LOG}/testcases_ac97_ac97.dofile.log"
-# 设计规则检查：与 OpenSTA report_check_types 对得上的最差项（见 docs/compare_sta.md）。
+# 设计规则检查：各类违例的个数与最差项。
 grep -Fq 'max_transition 违例 60 处' "${LOG}/testcases_sdc_features_drc.dofile.log"
 grep -Fq 'max_capacitance 违例 3 处（最差超出 120.244 fF）' "${LOG}/testcases_sdc_features_drc.dofile.log"
 grep -Fq 'max_fanout 违例 3 处（最大扇出 39）' "${LOG}/testcases_sdc_features_drc.dofile.log"
@@ -169,7 +167,7 @@ grep -Fq '面积  : 37.5（目标 100000.0，余量 99962.5）' \
     "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
 grep -Fq 'setup : WNS    8.737 ns' "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
 
-# set_clock_transition / set_timing_derate 与 OpenSTA 的对照值见 docs/compare_sta.md。
+# set_clock_transition / set_timing_derate 对 slack 的影响。
 grep -Fq 'setup : WNS   19.678 ns' "${LOG}/testcases_sdc_features_clock_transition.dofile.log"
 grep -Fq 'hold  : WNS   -9.740 ns' "${LOG}/testcases_sdc_features_clock_transition.dofile.log"
 grep -Fq 'setup : WNS   19.680 ns' "${LOG}/testcases_sdc_features_timing_derate.dofile.log"
@@ -181,7 +179,7 @@ grep -Fq -- '+ clock uncertainty                        0.200' "${LOG}/testcases
 
 grep -Fq 'capture edge                              20.000' "${LOG}/testcases_sdc_features_edge_io.dofile.log"
 
-# 分对象 DRC：resetn 的扇出限制与 OpenSTA report_check_types 一致（153）。
+# 分对象 DRC：resetn 上单独设的扇出限制生效（扇出 153）。
 grep -Fq 'max_fanout 违例 1 处（最大扇出 153）' \
     "${LOG}/testcases_multi_vt_drc_objects.dofile.log"
 grep -Fq 'max_transition 违例 446 处' "${LOG}/testcases_multi_vt_drc_objects.dofile.log"
@@ -210,8 +208,7 @@ grep -Fq 'setup : WNS    3.599 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.d
 # 理想网络（set_ideal_network）：不累计延迟。同一张网表的对照——4 级缓冲的时钟树
 # 插入延迟 0.584 ns，把时钟端口标成理想网络后整棵树都是 0，-no_propagate 只去掉
 # ct2 那一级（0.442 ns）。三个用例的 slack 差就是时钟偏差被去掉的那部分。
-# 时钟端口没有 set_input_transition，传播时钟源 slew 按 SDC 取 0；
-# 基准用例与 OpenSTA 的 8.671794 / -0.316440 一致。
+# 时钟端口没有 set_input_transition，传播时钟源 slew 按 SDC 取 0。
 grep -Fq '时钟树：网络 5 根，算出插入延迟的 5 根，最深 4 级缓冲，最大插入延迟 0.584 ns' \
     "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
 grep -Fq 'setup : WNS    8.672 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
@@ -251,7 +248,7 @@ if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_clock_add.dofile.log";
 fi
 
 # 跨时钟（周期不同）的边沿对齐：20 ns 的 core 与 50 ns 的 slow，最紧的 setup 关系
-# 是 slow 第 1 拍（50）对 core 第 3 拍（60），slack 和 OpenSTA 的 -35.245480 一致。
+# 是 slow 第 1 拍（50）对 core 第 3 拍（60）。
 grep -Fq 'launch clock : slow @ 50.000 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 grep -Fq 'capture clock: core @ 60.000 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 grep -Fq 'setup : WNS  -35.246 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
@@ -276,7 +273,7 @@ fi
 grep -Fq '最深 2 级缓冲，最大插入延迟 0.170 ns' \
     "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
 # 输入延迟参照的出发沿是时钟 rise（0），捕捉沿是反相后的 fall（10.168）；
-# hold 取不晚于出发沿的那个捕捉沿（-9.832），slack 与 OpenSTA 的 8.667742 / 9.831018 一致。
+# hold 取不晚于出发沿的那个捕捉沿（-9.832）。
 grep -Fq 'capture clock: clk @ 10.168 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
 grep -Fq 'capture clock: clk @ -9.832 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
 grep -Fq 'setup : WNS    8.668 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
@@ -285,7 +282,7 @@ grep -Fq 'hold  : WNS    9.831 ns' "${LOG}/testcases_sdc_features_clock_sense.do
 grep -Fq 'capture clock: clk @ 20.168 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
 grep -Fq 'setup : WNS   18.668 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
 # -stop_propagation：时钟停在反相器输出，后面那级网络不再算插入延迟，
-# 下面的 FF 没有时钟可用（端点算未约束，和 OpenSTA 的 "No paths" 一致）。
+# 下面的 FF 没有时钟可用（端点算未约束）。
 grep -Fq '时钟树：网络 3 根，算出插入延迟的 2 根，最深 1 级缓冲，最大插入延迟 0.035 ns' \
     "${LOG}/testcases_sdc_features_clock_sense_stop.dofile.log"
 grep -Fq '寄存器 1 个   端点 2 个   未约束 2 个' \
@@ -297,8 +294,7 @@ for sense_case in clock_sense clock_sense_positive clock_sense_stop; do
     fi
 done
 
-# 从 OpenTimer（MIT）移植的 benchmark 用例：逐边沿 I/O 约束 + 虚拟时钟。
-# 与 OpenSTA / OpenTimer 的对照见 docs/compare_sta.md。
+# 移植自 OpenTimer 的 benchmark 用例（MIT 许可）：逐边沿 I/O 约束 + 虚拟时钟。
 grep -Fq 'setup : WNS   -0.018 ns' "${LOG}/testcases_opentimer_c17_c17.dofile.log"
 grep -Fq 'hold  : WNS    0.004 ns' "${LOG}/testcases_opentimer_c17_c17.dofile.log"
 grep -Fq 'setup : WNS   -0.057 ns' "${LOG}/testcases_opentimer_simple_simple.dofile.log"
@@ -355,7 +351,7 @@ grep -Fq -- '-no_clocks is not SDC 1.8 syntax; honored as a compatibility extens
 grep -Fq 'Ainputs' "${LOG}/compat_dialect.json"
 grep -Fq 'no_clocks' "${LOG}/compat_dialect.json"
 
-# 兼容层（C 侧）：OpenSTA 把 -no_propagate 写成了 -no_propagation，这条认但告警。
+# 方言写法（C 侧）：有的工具把 -no_propagate 写成 -no_propagation，这条认但告警。
 printf 'set_ideal_network -no_propagation [get_pins ct2/Y]\n' > "${LOG}/compat_ideal_network.sdc"
 ( cd "${ROOT}/testcases/sdc_features" && "${ROOT}/build/msta" -q -c \
     "read_liberty ../sta_compare/lib/osu018_stdcells.lib; read_verilog ideal_network.v; \
@@ -374,7 +370,6 @@ grep -Fq '寄存器 39 个   端点 125 个   未约束 0 个' "${LOG}/testcases
 
 # 真实设计：核对两个工具对比时用的展平规模。
 # group_path：命中的路径归到命名组，报告按组出 WNS/TNS；分组不改变 slack。
-# 组的归属与每组的 WNS 已和 OpenSTA 的 report_checks -path_group 对齐。
 grep -Fq 'path group   : reg_grp' "${LOG}/testcases_sdc_features_group_path.dofile.log"
 grep -Fq 'path group   : out_grp' "${LOG}/testcases_sdc_features_group_path.dofile.log"
 grep -Eq '^reg_grp[[:space:]]+2\.00[[:space:]]+1[[:space:]]+44\.754' \
@@ -417,7 +412,7 @@ grep -Fq '时钟门控 : 1 条检查   setup 最差 7.870 ns（u_icg/GATE，检�
 grep -Fq '时钟门控 : 1144 条检查' "${LOG}/testcases_eth_sky130_eth.dofile.log"
 grep -Fq 'setup : WNS    3.897 ns' "${LOG}/testcases_eth_sky130_eth.dofile.log"
 
-# 锁存器：默认按"关闭沿减 setup"检查（= 参考工具默认借满整个开窗），
+# 锁存器：默认按"关闭沿减 setup"检查（即借满整个开窗），
 # set_max_time_borrow 0.5 换成"开沿 + 0.5"，两边都是 -1.5。
 grep -Fq 'setup path (max corner, to latch)' "${LOG}/testcases_sdc_features_latch.dofile.log"
 grep -Fq 'setup : WNS    2.805 ns' "${LOG}/testcases_sdc_features_latch.dofile.log"
@@ -440,7 +435,7 @@ grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_lib_query.dofi
 grep -Fq 'hold  : WNS   -9.781 ns' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
 
 # all_registers -clock / -rise_clock / -fall_clock：按时钟树（含有效沿）挑寄存器。
-# clkB 域有 2 个寄存器（OpenSTA 的 all_registers -clock clkB 也是 2），
+# clkB 域有 2 个寄存器，
 # 切掉它们出发的路径后正好 2 个端点被排除；
 # clkA 上只有 c1 是真正的下降沿（c2 挂在反相时钟上、有效沿是上升），
 # 所以 -fall_clock clkA 只切掉 c1 -> q3 一条，c2 -> q4 仍然报出来。
@@ -449,10 +444,9 @@ grep -Fq 'setup : WNS    3.812 ns' "${LOG}/testcases_sdc_features_all_registers_
 grep -Fq '未约束 3 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_all_registers_clock_edge.dofile.log"
 grep -Fq 'startpoint : c2' "${LOG}/testcases_sdc_features_all_registers_clock_edge.dofile.log"
 
-# set_timing_derate 分对象：参考工具里分对象的值覆盖全局（不是相乘）。
+# set_timing_derate 分对象：分对象的值覆盖全局（不是相乘）。
 # 基准（不带 derate）是 f1/Q 0.165、u2/Y 0.060、u3/Y 0.068、f1 的检查值 -0.188，
 # 所以全局 1.1 + u2 上 1.2 + f1 的 -cell_check 1.2 应当得到下面这一组数。
-# （OpenSTA 同一份约束：0.175750 / 0.071616 / 0.075251、检查值 -0.225439）
 grep -Eq '^  f1/Q[[:space:]]+0\.181' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
 grep -Eq '^  u2/Y[[:space:]]+0\.072' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
 grep -Eq '^  u3/Y[[:space:]]+0\.075' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
@@ -462,15 +456,14 @@ grep -Fq '  - setup check (from lib)                        -0.226' \
 grep -Eq '^  u2/Y[[:space:]]+0\.089' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
 
 # set_load -subtract_pin_load：注解值就是总负载（脚电容不再另加），
-# 与"把注解值减掉脚电容"的写法逐位一致（OpenSTA 同一对写法是 0.206361 / 0.206362）。
+# 与"把注解值减掉脚电容"的写法结果相同。
 grep -Eq '^  f1/Q[[:space:]]+0\.210' "${LOG}/testcases_sdc_features_load_subtract.dofile.log"
 grep -Eq '^  f1/Q[[:space:]]+0\.210' "${LOG}/testcases_sdc_features_load_subtract_literal.dofile.log"
 grep -Fq 'data arrival time                            0.352' \
     "${LOG}/testcases_sdc_features_load_subtract.dofile.log"
 
 # get_* -of_objects：按对象关系推集合（父对象也可以是 all_* 这类整体集合）。
-# 三份用例分别切掉一个端点，与 OpenSTA 的选择结果一致（终点 1 条、WNS 19.712137，
-# 另一份是 44.754517）。
+# 三份用例分别切掉一个端点。
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_of_objects.dofile.log"
 grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_get_of_objects.dofile.log"
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_of_objects_net.dofile.log"
@@ -479,7 +472,7 @@ grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_feat
 grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_get_of_objects_all.dofile.log"
 
 # get_* -filter：属性来自 C 侧导出的设计索引，表达式用 Tcl 的 expr 求值
-# （属性名补 $、裸词加引号、=~ 翻成通配匹配）。选中的对象与 OpenSTA 一致。
+# （属性名补 $、裸词加引号、=~ 翻成通配匹配）。
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_filter.dofile.log"
 grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_get_filter.dofile.log"
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_filter_pins.dofile.log"

@@ -51,7 +51,7 @@ get_nets -filter {fanout > 1}
 
 `create_generated_clock -edges {e1 e2 e3}` 的边号从 1 开始：1 是首个上升沿，2 是首个下降沿，3 是下一个上升沿。三个边沿定义生成时钟的上升沿、下降沿及下一次上升沿；`-edge_shift` 可分别施加偏移。`-edges` 不可与分频、倍频或占空比选项同时使用。生成时钟源位于 PLL 等黑盒时，可用 `set_clock_latency` 显式给出延迟。理想生成时钟仍继承主时钟到生成源的延迟，只将自身网络分发视为理想；`set_disable_timing` 禁用的 CLK→Q/QN 弧不参与源延迟和数据 launch。
 
-与 SDC 标准不同，miniSTA 默认沿 Liberty 时序弧传播时钟（SDC 默认是理想时钟）；给时钟设了网络延迟（不带 `-source` 的 `set_clock_latency`）后按理想时钟处理。时钟源 slew 的取法：理想时钟只取 `set_clock_transition`；显式 `set_propagated_clock` 的时钟只取源端口的 `set_input_transition`；这两种未给出时都为 0，与 OpenSTA 一致。未显式声明的默认传播时钟依次取输入 slew、`set_clock_transition`、默认 slew。
+与 SDC 标准不同，miniSTA 默认沿 Liberty 时序弧传播时钟（SDC 默认是理想时钟）；给时钟设了网络延迟（不带 `-source` 的 `set_clock_latency`）后按理想时钟处理。时钟源 slew 的取法：理想时钟只取 `set_clock_transition`；显式 `set_propagated_clock` 的时钟只取源端口的 `set_input_transition`；这两种未给出时都为 0。未显式声明的默认传播时钟依次取输入 slew、`set_clock_transition`、默认 slew。
 
 传播时钟的到达时间和摆率按 min/max × rise/fall 分开保存；反相弧交换输入边沿，launch/capture 使用对应的本地时钟边沿。`create_clock -add` 允许同一源网络上有多个时钟；跨时钟检查会查找最紧的出发和捕获边沿对。`set_ideal_network` 标记的网络不累计时序弧延迟；`-no_propagate` 限制理想属性继续传递。
 

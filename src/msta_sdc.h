@@ -64,7 +64,7 @@ typedef struct {
     double   InputSlewMaxRise, InputSlewMaxFall;
     double   InputSlewMinRise, InputSlewMinFall;
     /* set_driving_cell：外部驱动单元。分析时按端口实际负载查它的延迟与摆率，
-       并把延迟加到端口到达上（与 DC/PT/OpenSTA 的输入驱动模型一致）。 */
+       并把延迟加到端口到达上。 */
     MstaId   DrivingCell;     /* 单元名（可用 "库名/cell 名" 限定） */
     MstaId   DrivingPin;      /* -pin：驱动单元的输出脚，未写则取第一个组合弧 */
     MstaId   DrivingFromPin;  /* -from_pin：驱动单元的输入脚 */
@@ -152,7 +152,8 @@ typedef struct {
     MstaThruObject Thru[MSTA_SDC_MAX_THRU];
     int    nThru;
     int    nSetupCycles;
-    int    nHoldShift;       /* 显式 -hold 从 setup 派生的 hold 边沿回退几拍 */
+    int    nHoldShift;       /* -hold M 的 M：hold 沿默认比 setup 沿早一拍（随 -setup 推后），
+                                再往回拉 M 拍 */
     int    fApplySetup, fApplyHold;
     int    fFalseSetup, fFalseHold;
     int    fMaxDelay, fMinDelay;
@@ -162,7 +163,7 @@ MstaArrayDefine( MstaException, MstaExceptionArray )
 
 /* ---------------- 路径分组（group_path） ---------------- */
 /* 一条 group_path：命中的路径归到这个组里，报告按组出 WNS/TNS。
-   -default 是"命名组都不命中时的兜底组"，-weight 只记录（参考工具也只记录）。 */
+   -default 是"命名组都不命中时的兜底组"，-weight 只记录并在报告里显示，不参与计算。 */
 typedef struct {
     MstaId Name;              /* -name；-default 时是 MSTA_NO_ID */
     double Weight;            /* -weight，未写时 1.0 */
@@ -195,7 +196,7 @@ typedef struct {
 MstaArrayDefine( MstaBorrowSdc, MstaBorrowSdcArray )
 
 /* ---------------- 分对象的 derate（set_timing_derate 带对象时） ---------------- */
-/* 实例（'I'）或时钟（'C'）上的 derate。参考工具里分对象的值覆盖全局值，
+/* 实例（'I'）或时钟（'C'）上的 derate。分对象的值覆盖全局值，
    不是相乘；同一条命令可以只用其中一个边沿（-rise/-fall）。 */
 typedef struct {
     char   Kind;              /* 'I' 实例 / 'C' 时钟 */
@@ -230,13 +231,14 @@ typedef struct {
     int                  fRises;  /* 参考时钟边沿；pObj->fRises 是数据边沿 */
 } MstaSdcEndpoint;
 
+/* 例外表按 -from 或 -to 名字文本建的哈希索引（原理见 msta_sdc.c 里"例外表索引"那段说明）。 */
 typedef struct {
-    int   *pHead;
-    int   *pNext;
-    int   *pAlways;
-    char  *pfAlways;
-    int    nAlways;
-    int    nHeadCap;
+    int   *pHead;      /* 桶号 -> 桶里第一条例外号，-1 = 空桶 */
+    int   *pNext;      /* 例外号 -> 同一桶里的下一条例外号 */
+    int   *pAlways;    /* 没法按文本查的例外号（没写这一侧 / 通配名 / 时钟），每次都算候选 */
+    char  *pfAlways;   /* 例外号 -> 是否在 pAlways 里 */
+    int    nAlways;    /* pAlways 的条数 */
+    int    nHeadCap;   /* 桶数，取 2 的幂，桶号 = 哈希 & (nHeadCap-1) */
 } MstaSdcExIndex;
 
 typedef struct MstaSdc {
@@ -249,8 +251,8 @@ typedef struct MstaSdc {
     MstaDisabledArcArray vDisabledArcs;
     MstaIntMap         netConsMap;    /* 全局网络号 -> vNets 下标 */
     MstaExceptionArray vExceptions;
-    MstaSdcExIndex     ExIndexTo, ExIndexFrom;
-    int                nExIndexed;
+    MstaSdcExIndex     ExIndexTo, ExIndexFrom; /* 按 -to / -from 文本建的例外索引 */
+    int                nExIndexed;    /* 建索引时的例外条数；条数变了就重建 */
     MstaPathGroupArray vPathGroups;
     MstaClockGatingSdcArray vClockGating;
     MstaBorrowSdcArray vBorrow;
@@ -353,6 +355,8 @@ int  Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
                              MstaPathExclude *pOut, int nCap );
 int  Msta_SdcNeedsStartpointPartition( MstaSdc *p );
 int  Msta_SdcExceptionCount( MstaSdc *p );
+/* 按 -from 起点给例外分组、查起点命中哪些 -from 例外：引擎据此把起点分类，
+   命中例外不同的起点分开传播（见 msta_timing.c 的 BuildStartClasses）。 */
 int  Msta_SdcFromExceptionGroups( MstaSdc *p, int *pGroups );
 int  Msta_SdcFromExceptionMatches( MstaSdc *p, MstaDesign *pDes, const MstaSdcObject *pObj,
                                    const int **ppExceptions );

@@ -18,18 +18,20 @@ normal.lib 的约束表使用时钟 slew C 和数据 slew D：
 | negative | 负约束不能被零值截断 | 7.2 | 2.4 |
 | cut_rise | 只排除上升路径，setup/hold 均检查下降路径 | 4.1 | 1.1 |
 | cut_fall | 只排除下降路径，setup/hold 均检查上升路径 | 6.5 | 0.5 |
+| to_rise | `-rise_to` D 引脚：只切 D↑，保留 D↓ | 4.1 | 1.1 |
+| to_fall | `-fall_to` D 引脚：只切 D↓，保留 D↑ | 6.5 | 0.5 |
+| from_rise | `-rise_from` 输入端口：按起点数据边沿沿前驱回溯，只切 d↑ 出发的路径 | 4.1 | 1.1 |
+| from_fall | `-fall_from` 输入端口：只切 d↓ 出发的路径 | 6.5 | 0.5 |
+| clock_to_rise | `-rise_to` 时钟：限定捕获时钟边沿，上升沿捕获的寄存器路径全部被切 | — | — |
+| clock_to_fall | `-fall_to` 时钟：寄存器在上升沿捕获，不受影响 | 4.1 | 0.5 |
+| output_clock_to_rise | 输出延迟参照时钟下降沿；`-rise_to` 时钟只切寄存器路径，保留到输出 q 的路径 | 2.9 | 5.1 |
+| output_clock_to_fall | 同上，`-fall_to` 时钟按输出延迟的参考时钟边沿匹配，只切到 q 的路径（与数据边沿无关） | 4.1 | 0.5 |
+| async_phase | a 从时钟上升沿、b 从下降沿出发，经 OR2 驱动异步复位；不同 launch 相位独立传播（slack 为 recovery/removal） | 3 | −1 |
+| gating_phase | 同样的汇聚逻辑驱动门控使能脚；跨多个 launch 分组仍只计一条门控检查 | 3 | −1 |
 
-`make test` 检查以上手算值、获胜边沿、约束值和路径快照。
+clock_to_rise 的 setup/hold 均没有可分析的路径。async_phase 中 recovery 最差路径来自 a（D↓，arrival=2 ns，capture=5 ns），removal 最差路径来自 b（D↑，arrival=6 ns，launch/capture=5 ns）。
+
+`make test` 检查以上 17 个用例的手算值，normal 至 clock_to_fall 中有路径的用例还检查获胜边沿、约束值和路径快照。
 `make compare` 在 OpenSTA 可用时逐个运行并比较 setup/hold WNS（容差 1 ps）。
 
-miniSTA 仍使用现有二维 NLDM 表和时钟传播模型；本修改不增加三维约束表支持。
-
-两轮 review 的补充回归：
-
-- `to_rise/to_fall`：D 引脚的路径例外只切对应数据边沿；`clock_to_rise/clock_to_fall` 则限定捕获时钟边沿。
-- `from_rise/from_fall`：输入端口的起点数据边沿沿前驱回溯，反相路径也使用起点上的真实边沿。
-- `output_clock_to_rise/output_clock_to_fall`：输出延迟参照时钟下降沿，即使输出的数据边沿为上升，也必须按参考时钟边沿匹配。
-- `async_phase`：a 从时钟上升沿出发，b 从下降沿出发，经 OR2 汇聚。恢复检查最差路径来自 a（D↓，arrival=2 ns，capture=5 ns，slack=3 ns）；移除检查最差路径来自 b（D↑，arrival=6 ns，launch/capture=5 ns，slack=−1 ns）。不同 launch 相位必须独立传播，不能只保留合并 arrival 的路径。
-- `gating_phase`：同样的输入和汇聚逻辑用于门控使能脚，setup/hold WNS 为 3/−1 ns；跨多个 launch 分组仍只计一条门控检查。
-
-以上共 17 个定向用例均包含在 `make test` 和 OpenSTA 对比中。
+miniSTA 的约束表最多二维（NLDM），不支持三维约束表。

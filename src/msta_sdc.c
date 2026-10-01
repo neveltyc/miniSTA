@@ -24,7 +24,8 @@
 #include "msta_json.h"
 
 /* 与 scripts/sdc_bridge.tcl 的集合类型标记保持一致。
-   小写类型 = 该集合用了 -quiet（非 SDC 1.8 的兼容写法），压掉"没匹配到对象"的提示。 */
+   小写类型 = 该集合用了 -quiet（方言写法，即其他工具支持、SDC 1.8 里没有的非标准写法），
+   压掉"没匹配到对象"的提示。 */
 typedef struct {
     char **ppText;
     char  *pKinds;
@@ -606,7 +607,7 @@ static void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes,
     { Msta_WarnOnce("create_generated_clock needs positive ratio and 0 < duty_cycle < 100"); return; }
     /* -edges {e1 e2 e3}：用主时钟的第 e1/e2/e3 个边沿定义新时钟的
        上升沿、下降沿和下一个上升沿。边号从 1 开始数：1 = 首个上升沿，
-       2 = 首个下降沿，3 = 第二个上升沿……（与参考工具一致）。 */
+       2 = 首个下降沿，3 = 第二个上升沿……。 */
     if ( pEdges != NULL )
     {
         int nS;
@@ -844,6 +845,8 @@ static void Msta_SdcSetClockLatency( MstaSdc *p, int argc, char **argv )
         {
             pClock->NetworkLatencyMax = fmax(pClock->NetworkLatency[1][0],pClock->NetworkLatency[1][1]);
             pClock->NetworkLatencyMin = fmin(pClock->NetworkLatency[0][0],pClock->NetworkLatency[0][1]);
+            /* 网络延迟是对时钟树延迟的估计，只对理想时钟有意义：给了它就是要用
+               估计值代替沿时钟树算出的真实延迟，所以这个时钟按理想时钟处理。 */
             pClock->fPropagated = 0;
         }
     }
@@ -1501,7 +1504,8 @@ static void Msta_SdcSetVoltage( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int
     p->VoltageMax = atof( pRest[0] );
     p->VoltageMin = pMin ? atof( pMin ) : p->VoltageMax;
     Msta_SdcUpdateKFactor( p, pLib );
-    /* 表值按库里的 k 因子缩放才有意义；仓库里的库都没有 k 因子，必须说清楚。 */
+    /* 延迟表只能靠库里的 k 因子随电压缩放；没有 k 因子时 set_voltage 只被记录、
+       不改变延迟，电压偏离标称值时要告警，免得用户以为结果已按新电压算过。 */
     if ( pLib != NULL && pLib->vLibs.nSize > 0 )
     {
         double Nominal = MstaLibInfoArrayAt(&pLib->vLibs,0)->NomVoltage;
@@ -1598,7 +1602,7 @@ static void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, int argc, char *
     if ( Msta_SdcTakeFlag(argc,argv,&A,"-rise") || Msta_SdcTakeFlag(argc,argv,&A,"-fall") )
         Msta_WarnOnce("set_data_check: -rise/-fall are not modeled" );
     if ( !pCheck->fSetup && !pCheck->fHold )
-        pCheck->fSetup = pCheck->fHold = 1;         /* 与参考工具一致：两个角都查 */
+        pCheck->fSetup = pCheck->fHold = 1;         /* 不写 -setup/-hold 时两个角都查 */
     pCheck->Value = Msta_SdcToPs( p, pRest[0] );
 }
 
@@ -1629,8 +1633,8 @@ static void Msta_SdcSetMaxArea( MstaSdc *p, int argc, char **argv )
 
 /* set_timing_derate [-early|-late] [-cell_delay|-net_delay|-cell_check]
                      [-clock|-data] [-rise|-fall] factor [objects]
-   不带对象时是全局系数；带对象时只对那个实例/时钟生效（参考工具里分对象的值
-   覆盖全局值，不是相乘）。-clock 管时钟树上的弧，-data 管数据路径上的单元延迟
+   不带对象时是全局系数；带对象时只对那个实例/时钟生效（分对象的值覆盖全局值，
+   不是相乘）。-clock 管时钟树上的弧，-data 管数据路径上的单元延迟
    （含 FF 的 clk-to-Q），不写这两个开关时两者都算。 */
 static void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, int argc, char **argv )
 {
@@ -1654,7 +1658,7 @@ static void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, int argc, cha
     { Msta_WarnOnce("set_timing_derate cannot combine -rise and -fall"); return; }
     fCellDelay = Msta_SdcTakeFlag(argc,argv,&A,"-cell_delay");
     if ( !fCellDelay && !fCellCheck && !fNetDelay )
-        fCellDelay = 1;          /* 与 OpenSTA 一致：不写类型时只 derate 单元延迟 */
+        fCellDelay = 1;          /* 不写类型时只 derate 单元延迟 */
     if ( fNetDelay && !fCellDelay && !fCellCheck )
     {
         Msta_WarnOnce("set_timing_derate -net_delay has no effect (msta has no net delay)");
@@ -1806,8 +1810,8 @@ static void Msta_SdcSetPortDelay( MstaSdc *p, MstaDesign *pDes, int fOutput, int
     if ( Msta_SdcTakeFlag(argc,argv,&A,"-subtract_pin_load") )
     { Msta_WarnOnce("set_load -subtract_pin_load is not modeled; constraint rejected"); return; }
     pMax = pMin = NULL;
-    /* 也接受 msta 早期的 '-max 2 -min 1' 写法。SDC 里 -max/-min 是开关，
-       延迟值可以出现在各选项之间的任意位置。 */
+    /* 标准 SDC 里 -max/-min 是开关，延迟值是唯一的位置参数，可以出现在选项之间。
+       另外接受 '-max 2 -min 1' 这种方言写法：-max/-min 后紧跟的数值只给那一角。 */
     for ( i = 1; i + 1 < argc; i++ )
     {
         if ( !strcmp(argv[i], "-max") && Msta_SdcIsNumber(argv[i+1]) )
@@ -1920,7 +1924,7 @@ static void Msta_SdcSetLoad( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int ar
     {
         int *pNets, nFound, j;
         double Load = atof( pRest[0] ) * ( p->CapScaleFf > 0.0 ? p->CapScaleFf : pLib->CapScale );
-        /* -subtract_pin_load 只对网络有意义（手册/参考工具都不允许端口）。 */
+        /* -subtract_pin_load 只对网络有意义（减的是网络上的脚电容），端口不接受。 */
         if ( fSubtract && Msta_SdcKindOf(pRest[i]) == 'P' )
         {
             Msta_WarnOnce( "set_load -subtract_pin_load is not allowed for port objects; "
@@ -2176,6 +2180,8 @@ static void Msta_SdcAddPathExceptions( MstaSdc *p, MstaSdcPathArgs *pA,
             memcpy( pEx->Thru, pA->Thru, sizeof(pA->Thru) );
             pEx->nThru = pA->nThru;
             pEx->nSetupCycles = nCycles;
+            /* 只在写了 -hold 时用（fApplyHold）：这时命令里的数字 M 不是周期数，
+               而是 hold 沿从（由 setup 推出的）默认位置往回拉的拍数。 */
             pEx->nHoldShift = nCycles;
             pEx->fApplySetup = !fFalse && ( !fHold || fSetup );
             pEx->fApplyHold = !fFalse && fHold;
@@ -2217,7 +2223,7 @@ static void Msta_SdcSetException( MstaSdc *p, int fFalse, int argc, char **argv 
     }
     if ( fRise && fFall )
     { Msta_WarnOnce("path exception cannot combine -rise and -fall; constraint rejected"); return; }
-    /* 裸 -rise/-fall 是 -to 点的边沿限定（与 OpenSTA 的处理一致）。 */
+    /* 裸 -rise/-fall 是 -to 点的边沿限定。 */
     if ( ( fRise || fFall ) && A.ToRF == 0 ) A.ToRF = fRise ? 'r' : 'f';
     if ( !fFalse && nCycles < 1 )
     { Msta_WarnOnce("set_multicycle_path needs a positive cycle count"); return; }
@@ -2255,7 +2261,7 @@ static void Msta_SdcSetPathDelay( MstaSdc *p, int fMax, int argc, char **argv )
 }
 
 /* group_path：把命中的路径归到一个分组里，报告按组统计 WNS/TNS。
-   分组不影响 slack；-weight 只记录（参考工具也不拿它改报告数字）。
+   分组不影响 slack；-weight 只记录并在报告里显示，不参与 WNS/TNS 等数字的计算。
    -name 与 -default 互斥；两个都没写、或 -from/-to/-through 全空的分组没有意义。 */
 static void Msta_SdcGroupPath( MstaSdc *p, int argc, char **argv )
 {
@@ -2491,7 +2497,7 @@ static void Msta_SdcSetCaseAnalysis( MstaSdc *p, MstaDesign *pDes, int argc, cha
             Msta_WarnOnce("set_case_analysis needs 0 or 1 and objects");
         return;
     }
-    Value = atoi(pRest[0]) ? 2 : 1;
+    Value = atoi(pRest[0]) ? 2 : 1;   /* fCaseValue 编码：1 = 逻辑 0，2 = 逻辑 1（见 msta_net.h） */
     for ( i = 1; i < nRest; i++ )
     {
         int *pNets, nFound, j;
@@ -2506,7 +2512,8 @@ static void Msta_SdcSetCaseAnalysis( MstaSdc *p, MstaDesign *pDes, int argc, cha
 }
 
 /* set_logic_zero / set_logic_one / set_logic_dc：把端口固定成常量。
-   dc 是 don't care：按"不传播"处理（路径到这里断开），和参考工具一致。 */
+   dc 是 don't care：按"不传播"处理（路径到这里断开）。
+   fCaseValue 编码：1 = 逻辑 0，2 = 逻辑 1，3 = dc（见 msta_net.h）。 */
 static void Msta_SdcSetLogic( MstaSdc *p, MstaDesign *pDes, int nKind, int argc, char **argv )
 {
     int i, j;
@@ -2656,7 +2663,7 @@ static int Msta_SdcIsMinus( const char *pName, const char **pMinus, int nMinus )
     return 0;
 }
 
-/* 这个网络是不是某个时钟的源网络（all_inputs -no_clocks 兼容写法用）。 */
+/* 这个网络是不是某个时钟的源网络（all_inputs -no_clocks 这种方言写法用）。 */
 static int Msta_SdcIsClockSourceNet( MstaSdc *p, int nNet )
 {
     int i;
@@ -2762,6 +2769,8 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
                                            &fStop );
                 if ( nSet != 0 )
                     Pol = nSet;
+                /* 合并极性：set_clock_sense 的显式值优先；否则首次到达取本路极性，
+                   另一条路径带着不同极性再到达时记 0（non-unate，正反相都可能）。 */
                 int Joined = nSet ? nSet : (!pfOnNet[nOut] || pPolarity[nOut] == Pol ? Pol : 0);
                 if ( !pfOnNet[nOut] || pPolarity[nOut] != Joined )
                 {
@@ -3429,7 +3438,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     pid_t Pid;
     int fd, fdIndex, fdDesign, fHaveIndex = 0, fHaveDesign = 0, Status, i;
 
-    /* SDC 里不写 set_units 时，默认单位取库的单位（OpenSTA 也是这么定的）。 */
+    /* SDC 里不写 set_units 时，默认单位取库的单位。 */
     p->TimeScalePs = pLib ? pLib->TimeScale : 1000.0;
 
     fd = mkstemp( sJsonPath );
@@ -3634,7 +3643,7 @@ MstaSdc *Msta_SdcStart( void )
     p->KFactorDerateLate = p->KFactorDerateEarly = 1.0;
     p->DerateEarly = p->DerateLate = 1.0;
     p->DerateCheckEarly = p->DerateCheckLate = 1.0;
-    /* 0 = 还没定：真正读 SDC 时按库的时间单位兜底（与 OpenSTA 一致）。 */
+    /* 0 = 还没定：真正读 SDC 时按库的时间单位兜底。 */
     p->TimeScalePs = 0.0;
     return p;
 }
@@ -4160,6 +4169,11 @@ static int Msta_SdcCompareDouble( double a, double b )
     return ( a > b ) - ( a < b );
 }
 
+/* 例外表索引：每条路径都逐条试全部例外太慢，所以按 -from/-to 的名字文本各建一张哈希，
+   只取可能命中的候选（真正是否命中仍由 Msta_SdcExceptionHits 判定）。没写这一侧、通配名、
+   时钟例外无法按文本查，放进 always 表，每次都算候选。查名字时在每个 '/' 处的前缀也查一次，
+   支持按层次前缀匹配。从两侧候选少的一侧出发，只留另一侧也命中的例外；候选按例外号升序，
+   保证后写的例外覆盖先写的。s_pExMark 按例外号记 to 侧(1)/from 侧(2)已命中，用完即清。 */
 static MstaSdcIntArray s_vExCandidates, s_vExHitsTo, s_vExHitsFrom, s_vExMerge;
 static char *s_pExMark;
 static int   s_nExMarkCap;
@@ -4397,6 +4411,8 @@ void Msta_SdcFindExceptionPath( MstaSdc *p, MstaDesign *pDes,
         if ( fSetup ? pEx->fFalseSetup : pEx->fFalseHold )
             *pfFalse = 1;
     }
+    /* SDC 规则：-setup N 把 setup 捕捉沿推后 N-1 拍，hold 沿默认比 setup 沿早一拍，
+       也就跟着推后；-hold M 再把 hold 沿往回拉 M 拍。所以 hold 的拍数是 N - M（1 = 默认位置）。 */
     *pnCycles = fSetup ? nSetupCycles : nSetupCycles - nHoldShift;
 }
 
@@ -4479,6 +4495,7 @@ int Msta_SdcNeedsStartpointPartition( MstaSdc *p )
 
 static const MstaException *s_pSortExceptions;
 
+/* 比较两条例外除 -from 名字（FromText/FromKind）以外的全部字段；返回 0 表示两者只差 -from。 */
 static int Msta_SdcCompareExceptionRest( const MstaException *pA, const MstaException *pB )
 {
     int k, r;
@@ -4518,6 +4535,9 @@ int Msta_SdcExceptionCount( MstaSdc *p )
     return p->vExceptions.nSize;
 }
 
+/* 给 -from 是非时钟对象的例外编组号（其余记 -1），只差 -from 名字的例外同组。
+   -from 例外只对部分起点生效，命中例外不同的起点不能合在一起传播；引擎按起点命中的组号
+   给起点分类（msta_timing.c 的 BuildStartClasses），同组例外对起点效果相同，合组可减少分类数。 */
 int Msta_SdcFromExceptionGroups( MstaSdc *p, int *pGroups )
 {
     int i, n = 0, nGroups = 0;

@@ -37,11 +37,11 @@ setup 捕获使用 early arrival/slew，hold 捕获使用 late arrival/slew；la
 | launch_disable | 普通数据 launch 同样尊重禁用的 CLK→Q 弧 | 无可分析路径 |
 
 `make test` 对全部 27 个用例做手算断言，还核对 capture、check、required、arrival 和 launch 插入延迟。
-`make compare` 对 25 个用例与 OpenSTA 做 WNS 对比（容差 1 ps）。`ideal_edges` 和 `reference_pin` 使用 miniSTA 自己的显式理想网络/参考引脚模型，用手算断言验证，不作为与 OpenSTA 等价的用例。
+`make compare` 对 25 个用例与 OpenSTA 做 WNS 对比（容差 1 ps）。`ideal_edges` 和 `reference_pin` 使用 miniSTA 自己的显式理想网络/参考引脚模型，用手算断言验证，不参加对比。
 
 生成时钟定义点上保留主时钟的 rise/fall 插入延迟，供生成时钟继承；数据 launch/capture 由生成时钟负责，主时钟不越过这个定义点传播。普通多时钟源上可以用 `create_clock -add` 定义多个时钟。
-时钟源 slew 按 SDC 语义取值，与 OpenSTA 一致：理想时钟只取 `set_clock_transition`，显式 `set_propagated_clock` 的时钟只取源端口的 `set_input_transition`，未给出时都为 0。miniSTA 对没写 `set_propagated_clock` 的时钟也做传播，而 SDC 里它本应是理想时钟，因此依次取输入 slew、`set_clock_transition`、默认 slew。
+时钟源 slew 按 SDC 语义取值：理想时钟只取 `set_clock_transition`，显式 `set_propagated_clock` 的时钟只取源端口的 `set_input_transition`，未给出时都为 0。miniSTA 对没写 `set_propagated_clock` 的时钟也做传播，而 SDC 里它本应是理想时钟，因此依次取输入 slew、`set_clock_transition`、默认 slew。
 
 理想生成时钟只将自身的网络分发视为理想，仍继承主时钟到生成源的延迟；其 capture、launch 和 I/O 参考源延迟都使用同一份继承结果，理想时钟 slew 则采用自身 `set_clock_transition`。
-禁用的 CLK→Q/QN 弧不会用于生成时钟源或普通数据 launch。生成时钟无有效时序源弧时，报告告警，保留显式生成时钟波形和注解 source latency；传播源 slew 取零，与该用例中 OpenSTA 的无源路径行为一致。
+禁用的 CLK→Q/QN 弧不会用于生成时钟源或普通数据 launch。生成时钟无有效时序源弧时，报告告警，保留显式生成时钟波形和注解 source latency；传播源 slew 取零。
 转换表缺失时使用备用表或默认 slew；明确给出的零值按 0 参与计算，不视为缺表。数据侧约束查表也保留零 slew。

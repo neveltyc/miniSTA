@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 非合并模型的手算回归；日志由 run_all.sh 生成。
+# 按数据边沿的约束检查手算回归；日志由 run_all.sh 生成。
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "${ROOT}/build" <<'PY'

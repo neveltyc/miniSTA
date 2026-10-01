@@ -669,7 +669,7 @@ static void Msta_LibCellFinish( MstaCell *pCell )
     }
 
     /* 注：库里没有 setup 表的检查（有些竞赛/老库只写 hold）仍然保留成端点，
-       检查值按 0 处理——参考工具也是这么算的。 */
+       setup 检查值按 0 处理。 */
 }
 
 /* =====================================================================
@@ -730,7 +730,7 @@ MstaLibInfo *Msta_LibFindOpCond( MstaLib *pLib, const char *pName, MstaId Librar
 }
 
 /* 库级属性：单位、默认值、工艺角、以及 lu_table_template。 */
-/* fFirstLib：只有第一个库决定单位（SDC 默认时间/电容单位，与参考工具一致）。 */
+/* fFirstLib：只有第一个库决定单位（即 SDC 默认的时间/电容单位）。 */
 static void Msta_LibReadLibraryAttrs( Scl_Tree_t *pTree, Scl_Item_t *pLibrary, MstaLib *pLib,
                                       MstaTemplateArray *pTemplates, int fFirstLib )
 {
@@ -1061,7 +1061,9 @@ int Msta_CellPinIndexOf( MstaCell *pCell, MstaId NameId )
     return -1;
 }
 
-/* Liberty function 的小型布尔求值器。只在侧输入已有 case/常量值时用于时钟弧裁剪；
+/* Liberty function 的小型布尔求值器（递归下降）：解析输出脚的 function 表达式并按给定脚值求值。
+   优先级从高到低：! 与后缀 '  >  ^  >  & * 及相邻（空格）隐式与  >  | +；括号可改变顺序。
+   只在侧输入已有 case/常量值时用于时钟弧裁剪；
    未识别的语法或过多自由变量回退声明的 timing_sense，保持保守。 */
 typedef struct {
     const char *Text;
@@ -1144,6 +1146,8 @@ static int BoolOr( MstaBoolExpr *p )
     return Value;
 }
 
+/* 判定时钟弧在 case 值下的极性：枚举不超过 8 个自由侧输入的全部取值，每种取值下把输入脚
+   置 0/1 求输出；输出跟随为 positive，反向为 negative，两者都出现为 non_unate，都没有返回 -1。 */
 int Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases )
 {
     int In = Msta_CellPinIndexOf(pCell,pArc->InPin);

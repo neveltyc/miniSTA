@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Regress clock source tags, reconvergence, selector cases and source-edge exceptions."""
+"""non_unate 时钟回归：源边沿标签、汇聚、selector case 分析与源边沿例外。
+
+不带参数时检查 build/ 下的日志；带 <msta> <sta> <输出目录> 参数时逐个运行并对比 setup/hold WNS。
+"""
 from pathlib import Path
 import math
 import os
@@ -68,8 +71,8 @@ else:
         (out/f'{name}_msta.log').write_text(mini)
         check(name,mini)
         if name == 'xor_slew':
-            # The requested model keeps each source label's own slew. OpenSTA GBA check
-            # delay uses the graph's per-pin rise/fall min/max slew shared by all tags.
+            # msta 为每个时钟源标签单独保留 slew；按引脚合并 rise/fall min/max slew 的模型
+            # 得到的约束值不同，所以这个用例只做手算检查，不做 WNS 对比。
             print('PASS tagged-slew hand check: xor_slew (reference pin-slew model differs)')
             continue
         env = dict(os.environ,NONUNATE_DESIGN=design,NONUNATE_CASE=name,NONUNATE_LIB=lib)

@@ -16,7 +16,8 @@
 #include "msta_timing.h"
 #include "msta_util.h"
 
-#define MSTA_DEFAULT_SLEW   50.0     /* ps：起点没有约束时假定的输入摆率 */
+#define MSTA_DEFAULT_SLEW   50.0     /* ps：摆率缺省值，没约束也没表可查时用（如无 input_transition
+                                        的起点、缺转换表的弧、源 slew 都没给的传播时钟） */
 #define MSTA_DEFAULT_LOAD   5.0      /* fF：一个网络没有扇出时查表用的负载 */
 #define MSTA_NO_TIME        (1e30)
 
@@ -63,7 +64,8 @@ static int EffectiveClkRises( MstaTiming *p, int nClock, int nClkNet, int fRegRi
     return ClockArrAt( p, nClock, nClkNet )->Polarity < 0 ? !fRegRises : fRegRises;
 }
 
-/* 时钟标签从创建时钟的源边沿一直传到本地边沿，不能把两个标签合并后检查。 */
+/* (本地沿, 源沿) 的含义见 msta_timing.h 的 MstaClockArr。Tags 里有这个源沿、
+   且到达已算出才有效；两个源沿是两条时钟路径，不能合并后检查。 */
 static int ClockTagValid( const MstaClockArr *pArr, int fMax, int Local, int Source )
 {
     if ( Local < 0 || Local > 1 || Source < 0 || Source > 1 ) return 0;
@@ -71,6 +73,8 @@ static int ClockTagValid( const MstaClockArr *pArr, int fMax, int Local, int Sou
     return (pArr->Tags[Local] & (1 << Source)) && v > -MSTA_NO_TIME / 2 && v < MSTA_NO_TIME / 2;
 }
 
+/* 选本地沿 Local 上用哪个源沿：Want>=0 只认这个源沿；Want=-1 两种都看，取该角
+   最差的（max 取晚、min 取早）。返回选中的源沿，没有可用的返回 -1。 */
 static int ClockTagSelect( const MstaClockArr *pArr, int fMax, int Local, int Want )
 {
     if ( Want >= 0 ) return ClockTagValid(pArr,fMax,Local,Want) ? Want : -1;
@@ -121,7 +125,9 @@ static void MergeClockSummary( MstaClockArr *pArr )
     if ( pArr->MinSlew == MSTA_NO_TIME ) pArr->MinSlew = MSTA_DEFAULT_SLEW;
 }
 
-/* 理想网络延迟单独计入；生成时钟源继承的延迟不能只从 SDC 注解读取。 */
+/* 时钟源延迟（source latency）：主时钟取 SDC 给的值；生成时钟取它源网络上的到达，
+   其中含从主时钟继承的延迟。理想生成时钟的这个到达里已加过 network latency
+   （见 PropagateClocks），而调用方会按需另加，所以先减掉以免重复计入。 */
 static double ClockSourceArrival( MstaTiming *p, int nClock, int fMax, int fSourceRise )
 {
     MstaClock *pClock = Msta_SdcClockByIndex(p->pSdc,nClock);
@@ -261,8 +267,7 @@ static double NetLoadRaw( MstaTiming *p, int nNet, int fMax, int fFallback )
         double Extra = fMax ? pCons->LoadMax : pCons->LoadMin;
         if ( Msta_IsSet(Extra) )
         {
-            /* -subtract_pin_load：给的这个值就是总负载，脚电容不再另加
-               （参考工具里是把脚电容清零、只留这个注解值）。 */
+            /* -subtract_pin_load：给的这个值就是总负载，脚电容不另加。 */
             if ( pCons->fSubtractPinLoad )
                 return Extra;
             Sum += Extra;
@@ -798,6 +803,10 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                   Msta_NameStr(pClock->Name));
 }
 
+/* 对每个时钟求它在各时钟网络上逐边沿（[角][本地沿][源沿]）的到达与摆率：
+   先给源网络（理想时钟则是整棵树）设初值 = 源延迟和源 slew；理想时钟随后把
+   network latency 铺到整棵树，传播时钟按拓扑序沿组合弧逐边沿累加弧延迟。
+   生成时钟的源网络由 SeedGeneratedClock 从主时钟接上。 */
 static void PropagateClocks( MstaTiming *p )
 {
     MstaDesign *pDes = p->pDes;
@@ -818,7 +827,7 @@ static void PropagateClocks( MstaTiming *p )
                     {
                         double InputSlew = pCons ? (m ? (s ? pCons->InputSlewMaxRise : pCons->InputSlewMaxFall)
                                                                    : (s ? pCons->InputSlewMinRise : pCons->InputSlewMinFall)) : MSTA_UNSET;
-                        /* 时钟源 slew 按 SDC 语义取值（与 OpenSTA 一致）：理想时钟只看
+                        /* 时钟源 slew 按 SDC 语义取值：理想时钟只看
                            set_clock_transition，写了 set_propagated_clock 的只看源端口的
                            set_input_transition，没给就是 0。没写 set_propagated_clock 的时钟 miniSTA
                            也做传播，而 SDC 里它本应是理想时钟，所以两种约束都可能是用户想要的源 slew：
@@ -851,6 +860,8 @@ static void PropagateClocks( MstaTiming *p )
         SeedGeneratedClock(p,c,pClock);
         if ( !pClock->fPropagated )
         {
+            /* 理想时钟（如给了 set_clock_latency 网络延迟）不累计单元延迟：树上每点 =
+               源网络的到达 + network latency（理想网络上不加）。 */
             if ( pClock->SourceNet >= 0 )
             {
                 MstaClockArr Source = *ClockArrAt(p,c,pClock->SourceNet);
@@ -904,6 +915,8 @@ static void PropagateClocks( MstaTiming *p )
                             if ( Sense != MSTA_SENSE_NONUNATE && i != (Sense == MSTA_SENSE_NEGATIVE ? !e : e) ) continue;
                             for ( s = 0; s < 2; s++ )
                             {
+                                /* 源沿标签通常沿用输入的 s；若 set_clock_sense 在这根网络上强制了
+                                   极性，则按强制极性从本地沿 e 反推（positive 同沿，negative 反沿）。 */
                                 int Label = Force ? (Force > 0 ? e : !e) : s;
                                 double Cand, Slew;
                                 if ( !ClockTagValid(pInArr,m,i,s) ) continue;
@@ -1062,12 +1075,11 @@ static int CoupledInputEdge( MstaSense Sense, int fOutRise )
     return -1;
 }
 
-/* 起点信息怎么来：
-     FF 的 Q  -> 起点时钟 = 该 FF 的时钟脚所属时钟；起点那拍 = 时钟插入延迟
-     顶层输入  -> 起点时钟 = set_input_delay -clock 指定的那个；起点那拍 = 输入延迟值
-     组合传递  -> 原样继承前驱
-   检查时要用这两个数决定 setup/hold 落在哪一拍。
-   上升沿与下降沿在同一次拓扑遍历里分别求出到达时间。 */
+/* 一个角的数据前向传播：按拓扑序求每根网络的升/降沿到达、摆率、前驱和起点信息。
+   只传由 nOnlyClock 出发的数据；nOnlyStartClass >= 0 时只放这一类起点（-1 = 全部）；
+   起点用到的时钟源沿还须等于 p->LaunchClockTag（-1 = 不限），否则该起点不出发。
+   起点那拍：FF 的 Q 取时钟沿 + 时钟脚到达，输入端口取输入延迟参照的时钟沿（含时钟
+   延迟），组合传递原样继承前驱；检查时据此决定 setup/hold 落在哪一拍。 */
 static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlyStartClass )
 {
     MstaDesign *pDes = p->pDes;
@@ -1857,7 +1869,7 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
                                        PathObjects, MSTA_PATH_OBJECTS );
     if ( nPathObjects < MSTA_PATH_OBJECTS )
         PathObjects[nPathObjects++] = ToObj;   /* 终点脚本身也是路径上的一个点 */
-    /* 异步检查组自成一类，参考工具里也是单独一个 **async** 组。 */
+    /* 异步检查固定归入 MSTA_SDC_GROUP_ASYNC 组，不看 group_path，也不按捕获时钟分组。 */
     if ( pCheck->fRecovery ) pCheck->Setup.Group = Msta_NameId( MSTA_SDC_GROUP_ASYNC );
     else                     pCheck->Hold.Group  = Msta_NameId( MSTA_SDC_GROUP_ASYNC );
     Msta_SdcFindExceptionPath( p->pSdc, p->pDes, &From, &To, pCheck->fRecovery,
@@ -1970,7 +1982,7 @@ static double LatchOpenWindow( MstaClock *pClock, int fCloseRises )
 }
 
 /* 锁存器 D 脚的要求时间。没写 set_max_time_borrow 时 Required 里已经是
-   "关闭沿减 setup"；写了 v 时按参考工具的口径换成"开沿 + v"（v 越小越紧）。
+   "关闭沿减 setup"；写了 v 时要求时间取"开沿 + v"（v 越小越紧）。
    返回用到的借时值，没写返回 MSTA_UNSET。 */
 static double LatchBorrow( MstaTiming *p, MstaCheck *pCheck, MstaCell *pCell,
                            int nCaptureClock, int fCloseRises,
@@ -1988,6 +2000,9 @@ static double LatchBorrow( MstaTiming *p, MstaCheck *pCheck, MstaCell *pCell,
     return Borrow;
 }
 
+/* 给一个角套用路径例外。返回 1 = 路径保留，0 = 被 false path 切掉（命中的 -through
+   段追加到 pExclude，供找次优路径）。*pnCycles / *pPathDelay 带回 multicycle 与
+   set_max_delay/set_min_delay；顺带设置该角的路径分组 Group。 */
 static int ApplyCornerExceptions( MstaTiming *p, MstaCheck *pCheck, MstaRegCheck *pReg,
                                   int nCaptureClock, int nStart, int fSetup, int fDataRise,
                                   int *pnCycles, double *pPathDelay,
@@ -2227,7 +2242,7 @@ static int AddPathExclusions( MstaTiming *p, const MstaPathExclude *pNew, int nN
 /* 一个捕获时钟下把这个端点检查一遍：先按当前到达时间查一次；某个角被路径例外
    切掉时，把命中的那一段 (网络, 边沿) 排除掉重算，换到下一条次优路径，
    直到每个角都拿到一条没被切掉的路径（或没有候选了）。
-   参考工具也是这么做的：-fall_through 这类只切路径、不切整个端点。 */
+   这样做是因为 -fall_through 这类例外只切掉命中的路径，而不是整个端点。 */
 static void CheckEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptureClock,
                               int nPropClock, int nStartClass, int fDataRise )
 {
@@ -2631,7 +2646,7 @@ static void CheckDesignRules( MstaTiming *p )
 
 /* set_data_check：两条数据路径之间的检查。-from 的到达减去它自己的出发沿就是
    "时钟沿到数据"的延迟，加到 -to 那条路径的出发沿上作为要求时间；
-   两条路径必须由同一个时钟出发（跨时钟的数据检查未建模，跳过并告警一次）。 */
+   两条路径必须由同一个时钟出发（跨时钟的数据检查未建模，直接跳过）。 */
 static void CheckDataChecks( MstaTiming *p, int nClock )
 {
     int i;
@@ -2671,7 +2686,8 @@ static void CheckDataChecks( MstaTiming *p, int nClock )
         }
         if ( pCheck->fHold )
         {
-            /* 参考工具在这份用例上也不给 min 角的数据检查结果，msta 只建模 setup。 */
+            /* set_data_check 只建模 setup（max 角）；-hold 一侧未实现，遇到时只告警一次、
+               不计入结果。 */
             Msta_WarnOnce( "set_data_check -hold is not modeled; only the setup "
                            "corner of a data check is checked" );
         }
@@ -2804,9 +2820,11 @@ static void CheckClockGating( MstaTiming *p, int nClock, int nStartClasses )
     PropagateData(p,0,nClock,-1);
 }
 
+/* qsort 的比较函数没有上下文参数，起点签名经这几个静态变量传进去。 */
 static const int *s_pSortSig, *s_pSortSigBeg, *s_pSortSigLen, *s_pSortPhase;
 static int s_nSortClocks;
 
+/* 比较两个起点的签名：先比每个时钟下的出发相位，再比命中的 -from 例外组列表。 */
 static int CompareStartSignature( const void *pA, const void *pB )
 {
     int a = *(const int *)pA, b = *(const int *)pB, k;
@@ -2827,6 +2845,10 @@ static int CompareStartSignature( const void *pA, const void *pB )
     return 0;
 }
 
+/* 起点分类：给每个起点算签名（各时钟下的出发相位 + 命中的 -from 例外组），签名相同
+   的归一类，返回类数。前向传播在汇聚点只留最差到达；出发沿或 -from 例外不同的起点
+   混在一起传，留下的那条可能被例外切掉、或因出发沿不同而 slack 并非最差，从而盖住
+   别的候选。按类分开传可避免这点，同类起点又共用一遍传播，不必每个起点各传一遍。 */
 static int BuildStartClasses( MstaTiming *p )
 {
     int nNets = p->pDes->vNets.nSize;
@@ -2869,7 +2891,8 @@ static int BuildStartClasses( MstaTiming *p )
         pLen[n] = nSig - pBeg[n];
         pOrder[nStarts++] = n;
     }
-    /* 只给真正的起点取签名。min/max 可各自参照不同的时钟边沿。 */
+    /* 只给真正的起点取签名。min/max 可各自参照不同的时钟边沿，所以相位编码为
+       max 角值 + 3 × min 角值，每个角取 0 = 不由时钟 c 出发，1 = 下降沿出发，2 = 上升沿出发。 */
     for ( c = 0; c < nClocks; c++ )
     {
         PropagateData(p,1,c,-1);
@@ -2903,6 +2926,8 @@ static int BuildStartClasses( MstaTiming *p )
     return nClasses;
 }
 
+/* 按 (出发时钟 nClock, 起点分类 nStartClass, 当前 LaunchClockTag) 传播一遍，再把每个
+   端点检查一遍，与之前各遍的结果比较保留最差。输出端口端点按每个时钟各当一次捕获时钟试。 */
 static void EvaluateCandidatePaths( MstaTiming *p, int nClock, int nStartClass )
 {
     int j;

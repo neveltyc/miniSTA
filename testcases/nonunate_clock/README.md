@@ -6,8 +6,6 @@ XOR 复现：源下降沿 5 ns 经 XOR 在 7 ns 形成 CLK↑，setup=4 ns，dat
 
 21 个用例覆盖 XOR、同相/反相 MUX 汇聚及后续缓冲、理想时钟、launch、源边沿例外、不确定度、selector case analysis、寄存器集合、异步检查、门控、生成时钟和 Liberty 布尔优先级。
 
-`make test` 做手算与获胜标签断言。`make compare` 将其中 20 个用例与 OpenSTA 比较（1 ps 容差）。xor_slew 单独按源标签的 slew 做手算：其 setup/hold 为 0.6/−1.6 ns；OpenSTA GBA 使用引脚 rise/fall min/max 合并 slew，因此该用例不作为等价比较。此差异已保留在检查脚本的输出中。
+`make test` 做手算与获胜标签断言。`make compare` 将其中 20 个用例与 OpenSTA 比较（1 ps 容差）。xor_slew 按源标签分别保存的 slew 做手算（setup/hold 为 0.6/−1.6 ns），不参加对比。
 
-修复后的 review 同时修正了 selector 固定时的可行极性裁剪、边沿不确定度选项误解析，以及 Liberty XOR 高于 AND 的优先级。侧输入条件求值支持常见布尔运算；语法不支持或自由侧输入超过 8 个时，保守回退库声明的 timing_sense。边沿限定 all_registers 查询只选确定单一源极性的寄存器，按源边沿裁剪路径应使用 -rise_to/-fall_to 时钟例外。
-
-全部定向用例通过 ASan/UBSan。
+侧输入有 case/常量值时，按 Liberty function 求时钟弧的极性：只剩单一极性时按该极性传播，输出不随时钟翻转的弧不传播时钟。function 中 `^` 优先级高于 `&`（bool_precedence）。语法不支持或自由侧输入超过 8 个时，保守回退库声明的 timing_sense。`set_clock_uncertainty -rise_from/-fall_to` 按源边沿生效（capture_uncertainty）。边沿限定的 all_registers 查询只选能确定单一源极性的寄存器，按源边沿裁剪路径应使用 -rise_to/-fall_to 时钟例外。

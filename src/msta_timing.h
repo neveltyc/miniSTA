@@ -61,7 +61,7 @@ typedef struct {
        路径时间整体平移 k 个出发周期（slack 只跟两个边沿的差有关）。 */
     double LaunchShift;
     /* 这条检查归在哪个路径分组（group_path）。没有 group_path 时按捕获时钟名字
-       归组，异步检查组是 **async**。分组只影响报告与按组统计，不影响 slack。 */
+       归组，异步检查归入 MSTA_SDC_GROUP_ASYNC 组。分组只影响报告与按组统计，不影响 slack。 */
     MstaId Group;
 } MstaCheckCorner;
 
@@ -92,7 +92,10 @@ static inline MstaCheckCorner *Msta_CheckCorner( MstaCheck *pCheck, int fSetup )
     return fSetup ? &pCheck->Setup : &pCheck->Hold;
 }
 
-/* 时钟网络上的一个 FF 时钟脚的信息 */
+/* 一个时钟在一根时钟网络上的到达与摆率。边沿分两种：本地沿 = 时钟到这根网络上
+   是升还是降；源沿 = 它来自时钟源的哪个沿。经过反相器两者相反，经过 non_unate
+   单元同一本地沿可能来自两个源沿，所以按 [角][本地沿][源沿] 分开存，各是一条
+   时钟路径。查询时 Want=-1 表示两种源沿都看、取最差（见 ClockTagSelect）。 */
 typedef struct {
     double Arrival[2][2][2]; /* [min/max][本地 fall/rise][源 fall/rise] */
     double Slew[2][2][2];
@@ -175,7 +178,7 @@ typedef struct MstaTiming {
     int    *pTopoOrder;        /* [nNets] 拓扑序：网络编号的数组 */
     int     nTopoOrder;
     int    *pState;            /* DFS 用的 0/1/2 标记 */
-    int    *pStartClass;
+    int    *pStartClass;       /* [nNets] 起点分类号，-1 = 不是起点（见 BuildStartClasses） */
     int     nCombLoops;
 
     /* 统计 */
