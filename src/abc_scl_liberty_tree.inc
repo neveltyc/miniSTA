@@ -36,12 +36,13 @@
   字符串永远指回原文件缓冲，不复制 —— 这是 ABC 解析器快的原因之一，
   代价：树的生命周期内不能释放文件内容。
 
-  用法（语义层只用这几个函数）：
-    Scl_Tree_t *p = Scl_LibertyParse( pFileName, 0 );
-    Scl_Item_t *pLib = 用 Scl_LibertyFindChild(pRoot, "library") 取第一个;
+  用法（语义层常用的几个函数）：
+    Scl_Tree_t *p = Scl_LibertyParse( pFileName );
+    Scl_Item_t *pLib = Scl_LibertyFindTop( p, "library" );
     Scl_ItemForEachChildName( p, pLib, pCell, "cell" ) { ... }
-    const char *pName = Scl_LibertyItemName( p, pCell );   // head 去引号后的拷贝
-    double d = Scl_LibertyItemDouble( pItem, 0.0, &fOk );  // EQUA 的数值
+    const char *pName = Scl_LibertyItemName( p, pCell );     // head 去引号，指向 scratch 缓冲
+    double d = Scl_LibertyItemDouble( p, pItem, 0.0, &fOk ); // EQUA 的数值
+    Scl_LibertyStop( p );
 
 ***********************************************************************/
 
@@ -388,7 +389,8 @@ exit:
 }
 
 /* 数一数文件里大概有多少个条目，一次把节点池子分足（ABC 的优化：
-   每个 '(' 或 ':' 大致对应一个条目）。 */
+   每个 '(' 或 ':' 大致对应一个条目）。这里把 ';' 也计入，宁多勿少：
+   Scl_LibertyNewItem 不检查池子是否用尽。 */
 static ssize_t Scl_LibertyCountItems( const char *pBeg, const char *pEnd )
 {
     ssize_t nCounter = 0;
@@ -477,7 +479,8 @@ static const char *Scl_LibertyReadString( Scl_Tree_t *p, Scl_Pair_t Pair )
 /* 条目的 head 文本（cell("INV") -> INV；area : 1.2 -> 1.2）。 */
 #define Scl_LibertyItemName(p, pItem)  Scl_LibertyReadString( (p), (pItem)->Head )
 
-/* 等式条目 head 的原始字节区间，不去引号。查表时要按逗号切分数组。 */
+/* 条目 head 的原始字节区间，不去引号、不复制。msta_lib.c 用它读 LIST 条目
+   （index_1("...")、capacitive_load_unit(...)）里的数字。 */
 #define Scl_LibertyItemRaw(pTree_, pItem_, ppBeg_, pnLen_)          \
     do {                                                            \
         *(ppBeg_) = (pTree_)->pContents + (pItem_)->Head.Beg;       \

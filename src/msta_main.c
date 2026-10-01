@@ -52,7 +52,7 @@ int main( int argc, char **argv )
     {
         size_t nSize;
         char *pText;
-        Msta_CmdsSetScriptFile( pScript );     /* 脚本里的相对路径按脚本目录解释 */
+        Msta_CmdsSetScriptFile( pScript );     /* 相对路径找不到时按脚本目录兜底 */
         pText = Msta_FileReadAll( pScript, &nSize );
         if ( pText == NULL )
             return 1;

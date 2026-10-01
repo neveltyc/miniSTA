@@ -75,12 +75,13 @@ static void Msta_AppDropTiming( MstaApp *pApp )
 
 static int Msta_CmdHelp( MstaApp *pApp, int argc, char **argv );
 
-/* 把脚本里写的相对路径按 "dofile 自己所在目录" 解释，这样用例可以整目录搬走，
-   脚本内容不用改（商用工具靠 Tcl 的 [file dirname [info script]] 做到同样的事）。
-   结果写进调用方给的缓冲区 —— 不用静态缓冲，免得一次命令里解析多个路径时互相覆盖。 */
 /* 当前 dofile 所在目录；-c "命令串" 时为空，表示按进程当前目录解释相对路径。 */
 static char s_pScriptDir[1024] = "";
 
+/* 解析脚本里写的相对路径：先按进程当前目录找，打不开再拼到 dofile 所在目录下。
+   这样用例可以整目录搬走、在别处运行，脚本内容不用改（商用工具靠 Tcl 的
+   [file dirname [info script]] 做到同样的事）。
+   结果写进调用方给的缓冲区 —— 不用静态缓冲，免得一次命令里解析多个路径时互相覆盖。 */
 static void Msta_ResolvePath( const char *pIn, char *pOut, int nOut )
 {
     if ( pIn[0] == '/' || s_pScriptDir[0] == 0 )
@@ -112,7 +113,7 @@ static void Msta_ResolvePath( const char *pIn, char *pOut, int nOut )
     }
 }
 
-/* dofile 里写的相对路径以它自己的目录为基准，所以主程序读到脚本名后先调这个。 */
+/* 记下 dofile 所在目录，供 Msta_ResolvePath 在当前目录找不到文件时兜底。 */
 void Msta_CmdsSetScriptFile( const char *pScriptPath )
 {
     char *pSlash;
@@ -259,7 +260,7 @@ static int Msta_CmdReportClocks( MstaApp *pApp, int argc, char **argv )
     return 1;
 }
 
-/* 时序分析：没有 pTime 就现建一个。current_design/read_sdc 之后可以反复 analyze。 */
+/* 时序分析：没有 pTime 就现建一个，之后各个 report_* 共用它，直到网表/约束变化被丢弃。 */
 static MstaTiming *Msta_AppTiming( MstaApp *pApp )
 {
     if ( pApp->pTime == NULL )

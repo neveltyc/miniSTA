@@ -2,12 +2,16 @@
 
   FileName    [msta_util.h]
 
-  Synopsis    [字符串、名字表和文件读入这三件小事。]
+  Synopsis    [字符串、文件读入、名字表、整数哈希表、参数切分等小工具。]
 
-  这里只提供三样东西，每样都不依赖工程里其它模块：
+  这里的工具都不依赖工程里其它模块：
     1. Msta_StrDup         —— 复制字符串
-    2. MstaNameTable       —— 字符串 <-> 整数 id 的双向映射（内部驻留）
-    3. Msta_FileReadAll    —— 一次把整个文件读进内存
+    2. Msta_FileReadAll    —— 一次把整个文件读进内存
+    3. MstaNameTable       —— 字符串 <-> 整数 id 的双向映射（内部驻留），
+                              Msta_Names() 是全局共用的那一张
+    4. MstaIntMap          —— int -> int 哈希表
+    5. Msta_SplitArgs      —— 把一行命令切成 argv
+  日志函数 Msta_Log / Msta_WarnOnce 声明在 msta_types.h，也实现在 msta_util.c。
   名字表是网表/库/约束之间互相引用的黏合剂：把"CLK"这种字符串换成一个 int，
   后续查表使用整数 ID。
 
@@ -50,7 +54,7 @@ const char    *Msta_NameTableName( MstaNameTable *p, MstaId id );
 
 /* ---------------- 整数哈希表：key(int) -> value(int) ----------------
    网表和时序图里到处需要 "名字id -> 数组下标" 的映射（模块名、网络名、
-   单元名……）。这里放唯一的一份实现：键和值都是 int，空槽用 -1 表示。 */
+   单元名……）。这是通用实现：键和值都是 int，空槽用 -1 表示（所以键不能是 -1）。 */
 typedef struct {
     int *pKeys;
     int *pValues;
@@ -64,7 +68,7 @@ int  Msta_IntMapGet( MstaIntMap *p, int Key, int DefaultValue );
 void Msta_IntMapSet( MstaIntMap *p, int Key, int Value );
 
 /* ---------------- 参数切分 ----------------
-   dofile 和 sdc 都用同一套规则：空白分词、双引号包住带空格的参数、
+   dofile 每行命令的切分规则：空白分词、双引号包住带空格的参数、
    # 之后是注释。就地改写输入缓冲区，argv 指向缓冲区内部。
    返回参数个数。 */
 int Msta_SplitArgs( char *pLine, char **argv, int nMaxArgs );

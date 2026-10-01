@@ -41,7 +41,7 @@ int  Msta_CmdsRun( MstaApp *pApp, const char *pScript );
 int  Msta_CmdsRunOne( MstaApp *pApp, int argc, char **argv );
 void Msta_CmdsSetQuiet( int fQuiet );
 void Msta_CmdsSetOutput( const char *pFileName );
-/* dofile 里的相对路径按这个文件所在目录解释。 */
+/* 记下 dofile 所在目录：相对路径先按当前目录找，找不到再按该目录找。 */
 void Msta_CmdsSetScriptFile( const char *pScriptPath );
 
 #endif /* MSTA_CMDS_H */

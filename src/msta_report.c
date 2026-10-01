@@ -25,7 +25,7 @@ static const char *Msta_PeriodText( double ps, char *pBuf, int nBuf )
     return pBuf;
 }
 
-/* 打印路径上的一点：单元.脚 / 网络名 / 增量 / 到达。 */
+/* 打印路径上的一点：实例/脚（无驱动时为网络名）、增量、到达，末尾附单元名。 */
 static void Msta_PrintPathPoint( MstaTiming *p, FILE *pFile, int nNet, int fMax,
                                  double Arrival, double PrevArrival, double PrevSlew )
 {
@@ -436,7 +436,7 @@ void Msta_ReportClockTree( MstaTiming *p, FILE *pFile )
     fprintf( pFile, "时钟树：网络 %d 根，算出插入延迟的 %d 根，最深 %d 级缓冲，最大插入延迟 %.3f ns%s\n",
              Msta_TimingClockNetCount( p ), nReached, nDeepest, dMax / 1000.0,
              p->fIdealClocks ? "  [理想时钟模式]" : "" );
-    /* 同一根网络挂多个时钟时，再按每个时钟各打一行，便于区分。 */
+    /* 有多个时钟时，再按每个时钟各打一行，便于区分。 */
     if ( nClocks > 1 )
         for ( c = 0; c < nClocks; c++ )
         {

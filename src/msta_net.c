@@ -228,7 +228,7 @@ int Msta_DesignReadVerilog( MstaDesign *pDes, const char **ppFiles, int nFiles,
                             const char *pWorkDir, int fVerbose )
 {
     /* 命令形如
-         yosys -q -l work.log -p ' read_verilog "a.v"; write_json "out.json"'
+         yosys -q -l <work>/yosys.log -p ' read_verilog "a.v"; write_json "<work>/netlist.json"'
        用 Verilog-2005 模式（不加 -sv）：综合网表里常出现 int / logic 之类的
        信号名，在 -sv 模式下会被当成类型关键字而报语法错。 */
     char sReads[16384];
@@ -326,8 +326,8 @@ static int Msta_NewNet( MstaFlatten *pF, MstaId Name, int fConst )
 }
 
 /* 把"本模块的某个 bit"变成全局网络号。
-     pMap != NULL -> 该 bit 已经有全局号（端口由父模块给，或本模块已建好）
-     pMap == NULL -> 按层次路径新建一根网络
+     pMap[nBit] >= 0 -> 该 bit 已经有全局号（端口由父模块给，或本模块已建好）
+     pMap == NULL 或该项为 -1（内部网络，或父模块没接的端口）-> 按层次路径新建一根网络
    常量 bit 永远指向两根常量网络。 */
 static int Msta_GlobalNetForBit( MstaFlatten *pF, MstaModule *pMod, const int *pMap, int nBit )
 {

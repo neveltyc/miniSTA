@@ -2,7 +2,7 @@
 
   FileName    [msta_util.c]
 
-  Synopsis    [字符串 / 名字表 / 文件读入 / 日志。]
+  Synopsis    [参数切分 / 日志 / 字符串 / 文件读入 / 名字表 / 整数哈希表。]
 
 ***********************************************************************/
 
@@ -10,7 +10,7 @@
 #include "msta_util.h"
 
 /* ---------------------------------------------------------------------
-   参数切分（dofile / sdc 共用）
+   参数切分（dofile 用）
    --------------------------------------------------------------------- */
 
 int Msta_SplitArgs( char *pLine, char **argv, int nMaxArgs )
@@ -123,7 +123,7 @@ char *Msta_FileReadAll( const char *pFileName, size_t *pnSize )
    名字表：字符串 <-> id
    --------------------------------------------------------------------- */
 
-/* djb2 变体。哈希表的正确性不依赖哈希函数好坏，只依赖分布。 */
+/* djb2 变体。哈希函数的好坏只影响性能（桶里链表长短），不影响正确性。 */
 static unsigned Msta_HashString( const char *pStr, int nBuckets )
 {
     unsigned nHash = 5381;

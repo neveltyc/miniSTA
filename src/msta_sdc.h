@@ -7,9 +7,8 @@
   ---------------------------------------------------------------------
   支持的 SDC 子集
   ---------------------------------------------------------------------
-  命令与选项清单见 README.md 的"支持的 SDC 子集"一节，本文件只负责这些命令的
-  数据模型与读入。
-  单位约定：SDC 时间默认 ns，可用 set_units 改变，内部统一为 ps。
+  命令与选项清单见 docs/sdc.md，本文件只负责这些命令的数据模型与读入。
+  单位约定：SDC 时间与电容默认取库的单位，set_units 可覆盖；内部统一为 ps、fF。
   未建模的命令记录告警并计入忽略计数。
 
   ---------------------------------------------------------------------
@@ -42,7 +41,7 @@ typedef struct {
     double RiseEdge, FallEdge; /* 一个周期内的边沿相位，ps */
     double SourceLatencyMax, SourceLatencyMin;
     double NetworkLatencyMax, NetworkLatencyMin;
-    double SlewMax, SlewMin;   /* 报告用的合并值 */
+    double SlewMax, SlewMin;   /* set_clock_transition 按 min/max 记的值，只写不读；分析用 Slew[][] */
     double SourceLatency[2][2], NetworkLatency[2][2]; /* [min/max][fall/rise] */
     double Slew[2][2];        /* set_clock_transition，未设为 MSTA_UNSET */
     int    fPropagated;
@@ -72,7 +71,7 @@ typedef struct {
     double   DriveInSlewRise, DriveInSlewFall;  /* -input_transition_rise/fall */
     double   DriveMultiply;   /* -multiply_by，默认 1.0 */
     /* set_ideal_network / set_ideal_latency / set_ideal_transition：
-       理想网络上的延迟不累计（模型说明见 msta_timing.c 的 PropagateClocks）。 */
+       理想网络上的延迟不累计（模型说明见 msta_timing.c 的 MarkIdealNets 上方）。 */
     int      fIdeal;            /* 这个网络被 set_ideal_network 标过 */
     int      fIdealNoPropagate; /* -no_propagate：理想属性不往下游网络传 */
     double   IdealLatencyMaxRise, IdealLatencyMaxFall;
@@ -196,7 +195,7 @@ typedef struct {
 MstaArrayDefine( MstaBorrowSdc, MstaBorrowSdcArray )
 
 /* ---------------- 分对象的 derate（set_timing_derate 带对象时） ---------------- */
-/* 实例（'I'）或时钟（'C'）上的 derate。参考工具里分对象的值**覆盖**全局值，
+/* 实例（'I'）或时钟（'C'）上的 derate。参考工具里分对象的值覆盖全局值，
    不是相乘；同一条命令可以只用其中一个边沿（-rise/-fall）。 */
 typedef struct {
     char   Kind;              /* 'I' 实例 / 'C' 时钟 */
@@ -277,14 +276,14 @@ typedef struct MstaSdc {
     double             VoltageMax, VoltageMin; /* set_voltage 给的电压 */
     double             TempMax, TempMin;       /* set_operating_conditions 给的分析温度 */
     double             KFactorDerateLate, KFactorDerateEarly; /* K 因子换算出的延迟系数 */
-    double             TimeScalePs;  /* SDC 数值乘此值 -> ps，默认 ns */
+    double             TimeScalePs;  /* SDC 数值乘此值 -> ps；默认取库单位，set_units 可覆盖 */
     double             CapScaleFf;   /* 0 表示沿用 Liberty 电容单位 */
 } MstaSdc;
 
 MstaSdc *Msta_SdcStart( void );
 void     Msta_SdcFree( MstaSdc *p );
 void     Msta_SdcSetBridgePath( const char *pExecutable );
-/* 读一个 .sdc 文件。pDesign 用来把端口/引脚名解析成全局网络号。 */
+/* 读一个 .sdc 文件。pDes 用来把端口/引脚名解析成全局网络号。 */
 int      Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
                            const char *pFileName, int fVerbose );
 

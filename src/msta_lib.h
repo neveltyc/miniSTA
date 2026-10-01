@@ -18,7 +18,8 @@
                        recovery/removal 检查。
 
   单位：本层是单位的 "入口"。读入时立刻把 ns/pf 等换算成全局的 ps/fF，
-  此后所有模块只看 ps/fF，不再关心原始单位。换算规则见 Msta_LibRead。
+  此后所有模块只看 ps/fF，不再关心原始单位。换算规则见 msta_lib.c 的
+  Msta_LibReadLibraryAttrs / Msta_LibTimeScaleOf / Msta_LibCapScaleOf。
 
 ***********************************************************************/
 
@@ -41,7 +42,7 @@ typedef enum {
 
 typedef enum {
     MSTA_SENSE_UNKNOWN = 0,
-    MSTA_SENSE_POSITIVE,   /* timing_sense : positive_instruction */
+    MSTA_SENSE_POSITIVE,   /* timing_sense : positive_unate */
     MSTA_SENSE_NEGATIVE,   /* 反相：输出翻转方向与输入相反 */
     MSTA_SENSE_NONUNATE    /* 非单态（如 XOR）：两种都可能 */
 } MstaSense;
@@ -58,7 +59,7 @@ typedef enum {
     MSTA_TT_SETUP_FALLING,
     MSTA_TT_HOLD_RISING,
     MSTA_TT_HOLD_FALLING,
-    MSTA_TT_CLEAR,            /* 异步复位：无时序检查，忽略 */
+    MSTA_TT_CLEAR,            /* 异步复位脚 -> 输出的延迟弧；触发器上不作为组合弧传播 */
     MSTA_TT_PRESET,
     MSTA_TT_RECOVERY_RISING,  /* 复位释放相对时钟沿的恢复时间 */
     MSTA_TT_RECOVERY_FALLING,
@@ -72,26 +73,27 @@ MstaTimingType Msta_TimingTypeFromName( const char *pName );
 /* ---------------------------------------------------------------------
    NLDM 查表
    --------------------------------------------------------------------- */
-/* Liberty 的 table_lookup 模型：二维表，行是输入摆率(index_1)，列是输出负载(index_2)。
+/* Liberty 的 table_lookup 模型：二维表，默认行(index_1)是输入摆率、列(index_2)是
+   输出负载；实际含义由模板的 variable_1/2 决定，记在下面四个标志里。
    查表 = 双线性插值 + 越界外插。抄自 ABC sclLib.h:Scl_LibLookup 的算法。 */
 typedef struct {
     int     nRows;       /* index_1 的长度；0 表示这张表不存在 */
     int     nCols;       /* index_2 的长度 */
     int     fRowIsLoad;  /* index_1 是负载轴 */
     int     fColIsSlew;  /* index_2 是摆率轴（约束表和 load/slew delay 表） */
-    int     fRowUsesSecond; /* 查表时 index_1 使用第二个语义参数 */
-    int     fColUsesFirst;  /* 查表时 index_2 使用第一个语义参数 */
-    double *pRowIndex;   /* 输入摆率, ps, 单调递增 */
-    double *pColIndex;   /* 输出负载, fF, 单调递增 */
+    int     fRowUsesSecond; /* index_1 取 Msta_TableLookup 的第二个参数 Load，否则取 Slew */
+    int     fColUsesFirst;  /* index_2 取第一个参数 Slew，否则取 Load */
+    double *pRowIndex;   /* index_1：默认输入摆率(ps)，fRowIsLoad 时为负载(fF)；单调递增 */
+    double *pColIndex;   /* index_2：默认输出负载(fF)，fColIsSlew 时为摆率(ps)；单调递增 */
     double *pValues;     /* nRows * nCols, 行优先 */
     char    sTag[32];    /* 表名，如 "delay_template_7x7"，只用于打印 */
 } MstaTable;
 
 void   Msta_TableFree( MstaTable *p );
 int    Msta_TableExists( const MstaTable *p );
-/* 给定输入摆率和输出负载，插值出一个值。表不存在时返回 0。 */
+/* 给定输入摆率和输出负载，插值出一个值。表不存在时返回 0。
+   约束表借用这两个参数传 (时钟脚摆率, 数据脚摆率)。 */
 double Msta_TableLookup( const MstaTable *p, double Slew, double Load );
-/* 只用第一行/第一列的一维查表（很多 setup/hold 表其实是 1x1）。 */
 
 /* ---------------------------------------------------------------------
    时序弧
@@ -260,9 +262,9 @@ MstaPin  *Msta_LibPinForCorner( MstaLib *p, MstaCell *pCell, MstaId PinId,
 
 /* ---- 给时序引擎用的查询 ---- */
 int       Msta_CellPinIndexOf( MstaCell *p, MstaId NameId );     /* -1 表示没有这个脚 */
-/* 组合弧：输入脚 InPin 翻转到输出脚 OutPin。找不到返回 NULL。 */
 /* 时钟弧按侧输入 case 值裁剪；-1=无翻转，其他为 MstaSense。pCases: -1/0/1。 */
 int       Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases );
+/* 组合弧：输入脚 InPin 翻转到输出脚 OutPin。找不到返回 NULL。 */
 MstaArc  *Msta_CellCombArc( MstaCell *p, MstaId InPin, MstaId OutPin );
 MstaArc  *Msta_CellArcById( MstaCell *p, MstaId ArcId );
 /* 库统计信息，report_lib 用 */

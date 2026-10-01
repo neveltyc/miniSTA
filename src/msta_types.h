@@ -14,7 +14,7 @@
     摆率  : ps   (皮秒)     —— 与时间同一单位，表示 0->1 的翻转耗时
     报告  : 输出时再换算回 ns，便于和手册对照
 
-  内部用整数 ps 打印、用 double 计算；报告输出时再换算回 ns。
+  内部一律用 double 存放上述单位的数值（见 MstaTime / MstaCap）。
 
   ---------------------------------------------------------------------
   ID 约定
@@ -42,9 +42,10 @@ typedef double          MstaTime;
 typedef double          MstaCap;
 
 /* ---------------------------------------------------------------------
-   MstaArray(T, Name) —— 唯一的容器实现：一段连续内存 + size/capacity。
+   MstaArray(T, Name) —— 通用动态数组：一段连续内存 + size/capacity。
    展开后提供初始化、追加、索引、释放和查找函数。
-   约定：元素永远值拷贝存放，数组拥有这些元素，销毁数组即销毁元素。
+   约定：元素永远值拷贝存放，销毁数组即销毁元素本身；
+   元素里指向的堆内存（如 char * 字符串）要由调用方先释放。
    --------------------------------------------------------------------- */
 #define MstaArrayDefine(Type, Name)                                           \
 typedef struct {                                                              \
@@ -78,8 +79,8 @@ static inline int Name##Find( Name *p, Type *pElem )                          \
 /* 容器使用下标循环和 XxxAt() 遍历。 */
 
 /* ---------------------------------------------------------------------
-   全局日志：出错就写到 stderr，并且带上"哪个阶段"的前缀，
-   便于区分 Liberty 解析和时序分析错误。
+   全局日志：一律写到 stderr；警告和错误分别带 "** Warning: " /
+   "** Error: " 前缀，普通信息不带前缀。
    --------------------------------------------------------------------- */
 typedef enum {
     MSTA_LOG_INFO,
@@ -93,7 +94,8 @@ void Msta_Log( MstaLogLevel Level, const char *pFormat, ... );
 #define Msta_Warn(...)   Msta_Log( MSTA_LOG_WARN,  __VA_ARGS__ )
 #define Msta_Error(...)  Msta_Log( MSTA_LOG_ERROR, __VA_ARGS__ )
 
-/* 分析过程中发现的可解释问题（比如未约束的端点），统一收集后一起报告。 */
+/* 分析过程中发现的可解释问题（比如未约束的端点）：Msta_WarnOnce 立即打印，
+   同一句只打一次；g_vMstaWarnings 记录已打过的句子。 */
 MstaArrayDefine( char *, MstaMsgArray )
 extern MstaMsgArray g_vMstaWarnings;
 void Msta_WarnOnce( const char *pFormat, ... );

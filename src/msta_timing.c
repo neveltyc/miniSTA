@@ -2,9 +2,11 @@
 
   FileName    [msta_timing.c]
 
-  Synopsis    [时序引擎：端点 -> 时钟树 -> 拓扑序 -> 到达 -> slack。]
+  Synopsis    [时序引擎：端点 -> 时钟树 -> 拓扑序 -> 时钟传播 -> 到达与检查 -> 汇总。]
 
-  阅读顺序就是执行顺序（Msta_TimingAnalyze 里那七步）。
+  分节编号就是 Msta_TimingAnalyze 里的步骤号（流程见 msta_timing.h 文件头）。
+  阅读顺序大体就是执行顺序，例外是第 5 步时钟传播：它紧跟时钟树和理想网络，
+  但要等第 4 步拓扑序排好才调用；总入口直接调用的几个函数放在第 7 节。
   每一步只做一件事，接口都是本文件内的 static 函数，外部只见
   msta_timing.h 里那几个。
 
@@ -27,12 +29,12 @@ static MstaInst *InstAt( MstaTiming *p, int nInst )
     return MstaInstArrayAt( &p->pDes->vInsts, nInst );
 }
 
-/* 时钟树状态按 [时钟][网络] 存（create_clock -add 允许一根网络挂多个时钟）。 */
 static MstaCorner *CornerOf( MstaTiming *p, int fMax )
 {
     return fMax ? &p->CornerMax : &p->CornerMin;
 }
 
+/* 时钟树状态按 [时钟][网络] 存（create_clock -add 允许一根网络挂多个时钟）。 */
 static MstaClockArr *ClockArrAt( MstaTiming *p, int nClock, int nNet )
 {
     return &p->pClockArr[ (size_t)nClock * (size_t)p->pDes->vNets.nSize + (size_t)nNet ];
@@ -329,7 +331,8 @@ static const MstaArc *CheckArcForCorner( MstaTiming *p, const MstaArc *pArc,
     return pArc;
 }
 
-/* 单边约束弧只检查库实际定义的边沿；整条检查缺失时保持理想黑盒行为。 */
+/* 约束弧只给了一个数据边沿的表时，另一个边沿不做这项检查；弧不存在或
+   两张表都没有时照常检查，检查值按 0 算（见 CheckTime）。 */
 static int CheckHasEdge( MstaTiming *p, const MstaArc *pArc, int nInst,
                          int fMax, int fDataRise )
 {
@@ -639,7 +642,7 @@ static void AttachClockIds( MstaTiming *p )
 }
 
 /* =====================================================================
-   理想网络（set_ideal_network）
+   3. 理想网络（set_ideal_network）
    ---------------------------------------------------------------------
    标成理想网络的网络在时序上不累计延迟：它的到达/摆率等于驱动它的组合
    单元输入脚上的那两份，弧延迟按 0 记，时钟树和普通数据路径一个算法。
@@ -692,6 +695,10 @@ static void ApplyIdealClockValues( MstaTiming *p, int nNet, MstaClockArr *pArr )
         }
     MergeClockSummary(pArr);
 }
+
+/* =====================================================================
+   5. 时钟传播（第 4 步拓扑序之后才调用：要按拓扑序走）
+   ===================================================================== */
 
 /* 生成时钟继承主时钟到源引脚的状态；时序输出还要加入对应 clk-to-Q。 */
 static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
@@ -812,9 +819,10 @@ static void PropagateClocks( MstaTiming *p )
                         double InputSlew = pCons ? (m ? (s ? pCons->InputSlewMaxRise : pCons->InputSlewMaxFall)
                                                                    : (s ? pCons->InputSlewMinRise : pCons->InputSlewMinFall)) : MSTA_UNSET;
                         /* 时钟源 slew 按 SDC 语义取值（与 OpenSTA 一致）：理想时钟只看
-                           set_clock_transition，传播时钟只看源端口的 set_input_transition，没给就是 0。
-                           miniSTA 对没写 set_propagated_clock 的时钟也做传播，而 SDC 里它本应是理想时钟，
-                           所以两种约束都可能是用户想要的源 slew：先取输入 slew，再取时钟 slew。 */
+                           set_clock_transition，写了 set_propagated_clock 的只看源端口的
+                           set_input_transition，没给就是 0。没写 set_propagated_clock 的时钟 miniSTA
+                           也做传播，而 SDC 里它本应是理想时钟，所以两种约束都可能是用户想要的源 slew：
+                           先取输入 slew，再取时钟 slew，都没给才用 MSTA_DEFAULT_SLEW（不是 0）。 */
                         double ClkSlew = pClock->Slew[m][s], Slew;
                         if ( !pClock->fPropagated || p->fIdealClocks )
                             Slew = Msta_IsSet(ClkSlew) ? ClkSlew : 0.0;
@@ -929,7 +937,7 @@ static void PropagateClocks( MstaTiming *p )
 }
 
 /* =====================================================================
-   3. 拓扑序
+   4. 拓扑序
    ===================================================================== */
 
 /* 网络 n 的"前件"= 驱动它的组合单元的所有输入网络。
@@ -1034,7 +1042,7 @@ static void BuildTopoOrder( MstaTiming *p )
 }
 
 /* =====================================================================
-   4. 数据到达
+   6a. 数据到达（前向传播）
    ===================================================================== */
 
 /* 判断某个边沿的到达时间是否已经算出来。 */
@@ -1210,7 +1218,8 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             pClkArr = ClockArrAt( p, nOnlyClock, nClkNet );
                             if ( !pClkArr->fReached )
                                 continue;
-                            /* 时钟路径反相时，FF 的有效触发沿取反（见 EffectiveClkRises）。 */
+                            /* 库给的触发沿是 CLK 脚上的本地沿；按当前 launch 标签选出
+                               是哪个时钟源边沿传到这里的，出发时刻按那个源边沿算。 */
                             int fLocalRise = fClkRises;
                             fClkRises = ClockTagSelect(pClkArr,fMax,fLocalRise,p->LaunchClockTag);
                             if ( fClkRises < 0 ) continue;
@@ -1283,7 +1292,7 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
 
                             if ( nInEdge < 0 )
                             {
-                                /* 非单态或未知：对该分析角取最保守的输入边沿。 */
+                                /* 非单调（non_unate）或未知：对该分析角取最保守的输入边沿。 */
                                 int fR = Msta_ArrivalSet( pArrR[nInNet], fMax );
                                 int fF = Msta_ArrivalSet( pArrF[nInNet], fMax );
                                 if ( !fR && !fF )
@@ -1388,7 +1397,7 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
 }
 
 /* =====================================================================
-   5. 检查
+   6b. 检查：捕获沿、要求时间与 slack
    ===================================================================== */
 
 /* 两个整数的最大公约数（跨时钟搜索的周期用整数 ps 算）。 */
@@ -1437,8 +1446,8 @@ static void FindClockPairEdges( MstaTiming *p, int nLaunchClock, int fLaunchRise
     if ( LaunchPeriod <= 0.0 || CapturePeriod <= 0.0 )
         return;                             /* 没有周期（虚拟/未定义时钟）：不搜索 */
 
-    /* 搜索一个公共周期里的出发拍：周期取整数 ps 后按 gcd 算，
-       算不出（非整数周期）或太长时按 1000 拍兜底并告警一次。 */
+    /* 搜索一个公共周期里的出发拍：周期四舍五入到整数 ps 后按 gcd 算
+       （非整数周期因此是近似）；超过 1000 拍时只搜 1000 拍并告警一次。 */
     kMax = 1000;
     {
         int nLaunchPs = (int)( LaunchPeriod + 0.5 ), nCapturePs = (int)( CapturePeriod + 0.5 );
@@ -1828,7 +1837,7 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
     nClock = nCaptureClock;
     if ( nClkNet < 0 || nClock < 0 || pLaunchClock[nStart] < 0 ||
          !Msta_ArrivalSet(pArrival[nEndNet],pCheck->fRecovery) ) return;
-    /* 时钟路径反相时异步控制脚的有效沿也取反。 */
+    /* 捕获沿按当前源边沿标签取；它传不到库定义的本地沿时不查。 */
     fClkRises = p->CaptureClockTag;
     if ( !ClockTagValid(ClockArrAt(p,nClock,nClkNet),!pCheck->fRecovery,pAsync->fClkRises,fClkRises) ) return;
 
@@ -2155,8 +2164,7 @@ static void CheckEndpointAttempt( MstaTiming *p, MstaCheck *pCheck, int nCapture
                                         : p->CaptureClockTag != RiseMin) ) fHold = 0;
     }
     /* setup 与 hold 相互独立：缺了 min/max 某一侧的约束，不能让另一侧的检查
-       也跟着消失。库里没写某张检查表时按 0 算（参考工具
-       也是这么处理的），所以这里不因为缺表就把检查去掉。 */
+       也跟着消失。缺检查表时怎么办见 CheckHasEdge。 */
     if ( !fSetup && !fHold )
         return;
 
@@ -2180,7 +2188,7 @@ static void CheckEndpointAttempt( MstaTiming *p, MstaCheck *pCheck, int nCapture
 }
 
 /* =====================================================================
-   6. 名字与汇总（路径打印在 msta_report.c）
+   6c. 端点检查入口与次优路径（路径打印在 msta_report.c）
    ===================================================================== */
 
 /* 把新的排除项并进排除表（同一根网络的边沿掩码取"或"）。
@@ -2337,7 +2345,10 @@ const char *Msta_TimingEndpointName( MstaTiming *p, MstaCheck *pCheck,
 }
 
 /* =====================================================================
-   7. 生命周期与总入口
+   7. 汇总与总入口
+   ---------------------------------------------------------------------
+   这一节还放着生命周期、查询接口，以及总入口直接调用的几个步骤函数
+   （WarnUntimedLatches、起点分类、数据/门控检查、DRC）。
    ===================================================================== */
 
 static void AllocCorner( MstaCorner *pC, int n )
@@ -2548,7 +2559,7 @@ static void CheckDesignRules( MstaTiming *p )
         int Fanout;
         if ( pNet->fConst )
             continue;
-        /* 限制取最紧的：库写在驱动脚上的 -> 分对象 SDC -> 全局 SDC。 */
+        /* 分对象 SDC 覆盖全局 SDC，再与库里驱动脚上的限制取更紧的。 */
         Limit = ( pCons && Msta_IsSet(pCons->DrcMaxTransition) )
               ? pCons->DrcMaxTransition : pSdc->MaxTransition;
         if ( pNet->Driver.InstId != MSTA_NO_ID )
@@ -2591,8 +2602,7 @@ static void CheckDesignRules( MstaTiming *p )
             p->nDrcCapacitanceViol++;
             if ( Margin > p->WorstDrcCapacitance ) p->WorstDrcCapacitance = Margin;
         }
-        /* 最小电容：负载低于限制就是违例；限制取最紧的那个（也就是最大的），
-           库写在驱动脚上的 -> 分对象 SDC -> 全局 SDC。 */
+        /* 最小电容：负载低于限制就是违例。限制同上，"更紧"在这里是更大。 */
         Limit = ( pCons && Msta_IsSet(pCons->DrcMinCapacitance) )
               ? pCons->DrcMinCapacitance : pSdc->MinCapacitance;
         if ( pNet->Driver.InstId != MSTA_NO_ID )
@@ -2670,8 +2680,8 @@ static void CheckDataChecks( MstaTiming *p, int nClock )
 }
 
 /* 时钟门控检查：门控单元（ICG）的使能脚要相对时钟的有效沿稳定。
-   数据路径 = 使能脚，时钟路径 = 门控单元的时钟脚，检查值按
-   SDC（set_clock_gating_check）> 库里使能脚的约束弧 > 0 的顺序取。 */
+   数据路径 = 使能脚，时钟路径 = 门控单元的时钟脚。检查值优先取 SDC
+   （set_clock_gating_check），没有就查库里使能脚的约束弧，两者都没有不查。 */
 static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, int nClock )
 {
     MstaInst *pInst = InstAt( p, nInst );
@@ -2690,7 +2700,7 @@ static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, 
     if ( p->CornerMax.pnLaunchClock[nEnNet] != nClock || p->CornerMin.pnLaunchClock[nEnNet] != nClock )
         return 0;
 
-    /* 库里的 setup_rising/hold_rising 说的是相对时钟的哪个沿。 */
+    /* 捕获沿按当前源边沿标签取；它传不到库定义的本地沿（pGate->fClkRises）时不查。 */
     fClkRises = p->CaptureClockTag;
     nLaunchClock = nClock;
 
@@ -2972,9 +2982,10 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
     MarkClockNets( p );                /* 2. 时钟树 */
     AttachClockIds( p );
     WarnUntimedLatches( p );
-    MarkIdealNets( p );                /* 2b. 理想网络（set_ideal_network） */
-    BuildTopoOrder( p );               /* 3. 拓扑序 */
-    PropagateClocks( p );              /* 4. 时钟到达 */
+    MarkIdealNets( p );                /* 3. 理想网络（set_ideal_network） */
+    BuildTopoOrder( p );               /* 4. 拓扑序 */
+    PropagateClocks( p );              /* 5. 时钟传播 */
+    /* 6. 数据到达与检查 */
     p->nDataChecks = 0;
     p->nDataCheckSetupViol = p->nDataCheckHoldViol = 0;
     p->WorstDataCheckSetupSlack = p->WorstDataCheckHoldSlack = MSTA_NO_TIME;
@@ -3010,6 +3021,7 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
     }
     free( pfClassUsed );
 
+    /* 7. 汇总：WNS/TNS（含数据检查、门控检查）、面积、DRC */
     p->WorstSetupSlack = p->WorstHoldSlack = MSTA_NO_TIME;
     p->TotalSetupSlack = p->TotalHoldSlack = 0.0;
     p->nSetupViolations = p->nHoldViolations = 0;

@@ -4,9 +4,9 @@
 
   Synopsis    [极简 JSON 读取器（只读，不写）。]
 
-  这个文件只有一件事：把 yosys write_json 产生的 JSON 读成 MJsonValue 树。
-  语法规则严格按 RFC 8259 的子集（不允许注释、不允许尾逗号、不允许 NaN），
-  任何不符合的输入都报错而不是猜。
+  把 JSON 文本读成 MJsonValue 树。用户有两个：yosys write_json 产生的网表，
+  以及 SDC Tcl 桥接输出的命令记录。语法取 RFC 8259 的子集（不允许注释、
+  尾逗号、NaN），数字直接交给 strtod，比标准略宽松；结构不对就报错而不是猜。
 
 ***********************************************************************/
 
@@ -100,7 +100,7 @@ static char *Msta_JsonReadStringRaw( MJsonReader *p )
             case 'u':
             {
                 /* \uXXXX：yosys 只吐 ASCII，这里只需处理 <0x80 的情况；
-                   更大的值按 UTF-8 两字节写出去，避免名字被截断。 */
+                   更大的值按 UTF-8 编码写出去，避免名字被截断。 */
                 unsigned nCode = 0;
                 int i;
                 for ( i = 0; i < 4 && p->pCur < p->pEnd; i++ )

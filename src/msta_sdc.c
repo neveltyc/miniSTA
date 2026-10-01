@@ -301,7 +301,7 @@ static int Msta_SdcRest( int argc, char **argv, MstaSdcArgs *pA, char **ppOut, i
     return n;
 }
 
-/* SDC 的时间按 ns 写，内部一律 ps。 */
+/* SDC 时间默认取库单位（set_units 可覆盖），内部一律 ps。 */
 static double Msta_SdcToPs( MstaSdc *p, const char *pText )
 {
     return atof( pText ) * p->TimeScalePs;
@@ -993,8 +993,8 @@ static void Msta_SdcSetClockTransition( MstaSdc *p, int argc, char **argv )
 }
 
 /* set_ideal_latency / set_ideal_transition：拿掉数值和对象，剩下的选项都记下来。
-   三条 set_ideal_* 命令都会把对象解析成网络；时钟对象没建模，单独告警。
-   返回 -1 表示整条命令作废（调用方计入 ignored）。 */
+   对象都解析成网络；时钟对象没建模，单独告警。返回网络个数；缺值或对象时
+   返回 0，-1 表示整条命令作废（调用方计入 ignored）。 */
 static int Msta_SdcIdealTargets( MstaSdc *p, MstaDesign *pDes, const char *pCmd,
                                  int argc, char **argv, int *pfRise, int *pfFall,
                                  int *pfMax, int *pfMin, double *pdValue, int **ppNets )
@@ -1274,7 +1274,7 @@ static MstaLibInfo *Msta_SdcDefaultOpCond( MstaLib *pLib, MstaId nLibrary, MstaO
 }
 
 /* 按库里的 K 因子算延迟缩放系数：
-     derate = 1 + k_volt*(V - Vnom) + k_temp*(T - Tnom) + k_process*(P - Pnom)
+     derate = 1 + k_volt*(V - Vnom) + k_temp*(T - Tnom)   （process 项不建模）
    库没声明 K 因子（或没给 V/T）时系数保持 1.0，只把选的角记录/报出来。 */
 static void Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib )
 {
@@ -1513,7 +1513,7 @@ static void Msta_SdcSetVoltage( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int
     (void)pDes;
 }
 
-/* 这个角上生效的工艺角：命令选中的名字，否则库里默认的；再取它的电压/温度。 */
+/* SDC 是否点过工作条件（set_operating_conditions 的角名/库，或 set_voltage）。 */
 int Msta_SdcOpCondSelected( MstaSdc *p )
 {
     return p->OpCondMax != MSTA_NO_ID || p->OpCondMin != MSTA_NO_ID ||
@@ -1576,7 +1576,7 @@ static void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, int argc, char *
         ToRF = 'r';
     if ( pTo == NULL && ( pTo = Msta_SdcValueOf(argc,argv,&A,"-fall_to") ) != NULL )
         ToRF = 'f';
-    Msta_SdcValueOf( argc, argv, &A, "-clock" );   /* 检查时钟只用于报告 */
+    Msta_SdcValueOf( argc, argv, &A, "-clock" );   /* 检查时钟读入但不使用 */
     if ( pFrom == NULL || pTo == NULL )
     { Msta_WarnOnce("set_data_check needs -from and -to"); return; }
     nRest = Msta_SdcRest( argc, argv, &A, pRest, argc );
@@ -1889,7 +1889,7 @@ static void Msta_SdcSetPortDelay( MstaSdc *p, MstaDesign *pDes, int fOutput, int
     }
 }
 
-/* set_load <值> [get_ports p ...] —— 值的单位跟随库的电容单位。 */
+/* set_load <值> [get_ports p ...] —— 值默认按库的电容单位，set_units 可覆盖。 */
 static void Msta_SdcSetLoad( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
 {
     MstaSdcArgs A;
@@ -1948,7 +1948,7 @@ static double Msta_SdcMergeSlew( double Rise, double Fall, int fMax )
 }
 
 /* set_input_transition：可以按 -rise/-fall、-max/-min 分别给值。
-   时序引擎用逐边沿字段起步，这里同时维护合并值给时钟源等只按单值算的地方。 */
+   时序引擎用逐边沿字段起步。 */
 static void Msta_SdcSetInputSlew( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
 {
     MstaSdcArgs A;
@@ -1997,7 +1997,7 @@ static void Msta_SdcSetInputSlew( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, i
     }
 }
 
-/* 根据驱动单元的输出转换表设置输入端口摆率。 */
+/* 根据驱动单元的输出转换表设置输入端口摆率，并记下驱动单元供分析时算延迟。 */
 static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
 {
     MstaSdcArgs A;
@@ -2010,8 +2010,7 @@ static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     double Slew = 0.0;
     Msta_SdcArgsStart( &A, argc );
 
-    /* 手册里还有 -library/-from_pin/-multiply_by/-input_transition_rise... 这些
-       会改变算出来的摆率；msta 没建模就整条跳过，免得悄悄用一个不同的值。 */
+    /* 下列选项 msta 没建模：吃掉并告警忽略。 */
     {
         static const char *pIgnoreValue[] = { "-clock", NULL };
         static const char *pIgnoreFlag[] = { "-rise", "-fall", "-dont_scale",
@@ -2100,7 +2099,8 @@ typedef struct {
 } MstaSdcPathArgs;
 
 /* 解析 -from/-rise_from/-fall_from/-to/-rise_to/-fall_to/-through 这类集合选项。
-   返回 0 表示选项本身不支持，调用方丢弃这条约束。 */
+   返回 1 成功；0 表示选项本身不支持，-1 表示集合为空或 -through 超限（已告警），
+   两者调用方都丢弃这条约束。 */
 static int Msta_SdcPathCollection( int argc, char **argv, int *pi, MstaSdcPathArgs *pA )
 {
     const char *pKey = argv[*pi];
@@ -2608,7 +2608,6 @@ static void Msta_SdcSetClockGroups( MstaSdc *p, int argc, char **argv )
 
 static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv );
 
-/* all_* 标记里打包的选项：按 \x1f 切开，返回下一个（就地截断）。 */
 /* 集合是否用了 -quiet：用了就不报 "没匹配到对象"。 */
 static int Msta_SdcIsQuiet( const char *pText )
 {
@@ -2616,6 +2615,7 @@ static int Msta_SdcIsQuiet( const char *pText )
     return i >= 0 ? s_Args.pQuiet[i] : 0;
 }
 
+/* all_* 标记里打包的选项：按 \x1f 切开，返回下一个（就地截断）。 */
 static char *Msta_SdcNextOption( char **ppText )
 {
     char *p = *ppText, *pEnd;
@@ -2705,8 +2705,8 @@ static int Msta_SdcClockArcSense( MstaDesign *pDes, MstaInst *pInst, MstaArc *pA
 
 /* all_registers -clock：把某个时钟树上的网络标出来（pfOnNet），顺便记极性
    （+1/-1，反相缓冲器与 set_clock_sense 都会翻）。规则与 msta_timing.c 的
-   MarkClockNets 一致：从时钟源网络沿组合弧前推，遇到时序单元停下。
-   调用方负责把两个数组清零。 */
+   AttachClockIds 一致：从时钟源网络沿组合弧前推，遇到时序单元、-stop_propagation
+   或本时钟派生的生成时钟源就停（生成时钟源不算在树上）。调用方负责把两个数组清零。 */
 static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *pClock,
                                    char *pfOnNet, char *pPolarity )
 {
@@ -3205,7 +3205,7 @@ static void Msta_SdcResolveParent( MstaSdc *pSdc, MstaDesign *pDes, char ParentK
     }
 }
 
-/* -of_objects 的总入口：把每个父对象按关系展开，题目类型由 Kind 指定。 */
+/* -of_objects 的总入口：把每个父对象按关系展开，目标类型由 Kind 指定。 */
 static int Msta_SdcExpandOfObjects( MstaSdc *pSdc, MstaDesign *pDes, char *pOfMarker,
                                     const char *pBody, char Kind, const char *pMinus[],
                                     int nMinus, MstaSdcArgList *pL )
@@ -3316,7 +3316,7 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
                 Msta_SdcUnescapeMarker( pOf );
                 if ( Msta_SdcExpandOfObjects( pSdc, pDes, pOf, pPart, Kind,
                                               pMinus, nMinus, &s_Args ) < 0 )
-                    return 0;               /* 关系对不上：丢这条命令，桥接脚本已说明 */
+                    return 0;               /* 父对象解析不了：丢这条命令（上面已告警） */
                 continue;
             }
             while ( *pPart )
@@ -3358,9 +3358,6 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
     return s_Args.nSize;
 }
 
-/* 把库里的对象索引写成文本给 Tcl 前端，供 get_libs / get_lib_cells / get_lib_pins
-   查询。每行一条，制表符分隔：lib <名> / cell <库> <单元> / pin <库> <单元> <脚>。
-   用纯文本而不是 Tcl 脚本，名字里出现任何字符都不用转义。 */
 /* 网表对象索引：get_* -filter 的属性要用（Tcl 侧拿 expr 求值）。
    每行一条，制表符分隔：cell <实例> <库单元> / pin <实例/引脚> <方向> <是否时钟脚> /
    net <网络> <扇出> / port <端口> <方向>。只列网表本身的信息——时钟是 SDC 建的，
@@ -3396,6 +3393,9 @@ static void Msta_SdcWriteDesignIndex( FILE *pFile, MstaDesign *pDes )
     }
 }
 
+/* 把库里的对象索引写成文本给 Tcl 前端，供 get_libs / get_lib_cells / get_lib_pins
+   查询。每行一条，制表符分隔：lib <名> / cell <库> <单元> / pin <库> <单元> <脚>。
+   用纯文本而不是 Tcl 脚本，名字里出现任何字符都不用转义。 */
 static void Msta_SdcWriteLibIndex( FILE *pFile, MstaLib *pLib )
 {
     int i, j;
@@ -3439,7 +3439,6 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
         return 0;
     }
     close( fd );
-    /* 库索引：Tcl 前端拿它回答 get_libs / get_lib_cells / get_lib_pins。 */
     /* -filter 要在 Tcl 侧按属性筛对象，所以只有用到它时才导出网表索引
        （大设计上这份文件不小，平时不写）。 */
     {
@@ -3461,6 +3460,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
             free( pSdcText );
         }
     }
+    /* 库索引：Tcl 前端拿它回答 get_libs / get_lib_cells / get_lib_pins。 */
     fdIndex = mkstemp( sIndexPath );
     if ( fdIndex >= 0 )
     {
@@ -3528,8 +3528,8 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
 
 /* SDC 1.8 手册里有、但 msta 不建模的命令：认下来、告警说明原因，只丢这一条。
    这样别家工具导出的约束文件能整份读完，缺的部分在日志里有明确交代。
-   前五条是**明确不支持**的过时命令：它们描述老式线负载与驱动电阻模型，现在由
-   综合/布局工具给出的驱动单元和真实负载代替，告警里直接写出替代写法。 */
+   前八条是明确不支持的过时命令：它们描述老式线负载与驱动电阻模型，已由驱动
+   单元和真实负载代替；有对应写法的（set_driving_cell / set_load）告警里写出。 */
 static const struct { const char *pName; const char *pNote; } s_vIgnoredCommands[] = {
     { "set_drive", "obsolete command (input drive resistance); use set_driving_cell instead" },
     { "set_resistance", "obsolete command (net resistance); not modeled" },
@@ -3793,7 +3793,7 @@ int Msta_SdcClockSense( MstaSdc *p, int nNet, int nClock, int *pfStop )
     return 0;
 }
 
-/* 全局 derate：fMax=1 用 late 系数，fMax=0 用 early 系数。 */
+/* 是否设过任何 DRC 限制（全局或分网络）。 */
 int Msta_SdcHasDrcLimits( MstaSdc *p )
 {
     int i;
@@ -4012,8 +4012,7 @@ static int Msta_SdcNameMatch( const char *pPattern, const char *pText )
     return ( strncmp( pPattern, pText, n ) == 0 && pText[n] == '/' );
 }
 
-/* 把模式匹配到一个端点对象上：时钟只比时钟名，其余比对象名和 "实例/引脚"。
-   没写模式（MSTA_NO_ID）= 通配。 */
+/* 拼出引脚对象的 "实例/引脚" 全名：放得下就写进 pBuf，否则 malloc 一块新的。 */
 static char *Msta_SdcObjectPinPath( MstaDesign *pDes, const MstaSdcObject *pObj,
                                     char *pBuf, size_t nBuf )
 {
@@ -4034,6 +4033,8 @@ static char *Msta_SdcObjectPinPath( MstaDesign *pDes, const MstaSdcObject *pObj,
     return pPath;
 }
 
+/* 把模式匹配到一个端点对象上：时钟只比时钟名，其余比对象名和 "实例/引脚"。
+   没写模式（MSTA_NO_ID）= 通配。 */
 static int Msta_SdcMatchObject( MstaDesign *pDes, MstaId PatternId, char Kind,
                                 const MstaSdcObject *pObj, const char *pClock )
 {

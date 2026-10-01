@@ -17,7 +17,7 @@
   ---------------------------------------------------------------------
   展平（flatten）
   ---------------------------------------------------------------------
-  JSON 里每个模块自己给网络编号（0/1 是常量，>=2 是真网络），编号只在模块内
+  JSON 里每个模块自己给网络编号（整数是网络号，字符串 "0"/"1" 是常量），编号只在模块内
   有效。展平就是给"每个模块实例"的每个局部网络分配一个全局编号，并把层次路径
   拼进网络名，于是报告里能直接看到 u_core/u_alu/n42 这样的名字。
   assign 别名不需要 msta 处理：yosys 已经把两端合成同一个 bit 了。
@@ -94,7 +94,7 @@ MstaArrayDefine( MstaPinRef, MstaPinRefArray )
 typedef struct {
     MstaId          Name;     /* 含层次路径的网络名 */
     int             fConst;   /* 1=常量0, 2=常量1 */
-    int             fCaseValue; /* 0=未设置，1=逻辑0，2=逻辑1 */
+    int             fCaseValue; /* 0=未设置，1=逻辑0，2=逻辑1，3=无关值(dc) */
     int             fTopPort;
     int             Dir;
     MstaPinRef      Driver;   /* InstId == MSTA_NO_ID 表示没有驱动（输入脚/悬空） */
@@ -140,7 +140,7 @@ void        Msta_DesignFree( MstaDesign *p );
 /* 读 yosys 的 write_json 产物。 */
 int         Msta_DesignReadYosysJson( MstaDesign *p, const char *pJsonFile, int fVerbose );
 
-/* 调用 yosys 把 Verilog 转成 JSON 再读进来。pVerilogFiles 是以 NULL 结尾的数组。
+/* 调用 yosys 把 Verilog 转成 JSON 再读进来。共 nFiles 个文件。
    pWorkDir 为中间 JSON 与 yosys 日志所在的目录。 */
 int         Msta_DesignReadVerilog( MstaDesign *p, const char **ppVerilogFiles, int nFiles,
                                     const char *pWorkDir, int fVerbose );

@@ -5,27 +5,31 @@
   Synopsis    [时序引擎：时钟网络 -> 拓扑序 -> 到达/要求时间 -> slack -> 路径。]
 
   ---------------------------------------------------------------------
-  分析流程
+  分析流程（步骤号与 Msta_TimingAnalyze、msta_timing.c 的分节标题一致）
   ---------------------------------------------------------------------
-   1  找时钟网络   从 create_clock 挂的那个网络出发，向后(源头方向)把所有
-                   只服务于时钟的连线标出来。寄存器时钟脚的插入延迟就在这里算。
-   2  定端点        每个时序单元的每条 setup/hold 检查是一个端点；顶层输出脚
-                   也算端点（reg2out）。每个 FF 的 Q 脚是起点。
-   3  拓扑序        组合环路要能发现并报错；有环路就没法算 arrival。
-                   用显式栈做迭代 DFS，不用递归 —— 深链（十万级）会爆栈。
-   4  前向到达 / 后向要求
-                   每一遍只算一个方向、一个角：
-                     max 遍 -> setup 检查（用最坏延迟）
-                     min 遍 -> hold  检查（用最好延迟）
-   5  路径回溯      每个网络记住"是谁把最大到达时间传进来的"（前驱指针），
-                   于是 report_checks 能打印一条完整的路径。
+   1  定端点        时序单元的每条检查（setup/hold、recovery/removal）是一个
+                   端点；顶层输出脚也算端点（reg2out）。
+   2  标时钟树      从 create_clock 的源网络沿组合弧正向标出时钟网络，并记下极性。
+   3  理想网络      set_ideal_network 沿组合扇出铺开，这些网络不累计延迟。
+   4  拓扑序        用显式栈做迭代 DFS，不用递归 —— 深链（十万级）会爆栈。
+                   遇到组合环路就告警、在该处断开，分析继续。
+   5  时钟传播      按拓扑序算每个时钟到各时钟网络的插入延迟和摆率
+                   （理想时钟直接用 set_clock_latency 给的值）。
+   6  数据到达与检查
+                   起点是 FF 输出和带 set_input_delay 的输入端口。按起点时钟
+                   （及起点分类、时钟源边沿）分别做前向传播：
+                     max 角 -> setup 检查（用最坏延迟）
+                     min 角 -> hold  检查（用最好延迟）
+                   没有后向传播：要求时间直接在端点上算（EvaluateCheckCorner）。
+                   每个网络按角、边沿记下前驱，report_checks 据此回溯整条路径。
+   7  汇总          WNS/TNS、设计面积、设计规则检查（DRC）。
 
   ---------------------------------------------------------------------
-  延迟怎么算（NLDM，单角保守模型）
+  延迟怎么算（NLDM，min/max 两个角）
   ---------------------------------------------------------------------
-  一根弧的延迟 = 查表(输入摆率, 输出负载)。Liberty 给了上升/下降两张表，
-  当前数据传播按 max/min 角度保留到达时间和转换时间，并使用 Liberty 的 rise/fall
-  表参与弧延迟计算。每个起点时钟分别传播一次 arrival。
+  一根弧的延迟 = 查表(输入摆率, 输出负载)，上升/下降各一张表。max 角和
+  min 角各自保留到达时间与摆率，并按角选库（set_operating_conditions
+  指定的库；里面缺的单元或弧退回默认库）。
 
   当前模型不包含信号完整性、多电压和 CCS/ECSM。
 
@@ -156,7 +160,7 @@ typedef struct MstaTiming {
     char   *pfClockOfNet;      /* [nClocks * nNets] 该时钟树里有没有这根网络 */
     int     fIdealClocks;      /* 1 = 不做时钟传播，所有 FF 时钟脚都当 0 */
     /* set_ideal_network：显式标过的网络 + 沿组合扇出传下来的相同属性。
-       理想网络不累计延迟（模型说明见 PropagateClocks 上方）。 */
+       理想网络不累计延迟（模型说明见 msta_timing.c 的 MarkIdealNets 上方）。 */
     char   *pfIdealNet;        /* [nNets] */
 
     /* 数据到达 */
@@ -166,7 +170,7 @@ typedef struct MstaTiming {
     int     nPathExclude;
     MstaClockPair vClockPairs[MSTA_MAX_CLOCK_PAIRS];
     int     nClockPairs;
-    int     LaunchClockTag, CaptureClockTag; /* 当前候选标签，-1=辅助合并查询 */
+    int     LaunchClockTag, CaptureClockTag; /* 当前只看哪个时钟源边沿：0=fall，1=rise；-1=两种都看、取最差 */
 
     int    *pTopoOrder;        /* [nNets] 拓扑序：网络编号的数组 */
     int     nTopoOrder;
@@ -176,7 +180,7 @@ typedef struct MstaTiming {
 
     /* 统计 */
     int     nRegisters;
-    int     nLatches;         /* 端点里有几个是锁存器 */
+    int     nLatches;         /* 锁存器实例个数（nRegisters 是其余时序单元实例数） */
     int     nEndpoints;
     int     nUnconstrainedEnds;
     /* 设计规则检查（只有 SDC 里设了限制才有意义） */
@@ -206,7 +210,7 @@ typedef struct MstaTiming {
 MstaTiming *Msta_TimingStart( MstaDesign *pDes, MstaLib *pLib, MstaSdc *pSdc );
 void        Msta_TimingFree( MstaTiming *p );
 
-/* 完整一遍分析：建端点 -> 时钟传播 -> 拓扑序 -> 前向到达 -> 检查。 */
+/* 完整一遍分析，步骤 1-7 见文件头的"分析流程"。 */
 int         Msta_TimingAnalyze( MstaTiming *p, int fVerbose );
 
 /* ---- 查询：报告层只用这些 ---- */

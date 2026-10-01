@@ -4,11 +4,12 @@
 
   Synopsis    [Liberty 语义层：把语法树变成 STA 能用的 cell/pin/arc/表。]
 
-  本文件分四段，按调用顺序读：
+  本文件分五段：
     A. 数值与表的解析（Liberty 文本 -> MstaTable）
     B. 一个 cell 的解析（pin / timing() / ff() / latch()）
-    C. 寄存器检查项的归并（setup/hold/clk2q 三者挂到一起）
-    D. 对外查询接口 + NLDM 双线性插值
+    C. 把散落的 timing 组归并成寄存器检查项（setup/hold/clk2q 挂到一起）
+    D. 库级解析入口（单位、工作条件、Msta_LibRead）
+    E. 查询接口（含 NLDM 双线性插值、report_lib 打印）
 
   Liberty 的语法树解析器来自 ABC 的 sclLiberty（见 abc_scl_liberty_tree.inc
   的文件头与 THIRD_PARTY_NOTICES.md），本文件其余部分是 STA 语义层。
@@ -203,8 +204,8 @@ static int Msta_LibReadTable( Scl_Tree_t *pTree, Scl_Item_t *pItem,
     pRow = Msta_LibFitAxis( pRow, nRowAxis, nRow );
     pCol = Msta_LibFitAxis( pCol, nColAxis, nCol );
 
-    /* 单位换算：行轴是摆率(ps)，列轴是负载(fF)，表值要么是延迟要么是
-       setup/hold 时间，都是时间量纲。 */
+    /* 单位换算：轴是摆率还是负载看模板标志（默认行=摆率，列=负载）；
+       表值要么是延迟要么是 setup/hold 时间，都是时间量纲。 */
     snprintf( pOut->sTag, sizeof(pOut->sTag), "%s", pTagName );
     {
         MstaTemplate *pT = Msta_LibFindTemplate( pTemplates, Scl_LibertyItemName(pTree, pItem) );
@@ -228,7 +229,7 @@ static int Msta_LibReadTable( Scl_Tree_t *pTree, Scl_Item_t *pItem,
 }
 
 /* =====================================================================
-   B/C. 一个 cell 的解析
+   B. 一个 cell 的解析
    ===================================================================== */
 
 static void Msta_LibCellFinish( MstaCell *pCell );
@@ -307,7 +308,6 @@ static void Msta_LibReadPin( Scl_Tree_t *pTree, Scl_Item_t *pPin,
     Scl_Item_t *pItem;
     MstaPin *pNew;
 
-    /* 电源脚（pg_pin）不会以 pin 形式出现，但 VGND 有时也写成 pin：不参与时序。 */
     pNew = MstaPinArrayAppend( &pCell->vPins );
     pNew->Name    = Msta_NameTableId( Msta_Names(), pName );
     pNew->Dir     = MSTA_DIR_NO;
@@ -374,7 +374,8 @@ static void Msta_LibReadStore( Scl_Tree_t *pTree, Scl_Item_t *pStore, MstaCell *
         pItem = Scl_LibertyFindChild( pTree, pStore, "enable" );
     if ( pItem == NULL )
         return;
-    /* 用 pin 的 fClock 位记下 "这是时钟脚"。多个时钟脚（双边沿）就都标上。 */
+    /* 用 pin 的 fClock 位记下 "这是时钟脚"。clocked_on 的值整串当一个脚名匹配，
+       写成 "!CK" 或多脚表达式时这里匹配不到任何脚。 */
     {
         MstaId Name = Msta_NameTableId( Msta_Names(), Scl_LibertyItemName(pTree, pItem) );
         int i;
@@ -502,7 +503,8 @@ static void Msta_LibReadCell( Scl_Tree_t *pTree, Scl_Item_t *pCellItem,
     Scl_ItemForEachChildName( pTree, pCellItem, pChild, "latch" )
         Msta_LibReadStore( pTree, pChild, pCell, 0 );
 
-    /* 电源单元（只有 VDD/VSS 脚）没有任何时序信息，标掉免得网表里出现时报错。 */
+    /* 电源单元（只有 VDD/VSS 脚）没有任何时序信息，标掉免得网表里出现时报错。
+       电源脚通常写在 pg_pin 里（这里不读），但有的库把 VGND 等也写成 pin，所以按名字认。 */
     {
         int fOnlyPower = pCell->vPins.nSize > 0;
         for ( i = 0; i < pCell->vPins.nSize; i++ )
@@ -1059,8 +1061,6 @@ int Msta_CellPinIndexOf( MstaCell *pCell, MstaId NameId )
     return -1;
 }
 
-/* 组合弧查找：同一个 (in,out) 可能有多条（不同 timing_type），
-   寄存器单元里 in->out 的边沿弧不算组合弧，除非这个单元不是 FF。 */
 /* Liberty function 的小型布尔求值器。只在侧输入已有 case/常量值时用于时钟弧裁剪；
    未识别的语法或过多自由变量回退声明的 timing_sense，保持保守。 */
 typedef struct {
@@ -1183,6 +1183,8 @@ int Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char 
            : Negative ? MSTA_SENSE_NEGATIVE : -1;
 }
 
+/* 组合弧查找：同一个 (in,out) 可能有多条（不同 timing_type），
+   FF 单元里只认 combinational 弧；非 FF 单元取第一条匹配的。 */
 MstaArc *Msta_CellCombArc( MstaCell *pCell, MstaId InPin, MstaId OutPin )
 {
     int i;
@@ -1209,7 +1211,8 @@ MstaArc *Msta_CellArcById( MstaCell *pCell, MstaId ArcId )
 /* ---------------------------------------------------------------------
    NLDM 插值：和 ABC sclLib.h:Scl_LibLookup 同一算法
    ---------------------------------------------------------------------
-   1) 轴上定位：找到 x 落在 [x_i, x_{i+1}] 的区间，算出权重；越界 clamp 到端点。
+   1) 轴上定位：找到 x 落在 [x_i, x_{i+1}] 的区间，算出权重；越界时用端点区间线性外插
+      （权重超出 [0,1]）。
    2) 双线性：四个角点加权。
    退化情况：1x1 表直接返回；只有一行/一列时退化为线性插值。 */
 static int Msta_TableAxisFind( const double *pAxis, int n, double x, double *pfWeight, const char *pWhat )
