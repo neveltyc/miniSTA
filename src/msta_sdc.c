@@ -349,8 +349,11 @@ typedef enum {
                               带值写了多次时取最后一个 */
     MSTA_SDC_RF_VALUE,     /* 带一个值，并且认 -rise_/-fall_ 前缀的变体：表里写 -from，
                               -rise_from / -fall_from 也算它，同时记下边沿 'r' / 'f' */
-    MSTA_SDC_GROUP         /* 可以重复的对象组，如 -group：每出现一次开一个新组，
+    MSTA_SDC_GROUP,        /* 可以重复的对象组，如 -group：每出现一次开一个新组，
                               后面的对象名都归入这个组（只用于顺序模式） */
+    MSTA_SDC_RF_LIST       /* 带一串对象，如 -through a b c：一直取到下一个以 - 开头的词
+                              为止，一个都没有算缺值；认 -rise_/-fall_ 前缀的变体；
+                              每次出现都按顺序记下来（只用于顺序模式） */
 } MstaSdcOptKind;
 
 /* 选项表的一行。表以 pName == NULL 的一行结尾。 */
@@ -386,9 +389,15 @@ typedef struct {
     int          *pMemberGroup;/* 它们属于第几组（从 1 数） */
     int           nMembers;
     int           nGroups;     /* 一共开了几个组 */
+    int          *pListOpt;    /* MSTA_SDC_RF_LIST 选项的每次出现，按顺序：选项表下标、 */
+    char         *pListEdge;   /*   边沿（'r' / 'f' / 0）、 */
+    int          *pListBeg;    /*   对象在 argv 里的范围 [Beg, End)，选项词本身在 Beg-1 */
+    int          *pListEnd;
+    int           nLists;
     int           iBad;        /* 第一个"长得像选项却没被认领"的词的下标：不认识的
                                   选项，或没取到值的选项。0 = 没有。要不要为此告警
                                   由各条命令自己决定 */
+    int           fBadNoValue; /* 顺序模式：iBad 处是认得的选项，只是后面没有值 */
 } MstaSdcCmd;
 
 /* 命令的处理函数：拿解析结果做语义——查对象、换算单位、写模型。 */
@@ -416,14 +425,14 @@ static int Msta_SdcLooksLikeOption( const char *pWord )
     return pWord[0] == '-' && !Msta_SdcIsNumber( pWord );
 }
 
-/* pWord 是不是选项 pOpt：RF_VALUE 选项还认 -rise_/-fall_ 前缀的变体，
+/* pWord 是不是选项 pOpt：RF_VALUE / RF_LIST 选项还认 -rise_/-fall_ 前缀的变体，
    边沿写进 *pEdge（不带前缀写 0）。 */
 static int Msta_SdcWordIsOpt( const char *pWord, const MstaSdcOpt *pOpt, char *pEdge )
 {
     *pEdge = 0;
     if ( !strcmp( pWord, pOpt->pName ) )
         return 1;
-    if ( pOpt->Kind != MSTA_SDC_RF_VALUE )
+    if ( pOpt->Kind != MSTA_SDC_RF_VALUE && pOpt->Kind != MSTA_SDC_RF_LIST )
         return 0;
     /* 选项名去掉开头的 '-' 再接到前缀后面：-from -> -rise_from */
     if ( !strncmp( pWord, "-rise_", 6 ) && !strcmp( pWord + 6, pOpt->pName + 1 ) )
@@ -482,7 +491,7 @@ static void Msta_SdcParseScan( MstaSdcCmd *pCmd )
             }
         }
         else
-            assert( Kind == MSTA_SDC_RF_VALUE );    /* 下面一起处理；扫描模式没有组 */
+            assert( Kind == MSTA_SDC_RF_VALUE );    /* 下面一起处理；组和对象串只用于顺序模式 */
     }
     /* RF_VALUE 选项（-from/-to 及其 -rise_/-fall_ 变体）一起从左往右读：紧跟的下一个词
        不管长什么样都是值，读过的值不再当选项看；同一选项写多次时最后一次算数。 */
@@ -517,9 +526,9 @@ static void Msta_SdcParseScan( MstaSdcCmd *pCmd )
     }
 }
 
-/* 顺序模式。从左到右读：选项按种类吃掉自己的值；不认识的、以 - 开头的词
-   让解析停下（记在 iBad）；其余的词在出现过组选项之后归入最近的组，
-   之前的是位置参数。 */
+/* 顺序模式。从左到右读：选项按种类吃掉自己的值；不认识的、以 - 开头的词，
+   或者缺值的选项，让解析停下（记在 iBad）；其余的词在出现过组选项之后归入
+   最近的组，之前的是位置参数。 */
 static void Msta_SdcParseOrdered( MstaSdcCmd *pCmd )
 {
     int argc = pCmd->argc, i, k;
@@ -538,7 +547,28 @@ static void Msta_SdcParseOrdered( MstaSdcCmd *pCmd )
             if ( fTakesValue && i + 1 >= argc )     /* 选项在末尾、没有值 */
             {
                 pCmd->iBad = i;
+                pCmd->fBadNoValue = 1;
                 return;
+            }
+            if ( Kind == MSTA_SDC_RF_LIST )
+            {
+                int j = i + 1;
+                while ( j < argc && argv[j][0] != '-' )  /* 对象一直取到下一个选项词 */
+                    j++;
+                if ( j == i + 1 )                       /* 一个对象都没有 */
+                {
+                    pCmd->iBad = i;
+                    pCmd->fBadNoValue = 1;
+                    return;
+                }
+                Msta_SdcCmdSeen( pCmd, k, i );
+                pCmd->pListOpt[pCmd->nLists]  = k;
+                pCmd->pListEdge[pCmd->nLists] = Edge;
+                pCmd->pListBeg[pCmd->nLists]  = i + 1;
+                pCmd->pListEnd[pCmd->nLists]  = j;
+                pCmd->nLists++;
+                i = j - 1;                              /* 跳过这串对象 */
+                continue;
             }
             Msta_SdcCmdSeen( pCmd, k, i );
             if ( Kind == MSTA_SDC_GROUP )
@@ -591,6 +621,10 @@ static void Msta_SdcParseCmd( const MstaSdcCmdDef *pDef, int argc, char **argv, 
     pCmd->ppMember     = (char **)Msta_SdcArenaZeros( argc, sizeof(char *) );
     pCmd->pMemberAt    = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
     pCmd->pMemberGroup = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    pCmd->pListOpt     = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    pCmd->pListEdge    = (char *)Msta_SdcArenaZeros( argc, sizeof(char) );
+    pCmd->pListBeg     = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    pCmd->pListEnd     = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
     if ( pDef->Mode == MSTA_SDC_SCAN )
         Msta_SdcParseScan( pCmd );
     else if ( pDef->Mode == MSTA_SDC_ORDERED )
@@ -712,6 +746,106 @@ static int Msta_SdcPosNets( MstaDesign *pDes, const MstaSdcCmd *pCmd, int iFirst
         Msta_SdcResolveNetsInto( pDes, pCmd->ppPos[i], &vNets );
     *ppNets = (int *)Msta_SdcArenaKeep( vNets.pData );
     return vNets.nSize;
+}
+
+/* 公共子语法：路径描述。路径类命令（set_false_path、set_multicycle_path、
+   set_max_delay、set_min_delay、group_path）共用的 -from / -through / -to 三段，
+   在选项表里写成三个 MSTA_SDC_RF_LIST 选项，所以 -rise_from、-fall_through 这类
+   带边沿的写法也认。Tcl 桥已经把这些选项后面的列表拆成了多个词。
+   - -from / -to 写多次时最后一次算数；
+   - 每个 -through 是一组可以互相替代的对象（组内取"或"），多个 -through 按路径上
+     的先后顺序依次经过。 */
+typedef struct {
+    char         **ppFrom;     /* -from 的对象名（指向 argv），nFrom 个；没写时为 0 个 */
+    int            nFrom;
+    char           FromRF;     /* -rise_from 记 'r'，-fall_from 记 'f'，否则 0 */
+    char         **ppTo;
+    int            nTo;
+    char           ToRF;
+    MstaThruObject Thru[MSTA_SDC_MAX_THRU];  /* 每个 -through 先放一个分组分隔条目，
+                                               再放这一组的对象 */
+    int            nThru;
+} MstaSdcPath;
+
+/* 从解析结果里取出路径描述。-through 的条目总数超过 MSTA_SDC_MAX_THRU 时停下，
+   返回那个 -through 在 argv 里的下标（不告警，见 Msta_SdcPathSyntaxError）；
+   正常返回 0。 */
+static int Msta_SdcGetPath( const MstaSdcCmd *pCmd, MstaSdcPath *pPath )
+{
+    int l, k;
+    memset( pPath, 0, sizeof(MstaSdcPath) );
+    for ( l = 0; l < pCmd->nLists; l++ )
+    {
+        const char *pName = pCmd->pOpts[ pCmd->pListOpt[l] ].pName;
+        int Beg = pCmd->pListBeg[l], End = pCmd->pListEnd[l];
+        char Edge = pCmd->pListEdge[l];
+        if ( !strcmp( pName, "-from" ) )
+        {
+            pPath->ppFrom = pCmd->argv + Beg;
+            pPath->nFrom  = End - Beg;
+            pPath->FromRF = Edge;
+        }
+        else if ( !strcmp( pName, "-to" ) )
+        {
+            pPath->ppTo = pCmd->argv + Beg;
+            pPath->nTo  = End - Beg;
+            pPath->ToRF = Edge;
+        }
+        else
+        {
+            assert( !strcmp( pName, "-through" ) );
+            if ( pPath->nThru + 1 + ( End - Beg ) > MSTA_SDC_MAX_THRU )
+                return Beg - 1;
+            pPath->Thru[pPath->nThru].Text = MSTA_NO_ID;      /* 新的一组从分隔条目开始 */
+            pPath->Thru[pPath->nThru].Kind = MSTA_SDC_THRU_SEP;
+            pPath->Thru[pPath->nThru].RF   = 0;
+            pPath->nThru++;
+            for ( k = Beg; k < End; k++ )
+            {
+                pPath->Thru[pPath->nThru].Text = Msta_NameId( pCmd->argv[k] );
+                pPath->Thru[pPath->nThru].Kind = Msta_SdcKindOf( pCmd->argv[k] );
+                pPath->Thru[pPath->nThru].RF   = Edge;
+                pPath->nThru++;
+            }
+        }
+    }
+    return 0;
+}
+
+/* 路径类命令的语法错误。iThruOver 是 Msta_SdcGetPath 的返回值。
+   解析在第一个错误处就停了，记下的 -through 都在它前面，所以 -through 超限
+   （如果有）总是最早的错误。返回：
+   0 = 没有错；
+   1 = -through 超限，或路径选项后面一个对象都没有（这两种在这里告警）；
+   2 = 不认识的选项（argv[iBad]），由调用方按自己的措辞告警；
+   3 = 其他带值选项缺值（argv[iBad]），由调用方处理。 */
+static int Msta_SdcPathSyntaxError( const MstaSdcCmd *pCmd, int iThruOver )
+{
+    const char *pWord;
+    char Edge;
+    int k;
+    if ( iThruOver > 0 )
+    {
+        Msta_WarnOnce("path exception has more than %d -through objects; constraint rejected",
+                      MSTA_SDC_MAX_THRU);
+        return 1;
+    }
+    if ( pCmd->iBad == 0 )
+        return 0;
+    if ( !pCmd->fBadNoValue )
+        return 2;
+    /* 缺值的是哪个选项：路径选项（对象串）就是"空集合" */
+    pWord = pCmd->argv[pCmd->iBad];
+    for ( k = 0; pCmd->pOpts[k].pName; k++ )
+        if ( Msta_SdcWordIsOpt( pWord, &pCmd->pOpts[k], &Edge ) )
+            break;
+    if ( pCmd->pOpts[k].Kind == MSTA_SDC_RF_LIST )
+    {
+        Msta_WarnOnce("path exception option \"%s\" has an empty collection; constraint rejected",
+                      pWord);
+        return 1;
+    }
+    return 3;
 }
 
 /* 把 set_units 的值用到后面命令的数值上。 */
@@ -1910,33 +2044,73 @@ void Msta_SdcOpCondInfo( MstaSdc *p, MstaLib *pLib, int fMax,
     }
 }
 
-/* set_data_check [-from A] [-to B] [-setup|-hold] [-clock C] margin：
-   两条数据路径之间的检查，-from 是参照。两个对象都解析成网络。 */
-static void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, int argc, char **argv )
-{
-    MstaSdcArgs A;
-    char **pRest = Msta_SdcArgBuffer( argc );
-    const char *pFrom, *pTo;
-    char FromRF = 0, ToRF = 0;
-    int nRest, *pFromNets, *pToNets, nFromCount, nToCount;
-    MstaDataCheck *pCheck;
-    Msta_SdcArgsStart( &A, argc );
+/* set_data_check -from|-rise_from|-fall_from A -to|-rise_to|-fall_to B
+       [-setup|-hold] [-clock C] margin
+   两条数据路径之间的检查，-from 是参照。两个对象都解析成网络。
+   -clock 读入但不使用；-rise/-fall 不建模。 */
+static const MstaSdcOpt s_vDataCheckOpts[] = {
+    { "-from",      MSTA_SDC_VALUE },
+    { "-rise_from", MSTA_SDC_VALUE },
+    { "-fall_from", MSTA_SDC_VALUE },
+    { "-to",        MSTA_SDC_VALUE },
+    { "-rise_to",   MSTA_SDC_VALUE },
+    { "-fall_to",   MSTA_SDC_VALUE },
+    { "-clock",     MSTA_SDC_VALUE },
+    { "-setup",     MSTA_SDC_FLAG  },
+    { "-hold",      MSTA_SDC_FLAG  },
+    { "-rise",      MSTA_SDC_FLAG  },
+    { "-fall",      MSTA_SDC_FLAG  },
+    { NULL,         MSTA_SDC_FLAG  } };
 
-    pFrom = Msta_SdcValueOf( argc, argv, &A, "-from" );
-    pTo   = Msta_SdcValueOf( argc, argv, &A, "-to" );
-    if ( pFrom == NULL && ( pFrom = Msta_SdcValueOf(argc,argv,&A,"-rise_from") ) != NULL )
-        FromRF = 'r';
-    if ( pFrom == NULL && ( pFrom = Msta_SdcValueOf(argc,argv,&A,"-fall_from") ) != NULL )
-    {   FromRF = 'f';  }
-    if ( pTo == NULL && ( pTo = Msta_SdcValueOf(argc,argv,&A,"-rise_to") ) != NULL )
-        ToRF = 'r';
-    if ( pTo == NULL && ( pTo = Msta_SdcValueOf(argc,argv,&A,"-fall_to") ) != NULL )
-        ToRF = 'f';
-    Msta_SdcValueOf( argc, argv, &A, "-clock" );   /* 检查时钟读入但不使用 */
+/* -from 的三种写法只采用一个：-from 优先，其次 -rise_from，再次 -fall_from（-to 同理）。
+   采用的写法和边沿写进 *ppValue / *pEdge。没被采用、但写了值的写法，它的值不算
+   选项值，要和位置参数一起参与"第一个位置参数是余量"的判断：这里把这些值在 argv
+   里的下标记进 pLeftAt[]，返回个数。 */
+static int Msta_SdcDataCheckEnd( const MstaSdcCmd *pCmd, const char *pPlain, const char *pRise,
+                                 const char *pFall, const char **ppValue, char *pEdge, int *pLeftAt )
+{
+    const char *pNames[3];
+    char Edges[3] = { 0, 'r', 'f' };
+    int i, nLeft = 0;
+    pNames[0] = pPlain; pNames[1] = pRise; pNames[2] = pFall;
+    *ppValue = NULL;
+    *pEdge = 0;
+    for ( i = 0; i < 3; i++ )
+    {
+        const char *pValue = Msta_SdcOptValue( pCmd, pNames[i] );
+        if ( pValue == NULL )
+            continue;
+        if ( *ppValue == NULL )
+        {
+            *ppValue = pValue;
+            *pEdge = Edges[i];
+        }
+        else if ( pValue[0] != 0 )          /* 空串不算位置参数 */
+            pLeftAt[nLeft++] = Msta_SdcOptAt( pCmd, pNames[i] ) + 1;
+    }
+    return nLeft;
+}
+
+static void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    const char *pFrom, *pTo, *pMargin = NULL;
+    char FromRF, ToRF;
+    int vLeftAt[4], nLeft, i, iMargin;
+    int *pFromNets, *pToNets, nFromCount, nToCount;
+    MstaDataCheck *pCheck;
+
+    nLeft  = Msta_SdcDataCheckEnd( pCmd, "-from", "-rise_from", "-fall_from", &pFrom, &FromRF, vLeftAt );
+    nLeft += Msta_SdcDataCheckEnd( pCmd, "-to", "-rise_to", "-fall_to", &pTo, &ToRF, vLeftAt + nLeft );
     if ( pFrom == NULL || pTo == NULL )
     { Msta_WarnOnce("set_data_check needs -from and -to"); return; }
-    nRest = Msta_SdcRest( argc, argv, &A, pRest, argc );
-    if ( nRest < 1 || !Msta_SdcIsNumber(pRest[0]) )
+    /* 余量是 argv 里最靠前的那个位置参数（含上面退回来的值）。 */
+    iMargin = pCmd->nPos > 0 ? pCmd->pPosAt[0] : 0;
+    for ( i = 0; i < nLeft; i++ )
+        if ( iMargin == 0 || vLeftAt[i] < iMargin )
+            iMargin = vLeftAt[i];
+    if ( iMargin > 0 )
+        pMargin = pCmd->argv[iMargin];
+    if ( pMargin == NULL || !Msta_SdcIsNumber(pMargin) )
     { Msta_WarnOnce("set_data_check needs a numeric margin"); return; }
     nFromCount = Msta_SdcResolveNets( pDes, pFrom, &pFromNets );
     nToCount   = Msta_SdcResolveNets( pDes, pTo,   &pToNets );
@@ -1949,13 +2123,13 @@ static void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, int argc, char *
     pCheck->ToText   = Msta_NameId( pTo );
     pCheck->FromRF = FromRF;
     pCheck->ToRF   = ToRF;
-    pCheck->fSetup = Msta_SdcTakeFlag( argc, argv, &A, "-setup" );
-    pCheck->fHold  = Msta_SdcTakeFlag( argc, argv, &A, "-hold" );
-    if ( Msta_SdcTakeFlag(argc,argv,&A,"-rise") || Msta_SdcTakeFlag(argc,argv,&A,"-fall") )
+    pCheck->fSetup = Msta_SdcHasFlag( pCmd, "-setup" );
+    pCheck->fHold  = Msta_SdcHasFlag( pCmd, "-hold" );
+    if ( Msta_SdcHasFlag( pCmd, "-rise" ) || Msta_SdcHasFlag( pCmd, "-fall" ) )
         Msta_WarnOnce("set_data_check: -rise/-fall are not modeled" );
     if ( !pCheck->fSetup && !pCheck->fHold )
         pCheck->fSetup = pCheck->fHold = 1;         /* 不写 -setup/-hold 时两个角都查 */
-    pCheck->Value = Msta_SdcToPs( p, pRest[0] );
+    pCheck->Value = Msta_SdcToPs( p, pMargin );
 }
 
 int Msta_SdcDataCheckCount( MstaSdc *p )
@@ -2426,91 +2600,29 @@ static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     }
 }
 
-/* 路径例外共用的选项解析结果：-from/-to 集合、-through 分组和边沿限定。 */
-typedef struct {
-    int  iFromBeg, iFromEnd, iToBeg, iToEnd;
-    char FromRF, ToRF;
-    MstaThruObject Thru[MSTA_SDC_MAX_THRU];
-    int  nThru;
-} MstaSdcPathArgs;
-
-/* 解析 -from/-rise_from/-fall_from/-to/-rise_to/-fall_to/-through 这类集合选项。
-   返回 1 成功；0 表示选项本身不支持，-1 表示集合为空或 -through 超限（已告警），
-   两者调用方都丢弃这条约束。 */
-static int Msta_SdcPathCollection( int argc, char **argv, int *pi, MstaSdcPathArgs *pA )
-{
-    const char *pKey = argv[*pi];
-    int fFrom = 0, fTo = 0, fThrough = 0, Beg, k;
-    char RF = 0;
-
-    if      ( !strcmp(pKey,"-from") )         fFrom = 1;
-    else if ( !strcmp(pKey,"-rise_from") )  { fFrom = 1; RF = 'r'; }
-    else if ( !strcmp(pKey,"-fall_from") )  { fFrom = 1; RF = 'f'; }
-    else if ( !strcmp(pKey,"-to") )           fTo = 1;
-    else if ( !strcmp(pKey,"-rise_to") )    { fTo = 1; RF = 'r'; }
-    else if ( !strcmp(pKey,"-fall_to") )    { fTo = 1; RF = 'f'; }
-    else if ( !strcmp(pKey,"-through") )      fThrough = 1;
-    else if ( !strcmp(pKey,"-rise_through") ) { fThrough = 1; RF = 'r'; }
-    else if ( !strcmp(pKey,"-fall_through") ) { fThrough = 1; RF = 'f'; }
-    else return 0;
-
-    Beg = *pi + 1;
-    while ( *pi + 1 < argc && argv[*pi+1][0] != '-' ) (*pi)++;
-    if ( Beg == *pi + 1 )
-    {
-        Msta_WarnOnce("path exception option \"%s\" has an empty collection; constraint rejected",pKey);
-        return -1;
-    }
-    if ( fFrom ) { pA->iFromBeg = Beg; pA->iFromEnd = *pi + 1; pA->FromRF = RF; }
-    else if ( fTo ) { pA->iToBeg = Beg; pA->iToEnd = *pi + 1; pA->ToRF = RF; }
-    else if ( fThrough )
-    {
-        /* 一个 -through 是一组可以互相替代的对象；多个 -through 之间按路径顺序匹配。 */
-        if ( pA->nThru + 1 + (*pi + 1 - Beg) > MSTA_SDC_MAX_THRU )
-        {
-            Msta_WarnOnce("path exception has more than %d -through objects; constraint rejected",
-                          MSTA_SDC_MAX_THRU);
-            return -1;
-        }
-        pA->Thru[pA->nThru].Text = MSTA_NO_ID;
-        pA->Thru[pA->nThru].Kind = MSTA_SDC_THRU_SEP;
-        pA->Thru[pA->nThru].RF   = 0;
-        pA->nThru++;
-        for ( k = Beg; k <= *pi; k++ )
-        {
-            pA->Thru[pA->nThru].Text = Msta_NameId(argv[k]);
-            pA->Thru[pA->nThru].Kind = Msta_SdcKindOf(argv[k]);
-            pA->Thru[pA->nThru].RF   = RF;
-            pA->nThru++;
-        }
-    }
-    return 1;
-}
-
-/* 把解析出的 -from/-to/-through 组合写进例外表：from 与 to 取笛卡尔积。 */
-static void Msta_SdcAddPathExceptions( MstaSdc *p, MstaSdcPathArgs *pA,
-                                       char **pArgv, int fFalse,
+/* 把路径描述写进例外表：-from 与 -to 的对象取笛卡尔积，每一对一条记录；
+   没写 -from（或 -to）时那一端不限定。 */
+static void Msta_SdcAddPathExceptions( MstaSdc *p, const MstaSdcPath *pPath, int fFalse,
                                        int fSetup, int fHold, int nCycles,
                                        int fMaxDelay, int fMinDelay, double Delay )
 {
+    int nFrom = pPath->nFrom > 0 ? pPath->nFrom : 1;
+    int nTo   = pPath->nTo   > 0 ? pPath->nTo   : 1;
     int j, k;
-    int iFromBeg = pA->iFromBeg, iToBeg = pA->iToBeg;
-    if ( iFromBeg < 0 ) iFromBeg = pA->iFromEnd = 0;
-    if ( iToBeg < 0 ) iToBeg = pA->iToEnd = 0;
-    for ( j = iFromBeg; j < (pA->iFromEnd > iFromBeg ? pA->iFromEnd : iFromBeg + 1); j++ )
-        for ( k = iToBeg; k < (pA->iToEnd > iToBeg ? pA->iToEnd : iToBeg + 1); k++ )
+    for ( j = 0; j < nFrom; j++ )
+        for ( k = 0; k < nTo; k++ )
         {
             MstaException *pEx = MstaExceptionArrayAppend(&p->vExceptions);
-            const char *pFrom = j ? pArgv[j] : NULL;
-            const char *pTo = k ? pArgv[k] : NULL;
+            const char *pFrom = pPath->nFrom > 0 ? pPath->ppFrom[j] : NULL;
+            const char *pTo   = pPath->nTo   > 0 ? pPath->ppTo[k]   : NULL;
             pEx->FromText = pFrom ? Msta_NameId(pFrom) : MSTA_NO_ID;
             pEx->ToText = pTo ? Msta_NameId(pTo) : MSTA_NO_ID;
             pEx->FromKind = pFrom ? Msta_SdcKindOf(pFrom) : 0;
             pEx->ToKind = pTo ? Msta_SdcKindOf(pTo) : 0;
-            pEx->FromRF = pA->FromRF;
-            pEx->ToRF = pA->ToRF;
-            memcpy( pEx->Thru, pA->Thru, sizeof(pA->Thru) );
-            pEx->nThru = pA->nThru;
+            pEx->FromRF = pPath->FromRF;
+            pEx->ToRF = pPath->ToRF;
+            memcpy( pEx->Thru, pPath->Thru, sizeof(pPath->Thru) );
+            pEx->nThru = pPath->nThru;
             pEx->nSetupCycles = nCycles;
             /* 只在写了 -hold 时用（fApplyHold）：这时命令里的数字 M 不是周期数，
                而是 hold 沿从（由 setup 推出的）默认位置往回拉的拍数。 */
@@ -2524,116 +2636,153 @@ static void Msta_SdcAddPathExceptions( MstaSdc *p, MstaSdcPathArgs *pA,
         }
 }
 
-/* set_false_path / set_multicycle_path：-from/-to/-through 集合 + 周期数。 */
-static void Msta_SdcSetException( MstaSdc *p, int fFalse, int argc, char **argv )
+/* set_false_path / set_multicycle_path [-setup] [-hold] [-rise|-fall]
+       [-from|-rise_from|-fall_from 对象...] [-through|-rise_through|-fall_through 对象...]...
+       [-to|-rise_to|-fall_to 对象...] [周期数]
+   顺序模式：路径选项后面的对象一直取到下一个以 - 开头的词；不认识的选项
+   （包括 -1 这样的负数）让整条作废。set_multicycle_path 取第一个数值位置参数
+   当周期数，其余不是对象的词忽略。 */
+static const MstaSdcOpt s_vPathExceptionOpts[] = {
+    { "-setup",   MSTA_SDC_FLAG    },
+    { "-hold",    MSTA_SDC_FLAG    },
+    { "-rise",    MSTA_SDC_FLAG    },
+    { "-fall",    MSTA_SDC_FLAG    },
+    { "-from",    MSTA_SDC_RF_LIST },
+    { "-through", MSTA_SDC_RF_LIST },
+    { "-to",      MSTA_SDC_RF_LIST },
+    { NULL,       MSTA_SDC_FLAG    } };
+
+static void Msta_SdcSetException( MstaSdc *p, int fFalse, MstaSdcCmd *pCmd )
 {
-    MstaSdcPathArgs A;
-    int i, fSetup = 0, fHold = 0, fRise = 0, fFall = 0, nCycles = 1, fHaveCycles = 0;
-    memset( &A, 0, sizeof(A) );
-    A.iFromBeg = A.iToBeg = -1;
-    for ( i = 1; i < argc; i++ )
+    int fRise = Msta_SdcHasFlag( pCmd, "-rise" );
+    int fFall = Msta_SdcHasFlag( pCmd, "-fall" );
+    int nCycles = 1, nErr, i;
+    MstaSdcPath Path;
+
+    nErr = Msta_SdcPathSyntaxError( pCmd, Msta_SdcGetPath( pCmd, &Path ) );
+    if ( nErr == 2 )
     {
-        int n = 0;
-        if ( !strcmp(argv[i],"-setup") ) { fSetup = 1; continue; }
-        if ( !strcmp(argv[i],"-hold") )  { fHold  = 1; continue; }
-        if ( !strcmp(argv[i],"-rise") )  { fRise  = 1; continue; }
-        if ( !strcmp(argv[i],"-fall") )  { fFall  = 1; continue; }
-        if ( argv[i][0] != '-' )
-        {
-            if ( !fFalse && !fHaveCycles && Msta_SdcIsNumber(argv[i]) )
-            { nCycles = atoi(argv[i]); fHaveCycles = 1; }
-            continue;
-        }
-        n = Msta_SdcPathCollection( argc, argv, &i, &A );
-        if ( n < 0 ) return;
-        if ( n == 0 )
-        {
-            Msta_WarnOnce("path exception option \"%s\" is not modeled; constraint rejected",argv[i]);
-            p->nCommandsIgnored++;
-            return;
-        }
+        Msta_WarnOnce("path exception option \"%s\" is not modeled; constraint rejected",
+                      pCmd->argv[pCmd->iBad]);
+        p->nCommandsIgnored++;
     }
+    if ( nErr != 0 )
+        return;
+    for ( i = 0; !fFalse && i < pCmd->nPos; i++ )
+        if ( Msta_SdcIsNumber( pCmd->ppPos[i] ) )
+        {
+            nCycles = atoi( pCmd->ppPos[i] );
+            break;
+        }
     if ( fRise && fFall )
     { Msta_WarnOnce("path exception cannot combine -rise and -fall; constraint rejected"); return; }
     /* 裸 -rise/-fall 是 -to 点的边沿限定。 */
-    if ( ( fRise || fFall ) && A.ToRF == 0 ) A.ToRF = fRise ? 'r' : 'f';
+    if ( ( fRise || fFall ) && Path.ToRF == 0 ) Path.ToRF = fRise ? 'r' : 'f';
     if ( !fFalse && nCycles < 1 )
     { Msta_WarnOnce("set_multicycle_path needs a positive cycle count"); return; }
-    Msta_SdcAddPathExceptions( p, &A, argv, fFalse, fSetup, fHold, nCycles, 0, 0, 0.0 );
+    Msta_SdcAddPathExceptions( p, &Path, fFalse, Msta_SdcHasFlag( pCmd, "-setup" ),
+                               Msta_SdcHasFlag( pCmd, "-hold" ), nCycles, 0, 0, 0.0 );
 }
 
-/* set_max_delay / set_min_delay：-from/-to/-through 集合 + 预算值。 */
-static void Msta_SdcSetPathDelay( MstaSdc *p, int fMax, int argc, char **argv )
+static void Msta_SdcSetFalsePath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    MstaSdcPathArgs A;
-    int i, n;
+    Msta_SdcSetException( p, 1, pCmd );
+}
+
+static void Msta_SdcSetMulticyclePath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    Msta_SdcSetException( p, 0, pCmd );
+}
+
+/* set_max_delay / set_min_delay [路径选项...] 延迟
+   路径选项同 set_false_path；延迟取最后一个数值位置参数。-setup/-hold/-rise/-fall
+   这些选项不认，整条作废。 */
+static const MstaSdcOpt s_vPathDelayOpts[] = {
+    { "-from",    MSTA_SDC_RF_LIST },
+    { "-through", MSTA_SDC_RF_LIST },
+    { "-to",      MSTA_SDC_RF_LIST },
+    { NULL,       MSTA_SDC_FLAG    } };
+
+static void Msta_SdcSetPathDelay( MstaSdc *p, int fMax, MstaSdcCmd *pCmd )
+{
     double Delay = MSTA_UNSET;
-    memset( &A, 0, sizeof(A) );
-    A.iFromBeg = A.iToBeg = -1;
-    for ( i = 1; i < argc; i++ )
+    int nErr, i;
+    MstaSdcPath Path;
+
+    nErr = Msta_SdcPathSyntaxError( pCmd, Msta_SdcGetPath( pCmd, &Path ) );
+    if ( nErr == 2 )
     {
-        if ( argv[i][0] != '-' )
-        {
-            if ( Msta_SdcIsNumber(argv[i]) ) Delay = Msta_SdcToPs(p,argv[i]);
-            continue;
-        }
-        n = Msta_SdcPathCollection( argc, argv, &i, &A );
-        if ( n < 0 ) return;
-        if ( n == 0 )
-        {
-            Msta_WarnOnce("set_%s_delay option \"%s\" is not modeled; constraint rejected",
-                          fMax ? "max" : "min", argv[i]);
-            p->nCommandsIgnored++;
-            return;
-        }
+        Msta_WarnOnce("set_%s_delay option \"%s\" is not modeled; constraint rejected",
+                      fMax ? "max" : "min", pCmd->argv[pCmd->iBad]);
+        p->nCommandsIgnored++;
     }
+    if ( nErr != 0 )
+        return;
+    for ( i = 0; i < pCmd->nPos; i++ )
+        if ( Msta_SdcIsNumber( pCmd->ppPos[i] ) )
+            Delay = Msta_SdcToPs( p, pCmd->ppPos[i] );
     if ( !Msta_IsSet(Delay) )
     { Msta_WarnOnce("set_%s_delay needs a numeric delay",fMax ? "max" : "min"); return; }
-    Msta_SdcAddPathExceptions( p, &A, argv, 0, 0, 0, 1, fMax, !fMax, Delay );
+    Msta_SdcAddPathExceptions( p, &Path, 0, 0, 0, 1, fMax, !fMax, Delay );
 }
 
-/* group_path：把命中的路径归到一个分组里，报告按组统计 WNS/TNS。
-   分组不影响 slack；-weight 只记录并在报告里显示，不参与 WNS/TNS 等数字的计算。
-   -name 与 -default 互斥；两个都没写、或 -from/-to/-through 全空的分组没有意义。 */
-static void Msta_SdcGroupPath( MstaSdc *p, int argc, char **argv )
+static void Msta_SdcSetMaxDelay( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    MstaSdcPathArgs A;
+    Msta_SdcSetPathDelay( p, 1, pCmd );
+}
+
+static void Msta_SdcSetMinDelay( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    Msta_SdcSetPathDelay( p, 0, pCmd );
+}
+
+/* group_path -name 组名 | -default [-weight 权重] [-critical_range 值] [路径选项...]
+   把命中的路径归到一个分组里，报告按组统计 WNS/TNS。
+   分组不影响 slack；-weight 只记录并在报告里显示，不参与 WNS/TNS 等数字的计算。
+   -name 与 -default 互斥；两个都没写的分组没有意义。-critical_range 不建模，
+   它的值照样吃掉；不是对象的词忽略。 */
+static const MstaSdcOpt s_vGroupPathOpts[] = {
+    { "-default",        MSTA_SDC_FLAG      },
+    { "-name",           MSTA_SDC_VALUE_RAW },
+    { "-weight",         MSTA_SDC_VALUE_RAW },
+    { "-critical_range", MSTA_SDC_VALUE_RAW },
+    { "-from",           MSTA_SDC_RF_LIST   },
+    { "-through",        MSTA_SDC_RF_LIST   },
+    { "-to",             MSTA_SDC_RF_LIST   },
+    { NULL,              MSTA_SDC_FLAG      } };
+
+static void Msta_SdcGroupPath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    const char *pName   = Msta_SdcOptValue( pCmd, "-name" );
+    const char *pWeight = Msta_SdcOptValue( pCmd, "-weight" );
+    int fDefault = Msta_SdcHasFlag( pCmd, "-default" );
+    int iThruOver, iErr, iCrit, nErr;
     MstaPathGroup *pGroup;
-    const char *pName = NULL, *pWeight = NULL;
-    int i, n, fDefault = 0;
-    memset( &A, 0, sizeof(A) );
-    A.iFromBeg = A.iToBeg = -1;
-    for ( i = 1; i < argc; i++ )
+    MstaSdcPath Path;
+
+    iThruOver = Msta_SdcGetPath( pCmd, &Path );
+    /* 这条命令按从左到右的顺序生效：-critical_range 的告警只在它出现于第一个
+       语法错误之前时才给。写在末尾、后面没有值的 -critical_range 不算错，
+       照样只告警。 */
+    iErr  = iThruOver > 0 ? iThruOver : pCmd->iBad;
+    iCrit = Msta_SdcOptAt( pCmd, "-critical_range" );
+    if ( iCrit == 0 && iErr > 0 && !strcmp( pCmd->argv[iErr], "-critical_range" ) )
+        iCrit = iErr;
+    if ( iCrit > 0 && ( iErr == 0 || iCrit <= iErr ) )
+        Msta_WarnOnce("group_path -critical_range is not modeled; the group takes every matching path");
+    nErr = Msta_SdcPathSyntaxError( pCmd, iThruOver );
+    if ( nErr == 1 )
+        return;
+    if ( nErr == 2 )
     {
-        if ( !strcmp(argv[i],"-default") ) { fDefault = 1; continue; }
-        if ( !strcmp(argv[i],"-name") )
-        {
-            if ( i + 1 >= argc ) { Msta_WarnOnce("group_path -name needs a group name"); return; }
-            pName = argv[++i];
-            continue;
-        }
-        if ( !strcmp(argv[i],"-weight") )
-        {
-            if ( i + 1 >= argc ) { Msta_WarnOnce("group_path -weight needs a number"); return; }
-            pWeight = argv[++i];
-            continue;
-        }
-        if ( !strcmp(argv[i],"-critical_range") )
-        {
-            if ( i + 1 < argc ) i++;
-            Msta_WarnOnce("group_path -critical_range is not modeled; the group takes every matching path");
-            continue;
-        }
-        if ( argv[i][0] != '-' ) continue;
-        n = Msta_SdcPathCollection( argc, argv, &i, &A );
-        if ( n < 0 ) return;
-        if ( n == 0 )
-        {
-            Msta_WarnOnce("group_path option \"%s\" is not modeled; group rejected", argv[i]);
-            p->nCommandsIgnored++;
-            return;
-        }
+        Msta_WarnOnce("group_path option \"%s\" is not modeled; group rejected", pCmd->argv[pCmd->iBad]);
+        p->nCommandsIgnored++;
+        return;
     }
+    if ( nErr == 3 && !strcmp( pCmd->argv[pCmd->iBad], "-name" ) )
+    { Msta_WarnOnce("group_path -name needs a group name"); return; }
+    if ( nErr == 3 && !strcmp( pCmd->argv[pCmd->iBad], "-weight" ) )
+    { Msta_WarnOnce("group_path -weight needs a number"); return; }
     if ( fDefault && pName != NULL )
     {
         Msta_WarnOnce("group_path -name and -default are mutually exclusive; group rejected");
@@ -2644,19 +2793,17 @@ static void Msta_SdcGroupPath( MstaSdc *p, int argc, char **argv )
         Msta_WarnOnce("group_path needs -name or -default; group rejected");
         return;
     }
-    /* 不写 -from/-to/-through 就是"所有路径"（-default 常这么用）。 */
-    /* -from/-to 的多个对象按笛卡尔积摊成多条记录，名字与权重相同（与例外一致）。 */
+    /* 不写 -from/-to/-through 就是"所有路径"（-default 常这么用）。
+       -from/-to 的多个对象按笛卡尔积摊成多条记录，名字与权重相同（与例外一致）。 */
     {
-        int iFromBeg = A.iFromBeg, iToBeg = A.iToBeg, j, k;
-        int iFromEnd = ( A.iFromBeg >= 0 ) ? A.iFromEnd : 0;
-        int iToEnd   = ( A.iToBeg   >= 0 ) ? A.iToEnd   : 0;
-        if ( A.iFromBeg < 0 ) iFromBeg = iFromEnd = 0;
-        if ( A.iToBeg   < 0 ) iToBeg   = iToEnd   = 0;
-        for ( j = iFromBeg; j < ( iFromEnd > iFromBeg ? iFromEnd : iFromBeg + 1 ); j++ )
-            for ( k = iToBeg; k < ( iToEnd > iToBeg ? iToEnd : iToBeg + 1 ); k++ )
+        int nFrom = Path.nFrom > 0 ? Path.nFrom : 1;
+        int nTo   = Path.nTo   > 0 ? Path.nTo   : 1;
+        int j, k;
+        for ( j = 0; j < nFrom; j++ )
+            for ( k = 0; k < nTo; k++ )
             {
-                const char *pFrom = j ? argv[j] : NULL;
-                const char *pTo   = k ? argv[k] : NULL;
+                const char *pFrom = Path.nFrom > 0 ? Path.ppFrom[j] : NULL;
+                const char *pTo   = Path.nTo   > 0 ? Path.ppTo[k]   : NULL;
                 if ( pWeight != NULL && !Msta_SdcIsNumber(pWeight) )
                 {
                     Msta_WarnOnce( "group_path -weight \"%s\" is not a number; using 1.0", pWeight );
@@ -2670,87 +2817,112 @@ static void Msta_SdcGroupPath( MstaSdc *p, int argc, char **argv )
                 pGroup->ToText  = pTo   ? Msta_NameId(pTo)   : MSTA_NO_ID;
                 pGroup->FromKind= pFrom ? Msta_SdcKindOf(pFrom) : 0;
                 pGroup->ToKind  = pTo   ? Msta_SdcKindOf(pTo)   : 0;
-                pGroup->FromRF  = A.FromRF;
-                pGroup->ToRF    = A.ToRF;
-                memcpy( pGroup->Thru, A.Thru, sizeof(A.Thru) );
-                pGroup->nThru   = A.nThru;
+                pGroup->FromRF  = Path.FromRF;
+                pGroup->ToRF    = Path.ToRF;
+                memcpy( pGroup->Thru, Path.Thru, sizeof(Path.Thru) );
+                pGroup->nThru   = Path.nThru;
             }
     }
 }
 
-/* set_max_time_borrow：锁存器 D 脚允许比使能脚关闭沿晚到多久。
-   不写对象列表就是所有锁存器的默认值（手册里对象列表是必写的，这里放宽）。 */
-static void Msta_SdcSetMaxTimeBorrow( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
-                                      int argc, char **argv )
+/* 把一个对象名展开成实例：先当实例名找，找不到再当库单元名，取用到这个单元的
+   所有实例。找不到时返回 0 个（调用方告警）。实例号写进 *pvInsts。 */
+static int Msta_SdcInstsOfName( MstaDesign *pDes, MstaLib *pLib, const char *pName,
+                                MstaSdcIntArray *pvInsts )
 {
-    MstaSdcArgs A;
-    char **pRest = Msta_SdcArgBuffer( argc );
-    int nRest, i;
-    double Value = MSTA_UNSET;
-    Msta_SdcArgsStart( &A, argc );
-    nRest = Msta_SdcRest( argc, argv, &A, pRest, argc );
-    if ( nRest == 0 || !Msta_SdcIsNumber(pRest[0]) )
+    int nInst = Msta_DesignFindInstByName( pDes, pName ), k;
+    MstaCell *pCell;
+    pvInsts->nSize = 0;
+    if ( nInst >= 0 )
+    {
+        *MstaSdcIntArrayAppend( pvInsts ) = nInst;
+        return 1;
+    }
+    pCell = Msta_LibFindCell( pLib, pName );
+    if ( pCell == NULL )
+        return -1;
+    for ( k = 0; k < pDes->vInsts.nSize; k++ )
+        if ( MstaInstArrayAt(&pDes->vInsts,k)->pCell == pCell )
+            *MstaSdcIntArrayAppend( pvInsts ) = k;
+    return pvInsts->nSize;
+}
+
+/* set_max_time_borrow 延迟 [锁存器实例或库单元...]
+   锁存器 D 脚允许比使能脚关闭沿晚到多久。不写对象列表就是所有锁存器的默认值
+   （手册里对象列表是必写的，这里放宽）。 */
+static const MstaSdcOpt s_vMaxTimeBorrowOpts[] = {
+    { NULL, MSTA_SDC_FLAG } };
+
+static void Msta_SdcSetMaxTimeBorrow( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    MstaSdcIntArray vInsts;
+    MstaBorrowSdc *pRec;
+    double Value;
+    int i, k;
+    if ( pCmd->nPos == 0 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
     { Msta_WarnOnce("set_max_time_borrow needs a numeric delay and latch objects"); return; }
-    Value = Msta_SdcToPs( p, pRest[0] );
+    Value = Msta_SdcToPs( p, pCmd->ppPos[0] );
     if ( Value < 0.0 )
     { Msta_WarnOnce("set_max_time_borrow needs a non-negative delay"); return; }
-    if ( nRest == 1 )
+    if ( pCmd->nPos == 1 )
     {
-        MstaBorrowSdc *pRec = MstaBorrowSdcArrayAppend( &p->vBorrow );
+        pRec = MstaBorrowSdcArrayAppend( &p->vBorrow );
         pRec->Inst = -1;
         pRec->Value = Value;
         return;
     }
-    for ( i = 1; i < nRest; i++ )
+    MstaSdcIntArrayInit( &vInsts );
+    for ( i = 1; i < pCmd->nPos; i++ )
     {
-        int nInst = Msta_DesignFindInstByName( pDes, pRest[i] );
-        MstaBorrowSdc *pRec;
-        if ( nInst < 0 )
+        if ( Msta_SdcInstsOfName( pDes, pLib, pCmd->ppPos[i], &vInsts ) < 0 )
+        { Msta_WarnOnce("set_max_time_borrow: unknown cell \"%s\"", pCmd->ppPos[i]); continue; }
+        for ( k = 0; k < vInsts.nSize; k++ )
         {
-            MstaCell *pCell = Msta_LibFindCell( pLib, pRest[i] );
-            int k;
-            if ( pCell == NULL )
-            { Msta_WarnOnce("set_max_time_borrow: unknown cell \"%s\"", pRest[i]); continue; }
-            for ( k = 0; k < pDes->vInsts.nSize; k++ )
-                if ( MstaInstArrayAt(&pDes->vInsts,k)->pCell == pCell )
-                {
-                    pRec = MstaBorrowSdcArrayAppend( &p->vBorrow );
-                    pRec->Inst = k;
-                    pRec->Value = Value;
-                }
-            continue;
+            pRec = MstaBorrowSdcArrayAppend( &p->vBorrow );
+            pRec->Inst = vInsts.pData[k];
+            pRec->Value = Value;
         }
-        pRec = MstaBorrowSdcArrayAppend( &p->vBorrow );
-        pRec->Inst = nInst;
-        pRec->Value = Value;
     }
+    MstaSdcIntArrayFree( &vInsts );
 }
 
-/* set_clock_gating_check：门控单元使能脚相对时钟脚的 setup/hold 值。
+/* set_clock_gating_check [-setup 值] [-hold 值] [-rise|-fall|-high|-low] [门控实例或库单元...]
+   门控单元使能脚相对时钟脚的 setup/hold 值。
    没有对象列表时作为全局默认；带对象列表时按实例（或库单元名）覆盖。
    -rise/-fall/-high/-low 认下来，但检查对象仍按库里声明的有效沿（不一致时告警）。 */
-static void Msta_SdcSetClockGatingCheck( MstaSdc *p, MstaDesign *pDes,
-                                         MstaLib *pLib, int argc, char **argv )
+static const MstaSdcOpt s_vClockGatingCheckOpts[] = {
+    { "-setup", MSTA_SDC_VALUE },
+    { "-hold",  MSTA_SDC_VALUE },
+    { "-rise",  MSTA_SDC_FLAG  },
+    { "-fall",  MSTA_SDC_FLAG  },
+    { "-high",  MSTA_SDC_FLAG  },
+    { "-low",   MSTA_SDC_FLAG  },
+    { NULL,     MSTA_SDC_FLAG  } };
+
+/* 新建一条门控检查记录。 */
+static void Msta_SdcAddClockGating( MstaSdc *p, int nInst, double Setup, double Hold )
 {
-    MstaSdcArgs A;
-    const char *pSetup, *pHold;
-    MstaClockGatingSdc *pRec;
+    MstaClockGatingSdc *pRec = MstaClockGatingSdcArrayAppend( &p->vClockGating );
+    pRec->Inst  = nInst;
+    pRec->Setup = Setup;
+    pRec->Hold  = Hold;
+    pRec->fRise = pRec->fFall = pRec->fHigh = pRec->fLow = 0;
+}
+
+static void Msta_SdcSetClockGatingCheck( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    static const char *pEdgeFlags[] = { "-rise", "-fall", "-high", "-low", NULL };
+    const char *pSetup = Msta_SdcOptValue( pCmd, "-setup" );
+    const char *pHold  = Msta_SdcOptValue( pCmd, "-hold" );
     double Setup = MSTA_UNSET, Hold = MSTA_UNSET;
-    int i;
-    Msta_SdcArgsStart( &A, argc );
-    pSetup = Msta_SdcValueOf(argc,argv,&A,"-setup");
-    pHold  = Msta_SdcValueOf(argc,argv,&A,"-hold");
-    for ( i = 1; i < argc; i++ )
-    {
-        if ( A.Used[i] ) continue;
-        if ( !strcmp(argv[i],"-rise") || !strcmp(argv[i],"-fall") ||
-             !strcmp(argv[i],"-high") || !strcmp(argv[i],"-low") )
-        {
-            A.Used[i] = 1;
-            Msta_WarnOnce( "set_clock_gating_check %s is not modeled; the check "
-                           "always uses the edge the library declares", argv[i] );
-        }
-    }
+    MstaSdcIntArray vInsts;
+    int i, k;
+    /* 这几个开关按在命令里第一次出现的先后告警。 */
+    for ( i = 1; i < pCmd->argc; i++ )
+        for ( k = 0; pEdgeFlags[k]; k++ )
+            if ( Msta_SdcOptAt( pCmd, pEdgeFlags[k] ) == i )
+                Msta_WarnOnce( "set_clock_gating_check %s is not modeled; the check "
+                               "always uses the edge the library declares", pEdgeFlags[k] );
     if ( pSetup != NULL )
     {
         if ( !Msta_SdcIsNumber(pSetup) )
@@ -2765,50 +2937,24 @@ static void Msta_SdcSetClockGatingCheck( MstaSdc *p, MstaDesign *pDes,
     }
     if ( !Msta_IsSet(Setup) && !Msta_IsSet(Hold) )
     { Msta_WarnOnce("set_clock_gating_check needs -setup and/or -hold"); return; }
-
     /* 没写对象列表 = 全局默认（手册里的 object_list 可以省略）。 */
+    if ( pCmd->nPos == 0 )
     {
-        char **pRest = Msta_SdcArgBuffer( argc );
-        int nRest = Msta_SdcRest( argc, argv, &A, pRest, argc );
-        if ( nRest == 0 )
-        {
-            pRec = MstaClockGatingSdcArrayAppend( &p->vClockGating );
-            pRec->Inst  = -1;
-            pRec->Setup = Setup;
-            pRec->Hold  = Hold;
-            pRec->fRise = pRec->fFall = pRec->fHigh = pRec->fLow = 0;
-            return;
-        }
-        for ( i = 0; i < nRest; i++ )
-        {
-            int nInst = Msta_DesignFindInstByName( pDes, pRest[i] );
-            if ( nInst < 0 )
-            {
-                MstaCell *pCell = Msta_LibFindCell( pLib, pRest[i] );
-                int k;
-                if ( pCell == NULL )
-                {
-                    Msta_WarnOnce( "set_clock_gating_check: unknown cell \"%s\"", pRest[i] );
-                    continue;
-                }
-                for ( k = 0; k < pDes->vInsts.nSize; k++ )
-                    if ( MstaInstArrayAt(&pDes->vInsts,k)->pCell == pCell )
-                    {
-                        pRec = MstaClockGatingSdcArrayAppend( &p->vClockGating );
-                        pRec->Inst  = k;
-                        pRec->Setup = Setup;
-                        pRec->Hold  = Hold;
-                        pRec->fRise = pRec->fFall = pRec->fHigh = pRec->fLow = 0;
-                    }
-                continue;
-            }
-            pRec = MstaClockGatingSdcArrayAppend( &p->vClockGating );
-            pRec->Inst  = nInst;
-            pRec->Setup = Setup;
-            pRec->Hold  = Hold;
-            pRec->fRise = pRec->fFall = pRec->fHigh = pRec->fLow = 0;
-        }
+        Msta_SdcAddClockGating( p, -1, Setup, Hold );
+        return;
     }
+    MstaSdcIntArrayInit( &vInsts );
+    for ( i = 0; i < pCmd->nPos; i++ )
+    {
+        if ( Msta_SdcInstsOfName( pDes, pLib, pCmd->ppPos[i], &vInsts ) < 0 )
+        {
+            Msta_WarnOnce( "set_clock_gating_check: unknown cell \"%s\"", pCmd->ppPos[i] );
+            continue;
+        }
+        for ( k = 0; k < vInsts.nSize; k++ )
+            Msta_SdcAddClockGating( p, vInsts.pData[k], Setup, Hold );
+    }
+    MstaSdcIntArrayFree( &vInsts );
 }
 
 /* set_case_analysis 0|1 对象列表
@@ -3949,6 +4095,14 @@ static const MstaSdcCmdDef s_vSdcCommands[] = {
     { "set_logic_one",          MSTA_SDC_WORDS,   s_vLogicOpts,            Msta_SdcSetLogicOne          },
     { "set_logic_dc",           MSTA_SDC_WORDS,   s_vLogicOpts,            Msta_SdcSetLogicDc           },
     { "set_disable_timing",     MSTA_SDC_SCAN,    s_vDisableTimingOpts,    Msta_SdcSetDisableTiming     },
+    { "set_false_path",         MSTA_SDC_ORDERED, s_vPathExceptionOpts,    Msta_SdcSetFalsePath         },
+    { "set_multicycle_path",    MSTA_SDC_ORDERED, s_vPathExceptionOpts,    Msta_SdcSetMulticyclePath    },
+    { "set_max_delay",          MSTA_SDC_ORDERED, s_vPathDelayOpts,        Msta_SdcSetMaxDelay          },
+    { "set_min_delay",          MSTA_SDC_ORDERED, s_vPathDelayOpts,        Msta_SdcSetMinDelay          },
+    { "group_path",             MSTA_SDC_ORDERED, s_vGroupPathOpts,        Msta_SdcGroupPath            },
+    { "set_data_check",         MSTA_SDC_SCAN,    s_vDataCheckOpts,        Msta_SdcSetDataCheck         },
+    { "set_clock_gating_check", MSTA_SDC_SCAN,    s_vClockGatingCheckOpts, Msta_SdcSetClockGatingCheck  },
+    { "set_max_time_borrow",    MSTA_SDC_SCAN,    s_vMaxTimeBorrowOpts,    Msta_SdcSetMaxTimeBorrow     },
     { NULL,                     MSTA_SDC_SCAN,    NULL,                    NULL                         } };
 
 static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
@@ -3967,20 +4121,12 @@ static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc
             return 1;
         }
     /* 其余命令还没有选项表，由各自的函数直接解析 argv。 */
-    if      ( !strcmp(pCmd, "set_false_path") )        p->nCommandsRead++, Msta_SdcSetException( p, 1, argc, argv );
-    else if ( !strcmp(pCmd, "set_multicycle_path") )   p->nCommandsRead++, Msta_SdcSetException( p, 0, argc, argv );
-    else if ( !strcmp(pCmd, "set_max_delay") )         p->nCommandsRead++, Msta_SdcSetPathDelay( p, 1, argc, argv );
-    else if ( !strcmp(pCmd, "set_min_delay") )         p->nCommandsRead++, Msta_SdcSetPathDelay( p, 0, argc, argv );
-    else if ( !strcmp(pCmd, "set_timing_derate") )     p->nCommandsRead++, Msta_SdcSetTimingDerate( p, pDes, argc, argv );
+    if      ( !strcmp(pCmd, "set_timing_derate") )     p->nCommandsRead++, Msta_SdcSetTimingDerate( p, pDes, argc, argv );
     else if ( !strcmp(pCmd, "set_max_transition") )    p->nCommandsRead++, Msta_SdcSetDrcLimit( p, pDes, pLib, 0, argc, argv );
     else if ( !strcmp(pCmd, "set_max_fanout") )        p->nCommandsRead++, Msta_SdcSetDrcLimit( p, pDes, pLib, 1, argc, argv );
     else if ( !strcmp(pCmd, "set_max_capacitance") )   p->nCommandsRead++, Msta_SdcSetDrcLimit( p, pDes, pLib, 2, argc, argv );
     else if ( !strcmp(pCmd, "set_min_capacitance") )   p->nCommandsRead++, Msta_SdcSetDrcLimit( p, pDes, pLib, 3, argc, argv );
     else if ( !strcmp(pCmd, "set_max_area") )          p->nCommandsRead++, Msta_SdcSetMaxArea( p, argc, argv );
-    else if ( !strcmp(pCmd, "set_data_check") )        p->nCommandsRead++, Msta_SdcSetDataCheck( p, pDes, argc, argv );
-    else if ( !strcmp(pCmd, "group_path") )            p->nCommandsRead++, Msta_SdcGroupPath( p, argc, argv );
-    else if ( !strcmp(pCmd, "set_clock_gating_check") ) p->nCommandsRead++, Msta_SdcSetClockGatingCheck( p, pDes, pLib, argc, argv );
-    else if ( !strcmp(pCmd, "set_max_time_borrow") )   p->nCommandsRead++, Msta_SdcSetMaxTimeBorrow( p, pDes, pLib, argc, argv );
     else if ( !strcmp(pCmd, "set_operating_conditions") ) p->nCommandsRead++, Msta_SdcSetOperatingConditions( p, pLib, argc, argv );
     else if ( !strcmp(pCmd, "set_voltage") )           p->nCommandsRead++, Msta_SdcSetVoltage( p, pDes, pLib, argc, argv );
     else if ( !strcmp(pCmd, "set_units") )             p->nCommandsRead++, Msta_SdcSetUnits( p, argc, argv );
