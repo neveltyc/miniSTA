@@ -952,7 +952,7 @@ static void Msta_SdcSetPropagatedClock( MstaSdc *p, int argc, char **argv )
     for ( i = 1; i < argc; i++ )
     {
         MstaClock *pClock = Msta_SdcFindClock(p,argv[i]);
-        if ( pClock ) pClock->fPropagated = 1;
+        if ( pClock ) pClock->fPropagated = pClock->fPropagatedSet = 1;
         else Msta_WarnOnce("set_propagated_clock: unknown clock \"%s\"",argv[i]);
     }
 }

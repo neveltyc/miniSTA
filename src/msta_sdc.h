@@ -46,6 +46,7 @@ typedef struct {
     double SourceLatency[2][2], NetworkLatency[2][2]; /* [min/max][fall/rise] */
     double Slew[2][2];        /* set_clock_transition，未设为 MSTA_UNSET */
     int    fPropagated;
+    int    fPropagatedSet;    /* 用户显式写了 set_propagated_clock；fPropagated 默认就是 1，靠它区分 */
     MstaId MasterClock;      /* generated clock 的主时钟名；普通时钟为 -1 */
     int    SourceNet;         /* create_clock 挂在哪个全局网络上；-1 是虚拟时钟 */
     MstaId SourceText;        /* 原始写法，报错时回显 */

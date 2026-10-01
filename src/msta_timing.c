@@ -811,9 +811,19 @@ static void PropagateClocks( MstaTiming *p )
                     {
                         double InputSlew = pCons ? (m ? (s ? pCons->InputSlewMaxRise : pCons->InputSlewMaxFall)
                                                                    : (s ? pCons->InputSlewMinRise : pCons->InputSlewMinFall)) : MSTA_UNSET;
-                        double Slew = pClock->fPropagated && Msta_IsSet(InputSlew) ? InputSlew : pClock->Slew[m][s];
-                        if ( !Msta_IsSet(Slew) ) Slew = InputSlew;
-                        pArr->Slew[m][e][s] = Msta_IsSet(Slew) ? Slew : MSTA_DEFAULT_SLEW;
+                        /* 时钟源 slew 按 SDC 语义取值（与 OpenSTA 一致）：理想时钟只看
+                           set_clock_transition，传播时钟只看源端口的 set_input_transition，没给就是 0。
+                           miniSTA 对没写 set_propagated_clock 的时钟也做传播，而 SDC 里它本应是理想时钟，
+                           所以两种约束都可能是用户想要的源 slew：先取输入 slew，再取时钟 slew。 */
+                        double ClkSlew = pClock->Slew[m][s], Slew;
+                        if ( !pClock->fPropagated || p->fIdealClocks )
+                            Slew = Msta_IsSet(ClkSlew) ? ClkSlew : 0.0;
+                        else if ( pClock->fPropagatedSet )
+                            Slew = Msta_IsSet(InputSlew) ? InputSlew : 0.0;
+                        else
+                            Slew = Msta_IsSet(InputSlew) ? InputSlew
+                                 : Msta_IsSet(ClkSlew)   ? ClkSlew : MSTA_DEFAULT_SLEW;
+                        pArr->Slew[m][e][s] = Slew;
                         pArr->Arrival[m][e][s] = m ? -MSTA_NO_TIME : MSTA_NO_TIME;
                         if ( NetHasClock(p,c,n) && (n == pClock->SourceNet || !pClock->fPropagated || p->fIdealClocks)
                              && (pArr->Polarity == 0 || s == EffectiveClkRises(p,c,n,e)) )

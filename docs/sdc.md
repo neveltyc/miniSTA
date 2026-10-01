@@ -39,7 +39,7 @@ get_nets -filter {fanout > 1}
 | --- | --- |
 | `create_clock` | `-period`、`-name`、`-waveform`、`-add` |
 | `create_generated_clock` | `-divide_by`、`-multiply_by`、`-invert`、`-duty_cycle`、`-edges`、`-edge_shift` |
-| `set_clock_latency`、`set_clock_transition` | 时钟延迟和源转换时间；支持 max/min 与 rise/fall 限定 |
+| `set_clock_latency`、`set_clock_transition` | 时钟延迟和源转换时间；支持 max/min 与 rise/fall 限定。`set_clock_transition` 只作用于理想时钟，显式传播时钟的源 slew 取端口 `set_input_transition`，未给出时均为 0 |
 | `set_propagated_clock` | 标记传播时钟 |
 | `set_clock_sense` | `-positive`、`-negative`、`-stop_propagation`、`-clock` |
 | `set_ideal_network`、`set_ideal_latency`、`set_ideal_transition` | 理想网络及其延迟、转换时间 |

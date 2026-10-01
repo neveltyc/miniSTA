@@ -1,0 +1,6 @@
+read_liberty slew.lib
+read_verilog capture.v
+current_design capture
+read_sdc propagated_zero_slew.sdc
+report_checks -setup
+report_checks -hold

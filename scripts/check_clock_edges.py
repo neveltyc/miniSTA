@@ -22,7 +22,9 @@ expected = {
     'generated_ideal': (6.1, -1.5), 'generated_ideal_net': (7.1, -2.5),
     'generated_ideal_qn': (6.8, -2.2), 'generated_disable': (4.2, .6),
     'zero_output': (6.2, -1.4), 'launch_disable': (math.inf, math.inf),
-    'ideal_edges': (4.3, -.4), 'reference_pin': (2.1, 2.5),
+    'ideal_edges': (4.3, -.4), 'reference_pin': (2.2, 2.6),
+    'propagated_zero_slew': (3, -.6),
+    'ideal_no_clock_slew': (3.2, -.4),
 }
 
 def close(actual, expected, tolerance):

@@ -208,16 +208,18 @@ fi
 grep -Fq 'setup : WNS    3.599 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"
 
 # 理想网络（set_ideal_network）：不累计延迟。同一张网表的对照——4 级缓冲的时钟树
-# 插入延迟 0.594 ns，把时钟端口标成理想网络后整棵树都是 0，-no_propagate 只去掉
-# ct2 那一级（0.453 ns）。三个用例的 slack 差就是时钟偏差被去掉的那部分。
-grep -Fq '时钟树：网络 5 根，算出插入延迟的 5 根，最深 4 级缓冲，最大插入延迟 0.594 ns' \
+# 插入延迟 0.584 ns，把时钟端口标成理想网络后整棵树都是 0，-no_propagate 只去掉
+# ct2 那一级（0.442 ns）。三个用例的 slack 差就是时钟偏差被去掉的那部分。
+# 时钟端口没有 set_input_transition，传播时钟源 slew 按 SDC 取 0；
+# 基准用例与 OpenSTA 的 8.671794 / -0.316440 一致。
+grep -Fq '时钟树：网络 5 根，算出插入延迟的 5 根，最深 4 级缓冲，最大插入延迟 0.584 ns' \
     "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
-grep -Fq 'setup : WNS    8.668 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
-grep -Fq 'hold  : WNS   -0.317 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
+grep -Fq 'setup : WNS    8.672 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
+grep -Fq 'hold  : WNS   -0.316 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
 grep -Fq '最大插入延迟 0.000 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
-grep -Fq 'setup : WNS    8.812 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
-grep -Fq 'hold  : WNS    0.000 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
-grep -Fq '最大插入延迟 0.453 ns' "${LOG}/testcases_sdc_features_ideal_network_noprop.dofile.log"
+grep -Fq 'setup : WNS    8.813 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
+grep -Fq 'hold  : WNS   -0.003 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
+grep -Fq '最大插入延迟 0.442 ns' "${LOG}/testcases_sdc_features_ideal_network_noprop.dofile.log"
 grep -Fq 'hold  : WNS   -0.177 ns' "${LOG}/testcases_sdc_features_ideal_network_noprop.dofile.log"
 # set_ideal_latency / set_ideal_transition：理想网络上的延迟与摆率取给定值。
 grep -Fq '最大插入延迟 0.500 ns' "${LOG}/testcases_sdc_features_ideal_network_value.dofile.log"
@@ -271,20 +273,20 @@ fi
 
 # set_clock_sense：时钟路径上的反相器自动把 FF 的有效沿取反（捕捉沿落到 fall
 # 沿 10.0），-positive 把它强制回 rise 沿，-stop_propagation 让时钟不再往下传。
-grep -Fq '最深 2 级缓冲，最大插入延迟 0.180 ns' \
+grep -Fq '最深 2 级缓冲，最大插入延迟 0.170 ns' \
     "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-# 输入延迟参照的出发沿是时钟 rise（0），捕捉沿是反相后的 fall（10.180）；
-# hold 取不晚于出发沿的那个捕捉沿（-9.820），slack 与 OpenSTA 的 9.831018 相差约 0.012 ns。
-grep -Fq 'capture clock: clk @ 10.180 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-grep -Fq 'capture clock: clk @ -9.820 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-grep -Fq 'setup : WNS    8.656 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-grep -Fq 'hold  : WNS    9.819 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-# -positive：捕捉沿回到 20.180，slack 差一个半周期（10 ns）。
-grep -Fq 'capture clock: clk @ 20.180 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
-grep -Fq 'setup : WNS   18.656 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
+# 输入延迟参照的出发沿是时钟 rise（0），捕捉沿是反相后的 fall（10.168）；
+# hold 取不晚于出发沿的那个捕捉沿（-9.832），slack 与 OpenSTA 的 8.667742 / 9.831018 一致。
+grep -Fq 'capture clock: clk @ 10.168 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+grep -Fq 'capture clock: clk @ -9.832 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+grep -Fq 'setup : WNS    8.668 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+grep -Fq 'hold  : WNS    9.831 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+# -positive：捕捉沿回到 20.168，slack 差一个半周期（10 ns）。
+grep -Fq 'capture clock: clk @ 20.168 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
+grep -Fq 'setup : WNS   18.668 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
 # -stop_propagation：时钟停在反相器输出，后面那级网络不再算插入延迟，
 # 下面的 FF 没有时钟可用（端点算未约束，和 OpenSTA 的 "No paths" 一致）。
-grep -Fq '时钟树：网络 3 根，算出插入延迟的 2 根，最深 1 级缓冲，最大插入延迟 0.045 ns' \
+grep -Fq '时钟树：网络 3 根，算出插入延迟的 2 根，最深 1 级缓冲，最大插入延迟 0.035 ns' \
     "${LOG}/testcases_sdc_features_clock_sense_stop.dofile.log"
 grep -Fq '寄存器 1 个   端点 2 个   未约束 2 个' \
     "${LOG}/testcases_sdc_features_clock_sense_stop.dofile.log"
@@ -362,8 +364,8 @@ printf 'set_ideal_network -no_propagation [get_pins ct2/Y]\n' > "${LOG}/compat_i
     > "${LOG}/compat_ideal_network.log" 2>&1
 grep -Fq 'set_ideal_network -no_propagation is not SDC 1.8 syntax; honored as -no_propagate' \
     "${LOG}/compat_ideal_network.log"
-# 认下来之后行为与 -no_propagate 一致（0.453 ns）；如果被丢掉会是整棵树的 0.594 ns。
-grep -Fq '最大插入延迟 0.453 ns' "${LOG}/compat_ideal_network.log"
+# 认下来之后行为与 -no_propagate 一致（0.442 ns）；如果被丢掉会是整棵树的 0.584 ns。
+grep -Fq '最大插入延迟 0.442 ns' "${LOG}/compat_ideal_network.log"
 
 # 从 RTL 综合出的 sky130 网表有 39 个异步复位 FF，hold 角由复位释放路径上的
 # removal 检查主导。
