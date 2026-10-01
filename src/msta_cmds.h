@@ -29,7 +29,6 @@ typedef struct {
     struct MstaTiming *pTime;
     FILE              *pOut;      /* 报告输出，默认 stdout */
     int                fQuiet;    /* 少打印 */
-    int                fVerbose;  /* 多打印内部细节 */
 } MstaApp;
 
 MstaApp *Msta_AppStart( void );

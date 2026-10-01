@@ -34,8 +34,6 @@
 #include <assert.h>
 
 #define MSTA_NO_ID      (-1)
-#define MSTA_PI_ID      (-2)   /* 虚拟节点: 所有输入端口的公共起点 */
-#define MSTA_PO_ID      (-3)   /* 虚拟节点: 所有输出端口的公共终点 */
 
 typedef int             MstaId; /* 数组下标式的对象编号 */
 typedef double          MstaTime;
@@ -47,15 +45,18 @@ typedef double          MstaCap;
    约定：元素永远值拷贝存放，销毁数组即销毁元素本身；
    元素里指向的堆内存（如 char * 字符串）要由调用方先释放。
    --------------------------------------------------------------------- */
+/* 一个 .c 文件通常只用到展开出的部分函数，标成 unused 免得编译器对其余函数告警。 */
+#define MSTA_UNUSED     __attribute__((unused))
+
 #define MstaArrayDefine(Type, Name)                                           \
 typedef struct {                                                              \
     Type *pData;                                                              \
     int   nSize;                                                              \
     int   nCapacity;                                                          \
 } Name;                                                                       \
-static inline void Name##Init( Name *p )                                      \
+MSTA_UNUSED static inline void Name##Init( Name *p )                          \
 {   p->pData = NULL; p->nSize = 0; p->nCapacity = 0;  }                       \
-static inline Type *Name##Append( Name *p )                                   \
+MSTA_UNUSED static inline Type *Name##Append( Name *p )                       \
 {                                                                             \
     if ( p->nSize == p->nCapacity )                                           \
     {                                                                         \
@@ -68,11 +69,11 @@ static inline Type *Name##Append( Name *p )                                   \
     memset( &p->pData[p->nSize], 0, sizeof(Type) );                           \
     return &p->pData[ p->nSize++ ];                                           \
 }                                                                             \
-static inline Type *Name##At( Name *p, int i )                                \
+MSTA_UNUSED static inline Type *Name##At( Name *p, int i )                    \
 {   assert( 0 <= i && i < p->nSize ); return &p->pData[i];  }                 \
-static inline void Name##Free( Name *p )                                      \
+MSTA_UNUSED static inline void Name##Free( Name *p )                          \
 {   free( p->pData ); p->pData = NULL; p->nSize = p->nCapacity = 0;  }        \
-static inline int Name##Find( Name *p, Type *pElem )                          \
+MSTA_UNUSED static inline int Name##Find( Name *p, Type *pElem )              \
 {   return (pElem < p->pData || pElem >= p->pData + p->nSize)                 \
         ? MSTA_NO_ID : (int)(pElem - p->pData);  }
 

@@ -100,10 +100,8 @@ typedef struct {
     double Arrival[2][2][2]; /* [min/max][本地 fall/rise][源 fall/rise] */
     double Slew[2][2][2];
     unsigned char Tags[2];     /* 本地边沿的源标签掩码：1=源 fall，2=源 rise */
-    double MaxArrival;        /* 以下合并值仅用于时钟树摘要和 DRC */
-    double MinArrival;        /* ps：最快那条 */
-    double MaxSlew;           /* ps：该时钟网络的最大/最小摆率 */
-    double MinSlew;
+    double MaxArrival;        /* ps：max 角最晚那条，仅用于时钟树摘要 */
+    double MaxSlew;           /* ps：max 角最大摆率，仅用于 DRC */
     int    fReached;
     int    fSourceOnly;      /* 主时钟到生成时钟源的延迟，只供 source 继承 */
     int    nThroughGates;     /* 时钟路径经过的组合级数 */
@@ -142,8 +140,6 @@ typedef struct {
     char   *pfLaunchRises;     /* [nNets] 1=上升沿 launch，0=下降沿 */
     /* 路径回溯用的前驱 */
     int    *pPrevNet;          /* [nNets] 前驱网络 */
-    int    *pPrevInst;         /* [nNets] 驱动它的那个实例 */
-    int    *pPrevPin;          /* [nNets] 该实例的哪个输入脚把最坏到达传进来的 */
     /* 逐边沿前驱（上升/下降各一份） */
     MstaPrev *pPrevRise, *pPrevFall;
 } MstaCorner;
@@ -161,7 +157,6 @@ typedef struct MstaTiming {
        和时钟到达都按 [时钟][网络] 存，行优先，每行 nNets 个。 */
     MstaClockArr *pClockArr;   /* [nClocks * nNets] 每个时钟在每根时钟网络上的到达 */
     char   *pfClockOfNet;      /* [nClocks * nNets] 该时钟树里有没有这根网络 */
-    int     fIdealClocks;      /* 1 = 不做时钟传播，所有 FF 时钟脚都当 0 */
     /* set_ideal_network：显式标过的网络 + 沿组合扇出传下来的相同属性。
        理想网络不累计延迟（模型说明见 msta_timing.c 的 MarkIdealNets 上方）。 */
     char   *pfIdealNet;        /* [nNets] */
@@ -198,10 +193,10 @@ typedef struct MstaTiming {
     int     nSetupViolations, nHoldViolations;
     int     nExcludedEnds;
     /* set_data_check 的结果：两条数据路径之间的检查，单独统计并计入 WNS/TNS。 */
-    int     nDataChecks, nDataCheckSetupViol, nDataCheckHoldViol;
-    double  WorstDataCheckSetupSlack, WorstDataCheckHoldSlack;
-    MstaId  DataCheckSetupFrom, DataCheckSetupTo, DataCheckHoldFrom, DataCheckHoldTo;
-    double  DataCheckSetupValue, DataCheckHoldValue;
+    int     nDataChecks;
+    double  WorstDataCheckSetupSlack;
+    MstaId  DataCheckSetupFrom, DataCheckSetupTo;
+    double  DataCheckSetupValue;
     /* set_clock_gating_check 的结果：门控单元使能脚相对时钟沿的检查。 */
     int     nClkGatingChecks;
     double  WorstClkGatingSetupSlack, WorstClkGatingHoldSlack;

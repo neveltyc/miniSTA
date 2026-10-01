@@ -466,7 +466,6 @@ static MstaClock *Msta_SdcNewClock( MstaSdc *p, const char *pName )
     pClock->MasterClock = MSTA_NO_ID;
     pClock->SourceNet  = MSTA_NO_ID;
     pClock->SourceText = MSTA_NO_ID;
-    pClock->SlewMax = pClock->SlewMin = MSTA_UNSET;
     pClock->Slew[0][0] = pClock->Slew[0][1] = MSTA_UNSET;
     pClock->Slew[1][0] = pClock->Slew[1][1] = MSTA_UNSET;
     Msta_IntMapSet( &p->clockMap, pClock->Name, p->vClocks.nSize - 1 );
@@ -651,6 +650,7 @@ static void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes,
         double Period = pMaster->Period * Div / Mult;
         double Rise = pMaster->RiseEdge;
         double Fall = Rise + Period * Duty / 100.0;
+        MstaId MasterName = pMaster->Name;
         if ( fEdges )
         {
             double Shift[3] = { 0.0, 0.0, 0.0 };
@@ -665,7 +665,6 @@ static void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes,
                 return;
             }
         }
-        MstaId MasterName = pMaster->Name;
         pClock = Msta_SdcNewClock(p,pName);
         pClock->MasterClock = MasterName;
         pClock->Period = Period;
@@ -990,8 +989,6 @@ static void Msta_SdcSetClockTransition( MstaSdc *p, int argc, char **argv )
                 for ( e = 0; e < 2; e++ )
                     if ( e ? (fRise || !fFall) : (fFall || !fRise) )
                         pClock->Slew[m][e] = Slew;
-        if ( fMax || !fMin ) pClock->SlewMax = Slew;
-        if ( fMin || !fMax ) pClock->SlewMin = Slew;
     }
 }
 
@@ -1281,10 +1278,10 @@ static MstaLibInfo *Msta_SdcDefaultOpCond( MstaLib *pLib, MstaId nLibrary, MstaO
    库没声明 K 因子（或没给 V/T）时系数保持 1.0，只把选的角记录/报出来。 */
 static void Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib )
 {
-    int corners = 2, c;
+    int nCorners = 2, c;
     if ( pLib == NULL )
         return;
-    for ( c = 0; c < corners; c++ )
+    for ( c = 0; c < nCorners; c++ )
     {
         int fMax = ( c == 0 );
         double v = fMax ? p->VoltageMax : p->VoltageMin;
@@ -1942,15 +1939,6 @@ static void Msta_SdcSetLoad( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int ar
     }
 }
 
-/* 把 rise/fall 两个边沿的摆率合并成一个值：setup 角取慢的，hold 角取快的
-   （只写了一个边沿时就是它自己）。 */
-static double Msta_SdcMergeSlew( double Rise, double Fall, int fMax )
-{
-    if ( !Msta_IsSet(Rise) ) return Fall;
-    if ( !Msta_IsSet(Fall) ) return Rise;
-    return fMax ? ( Rise > Fall ? Rise : Fall ) : ( Rise < Fall ? Rise : Fall );
-}
-
 /* set_input_transition：可以按 -rise/-fall、-max/-min 分别给值。
    时序引擎用逐边沿字段起步。 */
 static void Msta_SdcSetInputSlew( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
@@ -1978,7 +1966,7 @@ static void Msta_SdcSetInputSlew( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, i
     for ( i = 1; i < nRest; i++ )
     {
         int *pNets, nFound, j;
-    double Slew = Msta_SdcToPs( p,pRest[0] );
+        double Slew = Msta_SdcToPs( p,pRest[0] );
         nFound = Msta_SdcResolveNets( pDes, pRest[i], &pNets );
         for ( j = 0; j < nFound; j++ )
         {
@@ -1987,15 +1975,11 @@ static void Msta_SdcSetInputSlew( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, i
             {
                 if ( fRise || !fFall ) pCons->InputSlewMaxRise = Slew;
                 if ( fFall || !fRise ) pCons->InputSlewMaxFall = Slew;
-                pCons->InputSlewMax = Msta_SdcMergeSlew( pCons->InputSlewMaxRise,
-                                                         pCons->InputSlewMaxFall, 1 );
             }
             if ( fMin || !fMax )
             {
                 if ( fRise || !fFall ) pCons->InputSlewMinRise = Slew;
                 if ( fFall || !fRise ) pCons->InputSlewMinFall = Slew;
-                pCons->InputSlewMin = Msta_SdcMergeSlew( pCons->InputSlewMinRise,
-                                                         pCons->InputSlewMinFall, 0 );
             }
         }
     }
@@ -2084,8 +2068,6 @@ static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
             if ( pCons->DriveMultiply <= 0.0 ) pCons->DriveMultiply = 1.0;
             if ( pInRise ) pCons->DriveInSlewRise = Msta_SdcToPs( p, pInRise );
             if ( pInFall ) pCons->DriveInSlewFall = Msta_SdcToPs( p, pInFall );
-            if ( !Msta_IsSet( pCons->InputSlewMax ) ) pCons->InputSlewMax = Slew;
-            if ( !Msta_IsSet( pCons->InputSlewMin ) ) pCons->InputSlewMin = Slew;
             if ( !Msta_IsSet( pCons->InputSlewMaxRise ) ) pCons->InputSlewMaxRise = Slew;
             if ( !Msta_IsSet( pCons->InputSlewMaxFall ) ) pCons->InputSlewMaxFall = Slew;
             if ( !Msta_IsSet( pCons->InputSlewMinRise ) ) pCons->InputSlewMinRise = Slew;
@@ -2096,7 +2078,7 @@ static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
 
 /* 路径例外共用的选项解析结果：-from/-to 集合、-through 分组和边沿限定。 */
 typedef struct {
-    int  fromBeg, fromEnd, toBeg, toEnd;
+    int  iFromBeg, iFromEnd, iToBeg, iToEnd;
     char FromRF, ToRF;
     MstaThruObject Thru[MSTA_SDC_MAX_THRU];
     int  nThru;
@@ -2129,8 +2111,8 @@ static int Msta_SdcPathCollection( int argc, char **argv, int *pi, MstaSdcPathAr
         Msta_WarnOnce("path exception option \"%s\" has an empty collection; constraint rejected",pKey);
         return -1;
     }
-    if ( fFrom ) { pA->fromBeg = Beg; pA->fromEnd = *pi + 1; pA->FromRF = RF; }
-    else if ( fTo ) { pA->toBeg = Beg; pA->toEnd = *pi + 1; pA->ToRF = RF; }
+    if ( fFrom ) { pA->iFromBeg = Beg; pA->iFromEnd = *pi + 1; pA->FromRF = RF; }
+    else if ( fTo ) { pA->iToBeg = Beg; pA->iToEnd = *pi + 1; pA->ToRF = RF; }
     else if ( fThrough )
     {
         /* 一个 -through 是一组可以互相替代的对象；多个 -through 之间按路径顺序匹配。 */
@@ -2162,11 +2144,11 @@ static void Msta_SdcAddPathExceptions( MstaSdc *p, MstaSdcPathArgs *pA,
                                        int fMaxDelay, int fMinDelay, double Delay )
 {
     int j, k;
-    int fromBeg = pA->fromBeg, toBeg = pA->toBeg;
-    if ( fromBeg < 0 ) fromBeg = pA->fromEnd = 0;
-    if ( toBeg < 0 ) toBeg = pA->toEnd = 0;
-    for ( j = fromBeg; j < (pA->fromEnd > fromBeg ? pA->fromEnd : fromBeg + 1); j++ )
-        for ( k = toBeg; k < (pA->toEnd > toBeg ? pA->toEnd : toBeg + 1); k++ )
+    int iFromBeg = pA->iFromBeg, iToBeg = pA->iToBeg;
+    if ( iFromBeg < 0 ) iFromBeg = pA->iFromEnd = 0;
+    if ( iToBeg < 0 ) iToBeg = pA->iToEnd = 0;
+    for ( j = iFromBeg; j < (pA->iFromEnd > iFromBeg ? pA->iFromEnd : iFromBeg + 1); j++ )
+        for ( k = iToBeg; k < (pA->iToEnd > iToBeg ? pA->iToEnd : iToBeg + 1); k++ )
         {
             MstaException *pEx = MstaExceptionArrayAppend(&p->vExceptions);
             const char *pFrom = j ? pArgv[j] : NULL;
@@ -2198,7 +2180,7 @@ static void Msta_SdcSetException( MstaSdc *p, int fFalse, int argc, char **argv 
     MstaSdcPathArgs A;
     int i, fSetup = 0, fHold = 0, fRise = 0, fFall = 0, nCycles = 1, fHaveCycles = 0;
     memset( &A, 0, sizeof(A) );
-    A.fromBeg = A.toBeg = -1;
+    A.iFromBeg = A.iToBeg = -1;
     for ( i = 1; i < argc; i++ )
     {
         int n = 0;
@@ -2237,7 +2219,7 @@ static void Msta_SdcSetPathDelay( MstaSdc *p, int fMax, int argc, char **argv )
     int i, n;
     double Delay = MSTA_UNSET;
     memset( &A, 0, sizeof(A) );
-    A.fromBeg = A.toBeg = -1;
+    A.iFromBeg = A.iToBeg = -1;
     for ( i = 1; i < argc; i++ )
     {
         if ( argv[i][0] != '-' )
@@ -2270,7 +2252,7 @@ static void Msta_SdcGroupPath( MstaSdc *p, int argc, char **argv )
     const char *pName = NULL, *pWeight = NULL;
     int i, n, fDefault = 0;
     memset( &A, 0, sizeof(A) );
-    A.fromBeg = A.toBeg = -1;
+    A.iFromBeg = A.iToBeg = -1;
     for ( i = 1; i < argc; i++ )
     {
         if ( !strcmp(argv[i],"-default") ) { fDefault = 1; continue; }
@@ -2315,13 +2297,13 @@ static void Msta_SdcGroupPath( MstaSdc *p, int argc, char **argv )
     /* 不写 -from/-to/-through 就是"所有路径"（-default 常这么用）。 */
     /* -from/-to 的多个对象按笛卡尔积摊成多条记录，名字与权重相同（与例外一致）。 */
     {
-        int fromBeg = A.fromBeg, toBeg = A.toBeg, j, k;
-        int fromEnd = ( A.fromBeg >= 0 ) ? A.fromEnd : 0;
-        int toEnd   = ( A.toBeg   >= 0 ) ? A.toEnd   : 0;
-        if ( A.fromBeg < 0 ) fromBeg = fromEnd = 0;
-        if ( A.toBeg   < 0 ) toBeg   = toEnd   = 0;
-        for ( j = fromBeg; j < ( fromEnd > fromBeg ? fromEnd : fromBeg + 1 ); j++ )
-            for ( k = toBeg; k < ( toEnd > toBeg ? toEnd : toBeg + 1 ); k++ )
+        int iFromBeg = A.iFromBeg, iToBeg = A.iToBeg, j, k;
+        int iFromEnd = ( A.iFromBeg >= 0 ) ? A.iFromEnd : 0;
+        int iToEnd   = ( A.iToBeg   >= 0 ) ? A.iToEnd   : 0;
+        if ( A.iFromBeg < 0 ) iFromBeg = iFromEnd = 0;
+        if ( A.iToBeg   < 0 ) iToBeg   = iToEnd   = 0;
+        for ( j = iFromBeg; j < ( iFromEnd > iFromBeg ? iFromEnd : iFromBeg + 1 ); j++ )
+            for ( k = iToBeg; k < ( iToEnd > iToBeg ? iToEnd : iToBeg + 1 ); k++ )
             {
                 const char *pFrom = j ? argv[j] : NULL;
                 const char *pTo   = k ? argv[k] : NULL;
@@ -2480,7 +2462,7 @@ static void Msta_SdcSetClockGatingCheck( MstaSdc *p, MstaDesign *pDes,
 }
 
 /* 把选中的网络钉成常量。 */
-static void Msta_SdcSetCaseAnalysis( MstaSdc *p, MstaDesign *pDes, int argc, char **argv )
+static void Msta_SdcSetCaseAnalysis( MstaDesign *pDes, int argc, char **argv )
 {
     MstaSdcArgs A;
     char **pRest = Msta_SdcArgBuffer( argc );
@@ -2719,14 +2701,14 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
 {
     int nNets = pDes->vNets.nSize;
     int *pQueue, nQueue = 0, q;
+    int SourceStop = 0, SourceSense;
     if ( nNets <= 0 || pClock->SourceNet < 0 )
         return;
     pQueue = (int *)malloc( (size_t)(2 * nNets) * sizeof(int) );
     assert( pQueue );
     pfOnNet[pClock->SourceNet] = 1;
-    int SourceStop = 0;
-    int SourceSense = Msta_SdcClockSense(pSdc,pClock->SourceNet,
-                                       Msta_SdcClockIndexOf(pSdc,pClock->Name),&SourceStop);
+    SourceSense = Msta_SdcClockSense(pSdc,pClock->SourceNet,
+                                     Msta_SdcClockIndexOf(pSdc,pClock->Name),&SourceStop);
     pPolarity[pClock->SourceNet] = SourceSense ? (char)SourceSense : 1;
     pQueue[nQueue++] = pClock->SourceNet;
     for ( q = 0; q < nQueue; q++ )
@@ -2753,7 +2735,7 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
                 MstaArc *pArc;
                 int nOut = pLoad->pNets[k];
                 int Pol = pPolarity[pQueue[q]];
-                int nSet, fStop = 0;
+                int nSet, fStop = 0, Sense, Joined;
                 if ( pOutPin->Dir != MSTA_DIR_OUTPUT || nOut < 0 )
                     continue;
                 pArc = Msta_CellCombArc( pCell, pInPin->Name, pOutPin->Name );
@@ -2761,7 +2743,7 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
                     continue;
                 if ( Msta_SdcTimingDisabled( pSdc, pRef->InstId, pInPin->Name, pOutPin->Name ) )
                     continue;
-                int Sense = Msta_SdcClockArcSense(pDes,pLoad,pArc);
+                Sense = Msta_SdcClockArcSense(pDes,pLoad,pArc);
                 if ( Sense < 0 ) continue;
                 if ( Sense == MSTA_SENSE_NEGATIVE ) Pol = -Pol;
                 else if ( Sense == MSTA_SENSE_NONUNATE ) Pol = 0;
@@ -2771,7 +2753,7 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
                     Pol = nSet;
                 /* 合并极性：set_clock_sense 的显式值优先；否则首次到达取本路极性，
                    另一条路径带着不同极性再到达时记 0（non-unate，正反相都可能）。 */
-                int Joined = nSet ? nSet : (!pfOnNet[nOut] || pPolarity[nOut] == Pol ? Pol : 0);
+                Joined = nSet ? nSet : (!pfOnNet[nOut] || pPolarity[nOut] == Pol ? Pol : 0);
                 if ( !pfOnNet[nOut] || pPolarity[nOut] != Joined )
                 {
                     pfOnNet[nOut] = 1;
@@ -2789,7 +2771,7 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
 
 /* 这个实例是不是"由某个时钟驱动"的寄存器：-rise_clock/-fall_clock 还要看
    有效边沿（库里的 fClkRises 经时钟树极性翻转）。 */
-static int Msta_SdcRegMatchesClock( MstaDesign *pDes, MstaInst *pInst, MstaCell *pCell,
+static int Msta_SdcRegMatchesClock( MstaInst *pInst, MstaCell *pCell,
                                     const char *pfOnNet, const char *pPolarity,
                                     int fRise, int fFall )
 {
@@ -2927,7 +2909,7 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
             if ( Msta_SdcIsMinus(Msta_InstName(pDes,i),pMinus,nMinus) )
                 continue;
             if ( fFiltered &&
-                 !Msta_SdcRegMatchesClock(pDes,pInst,pCell,pfOnNet,pPolarity,fRise,fFall) )
+                 !Msta_SdcRegMatchesClock(pInst,pCell,pfOnNet,pPolarity,fRise,fFall) )
                 continue;
             if ( Kind == REG_CELLS )
             {
@@ -3112,7 +3094,6 @@ static int Msta_SdcRelatedOfInst( MstaSdc *pSdc, MstaDesign *pDes, int nInst, Ms
             }
         }
     }
-    (void)pSdc;
     return nAdded;
 }
 
@@ -3220,7 +3201,7 @@ static int Msta_SdcExpandOfObjects( MstaSdc *pSdc, MstaDesign *pDes, char *pOfMa
                                     int nMinus, MstaSdcArgList *pL )
 {
     MstaSdcArgList Parents, Patterns;
-    int nParents, i, j, beg = pL->nSize;
+    int nParents, i, j, nBeg = pL->nSize;
     char *pCopy;
 
     memset( &Parents, 0, sizeof(Parents) );
@@ -3259,9 +3240,9 @@ static int Msta_SdcExpandOfObjects( MstaSdc *pSdc, MstaDesign *pDes, char *pOfMa
     }
     Msta_SdcArgListFree( &Patterns );
     Msta_SdcArgListFree( &Parents );
-    if ( pL->nSize == beg )
+    if ( pL->nSize == nBeg )
         Msta_WarnOnce( "-of_objects matched no objects; command skipped" );
-    return pL->nSize - beg;
+    return pL->nSize - nBeg;
 }
 
 static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc *pSdc )
@@ -3572,7 +3553,7 @@ static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc
     else if ( !strcmp(pCmd, "set_multicycle_path") )   p->nCommandsRead++, Msta_SdcSetException( p, 0, argc, argv );
     else if ( !strcmp(pCmd, "set_max_delay") )         p->nCommandsRead++, Msta_SdcSetPathDelay( p, 1, argc, argv );
     else if ( !strcmp(pCmd, "set_min_delay") )         p->nCommandsRead++, Msta_SdcSetPathDelay( p, 0, argc, argv );
-    else if ( !strcmp(pCmd, "set_case_analysis") )     p->nCommandsRead++, Msta_SdcSetCaseAnalysis( p, pDes, argc, argv );
+    else if ( !strcmp(pCmd, "set_case_analysis") )     p->nCommandsRead++, Msta_SdcSetCaseAnalysis( pDes, argc, argv );
     else if ( !strcmp(pCmd, "set_logic_zero") )        p->nCommandsRead++, Msta_SdcSetLogic( p, pDes, 0, argc, argv );
     else if ( !strcmp(pCmd, "set_logic_one") )         p->nCommandsRead++, Msta_SdcSetLogic( p, pDes, 1, argc, argv );
     else if ( !strcmp(pCmd, "set_logic_dc") )          p->nCommandsRead++, Msta_SdcSetLogic( p, pDes, 2, argc, argv );
@@ -3709,7 +3690,6 @@ MstaNetCons *Msta_SdcNetConsOrCreate( MstaSdc *p, int nNet )
     pCons = MstaNetConsArrayAppend( &p->vNets );
     pCons->Net     = nNet;
     pCons->LoadMax = pCons->LoadMin = MSTA_UNSET;
-    pCons->InputSlewMax = pCons->InputSlewMin = MSTA_UNSET;
     pCons->InputSlewMaxRise = pCons->InputSlewMaxFall = MSTA_UNSET;
     pCons->InputSlewMinRise = pCons->InputSlewMinFall = MSTA_UNSET;
     pCons->DrivingCell = pCons->DrivingPin = pCons->DrivingFromPin = MSTA_NO_ID;
@@ -4481,18 +4461,6 @@ int Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
     return nOut;
 }
 
-int Msta_SdcNeedsStartpointPartition( MstaSdc *p )
-{
-    int i;
-    for ( i = 0; i < p->vExceptions.nSize; i++ )
-    {
-        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,i);
-        if ( pEx->FromText != MSTA_NO_ID && pEx->FromKind != 'C' )
-            return 1;
-    }
-    return 0;
-}
-
 static const MstaException *s_pSortExceptions;
 
 /* 比较两条例外除 -from 名字（FromText/FromKind）以外的全部字段；返回 0 表示两者只差 -from。 */
@@ -4663,11 +4631,6 @@ double Msta_SdcPathGroupWeight( MstaSdc *p, MstaId NameId )
         if ( pGroup->Name == NameId ) return pGroup->Weight;
     }
     return 1.0;
-}
-
-int Msta_SdcHasClockGating( MstaSdc *p )
-{
-    return p->vClockGating.nSize > 0;
 }
 
 double Msta_SdcMaxTimeBorrow( MstaSdc *p, int nInst )

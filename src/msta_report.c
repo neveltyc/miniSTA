@@ -19,15 +19,16 @@
 #define MSTA_REPORT_DATA_GROUP "**data check**"
 #define MSTA_REPORT_GATING_GROUP "**clock gating**"
 
-static const char *Msta_PeriodText( double ps, char *pBuf, int nBuf )
+/* ps 数值格式化成 ns 文本（保留三位小数）。 */
+static const char *Msta_NsText( double ps, char *pBuf, int nBuf )
 {
     snprintf( pBuf, (size_t)nBuf, "%.3f", ps / 1000.0 );   /* ps -> ns */
     return pBuf;
 }
 
 /* 打印路径上的一点：实例/脚（无驱动时为网络名）、增量、到达，末尾附单元名。 */
-static void Msta_PrintPathPoint( MstaTiming *p, FILE *pFile, int nNet, int fMax,
-                                 double Arrival, double PrevArrival, double PrevSlew )
+static void Msta_PrintPathPoint( MstaTiming *p, FILE *pFile, int nNet,
+                                 double Arrival, double PrevArrival )
 {
     MstaDesign *pDes = p->pDes;
     MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, nNet );
@@ -39,8 +40,8 @@ static void Msta_PrintPathPoint( MstaTiming *p, FILE *pFile, int nNet, int fMax,
         /* 没有驱动：顶层输入端口，或者是被常量的网络 */
         fprintf( pFile, "  %-42s %10s %10s   (input port %s)\n",
                  Msta_NetName( pDes, nNet ),
-                 Msta_PeriodText( Arrival - PrevArrival, sInc, sizeof(sInc) ),
-                 Msta_PeriodText( Arrival, sArr, sizeof(sArr) ),
+                 Msta_NsText( Arrival - PrevArrival, sInc, sizeof(sInc) ),
+                 Msta_NsText( Arrival, sArr, sizeof(sArr) ),
                  pNet->fTopPort ? "" : "[undriven]" );
         return;
     }
@@ -50,12 +51,11 @@ static void Msta_PrintPathPoint( MstaTiming *p, FILE *pFile, int nNet, int fMax,
         char sPoint[256];
         snprintf( sPoint, sizeof(sPoint), "%s/%s",
                   Msta_InstName( pDes, pRef->InstId ), Msta_NameStr( pPin->Name ) );
-        fprintf( pFile, "  %-42s %10s %10s   %s  pin %s\n",
+        fprintf( pFile, "  %-42s %10s %10s   %s  pin -\n",
                  sPoint,
-                 Msta_PeriodText( Arrival - PrevArrival, sInc, sizeof(sInc) ),
-                 Msta_PeriodText( Arrival, sArr, sizeof(sArr) ),
-                 Msta_NameStr( pInst->pCell->Name ),
-                 ( PrevSlew > 0.0 ) ? "driving" : "-" );
+                 Msta_NsText( Arrival - PrevArrival, sInc, sizeof(sInc) ),
+                 Msta_NsText( Arrival, sArr, sizeof(sArr) ),
+                 Msta_NameStr( pInst->pCell->Name ) );
     }
 }
 
@@ -119,44 +119,43 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
             double *pSaved = pCorner->pPathArrival;
             double Arr = ( pSaved ? pSaved[i] : Msta_TimingNetArrival( p, nNets[i], fMax ) )
                        + LaunchShift;
-            Msta_PrintPathPoint( p, pFile, nNets[i], fMax, Arr, Prev, -1.0 );
+            Msta_PrintPathPoint( p, pFile, nNets[i], Arr, Prev );
             Prev = Arr;
         }
     }
     fprintf( pFile, "--------------------------------------------------------------\n" );
     fprintf( pFile, "data arrival time                       %10s\n",
-             Msta_PeriodText( Arrival, sBuf[0], sizeof(sBuf[0]) ) );
+             Msta_NsText( Arrival, sBuf[0], sizeof(sBuf[0]) ) );
     if ( fSetup )
     {
         fprintf( pFile, "  capture edge                          %10s\n",
-                 Msta_PeriodText( CaptureTime, sBuf[1], sizeof(sBuf[1]) ) );
+                 Msta_NsText( CaptureTime, sBuf[1], sizeof(sBuf[1]) ) );
         fprintf( pFile, "  - setup check (%s)                    %10s\n",
                  pCheck->fToRegister ? "from lib" : "output delay",
-                 Msta_PeriodText( -pCorner->CheckTime, sBuf[2], sizeof(sBuf[2]) ) );
+                 Msta_NsText( -pCorner->CheckTime, sBuf[2], sizeof(sBuf[2]) ) );
         fprintf( pFile, "  - clock uncertainty                   %10s\n",
-                 Msta_PeriodText( -pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
+                 Msta_NsText( -pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
         if ( pCheck->fToRegister && Msta_IsSet(pCorner->Borrow) &&
              MstaInstArrayAt(&pDes->vInsts,pCheck->InstId)->pCell->fLatch )
             fprintf( pFile, "  (锁存器：开沿起算，max_time_borrow %s ns 取代上面的关闭沿要求)\n",
-                     Msta_PeriodText( pCorner->Borrow, sBuf[2], sizeof(sBuf[2]) ) );
+                     Msta_NsText( pCorner->Borrow, sBuf[2], sizeof(sBuf[2]) ) );
     }
     else
     {
         fprintf( pFile, "  hold edge                             %10s\n",
-                 Msta_PeriodText( CaptureTime, sBuf[1], sizeof(sBuf[1]) ) );
+                 Msta_NsText( CaptureTime, sBuf[1], sizeof(sBuf[1]) ) );
         fprintf( pFile, "  + %-35s %10s\n",
                  pCheck->fToRegister ? "hold check" : "output delay",
-                 Msta_PeriodText( pCorner->CheckTime, sBuf[2], sizeof(sBuf[2]) ) );
+                 Msta_NsText( pCorner->CheckTime, sBuf[2], sizeof(sBuf[2]) ) );
         fprintf( pFile, "  + clock uncertainty                   %10s\n",
-                 Msta_PeriodText( pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
+                 Msta_NsText( pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
     }
     fprintf( pFile, "data required time                      %10s\n",
-             Msta_PeriodText( Required, sBuf[0], sizeof(sBuf[0]) ) );
+             Msta_NsText( Required, sBuf[0], sizeof(sBuf[0]) ) );
     fprintf( pFile, "slack (%s)                               %10s%s\n",
              Slack >= 0.0 ? "MET" : "VIOLATED",
-             Msta_PeriodText( Slack, sBuf[2], sizeof(sBuf[2]) ),
+             Msta_NsText( Slack, sBuf[2], sizeof(sBuf[2]) ),
              Slack >= 0.0 ? "" : "   <-- 需要修" );
-    (void)pDes;
 }
 
 void Msta_ReportChecks( MstaTiming *p, FILE *pFile, int nMaxPaths, int fSetup )
@@ -406,7 +405,7 @@ void Msta_ReportSummary( MstaTiming *p, FILE *pFile )
 void Msta_ReportClockTree( MstaTiming *p, FILE *pFile )
 {
     int n, c, nClocks = Msta_TimingClockCount( p );
-    int nReached = 0, nDeepest = 0, nFF = 0;
+    int nReached = 0, nDeepest = 0;
     double dMax = 0.0;
     MstaDesign *pDes = p->pDes;
 
@@ -433,9 +432,8 @@ void Msta_ReportClockTree( MstaTiming *p, FILE *pFile )
         if ( fReached )
             nReached++;
     }
-    fprintf( pFile, "时钟树：网络 %d 根，算出插入延迟的 %d 根，最深 %d 级缓冲，最大插入延迟 %.3f ns%s\n",
-             Msta_TimingClockNetCount( p ), nReached, nDeepest, dMax / 1000.0,
-             p->fIdealClocks ? "  [理想时钟模式]" : "" );
+    fprintf( pFile, "时钟树：网络 %d 根，算出插入延迟的 %d 根，最深 %d 级缓冲，最大插入延迟 %.3f ns\n",
+             Msta_TimingClockNetCount( p ), nReached, nDeepest, dMax / 1000.0 );
     /* 有多个时钟时，再按每个时钟各打一行，便于区分。 */
     if ( nClocks > 1 )
         for ( c = 0; c < nClocks; c++ )
@@ -460,5 +458,4 @@ void Msta_ReportClockTree( MstaTiming *p, FILE *pFile )
                      Msta_NameStr(pClock->Name), nNets, nClockReached, dClockMax / 1000.0 );
         }
     fprintf( pFile, "说明：时钟延迟按 Liberty timing arc 传播；本工具不检查 ICG 使能是否吞沿。\n" );
-    (void)nFF;
 }

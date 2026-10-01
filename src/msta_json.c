@@ -188,17 +188,15 @@ static MJsonValue *Msta_JsonParseValue( MJsonReader *p )
         {   p->pCur++; p->nDepth--; return pNode;  }
         for (;;)
         {
-            char *pKey, *pColon;
+            char *pKey;
             MJsonValue *pChild;
             Msta_JsonSkipSpace( p );
             pKey = Msta_JsonReadStringRaw( p );
             if ( pKey == NULL )
                 goto fail;
             Msta_JsonSkipSpace( p );
-            pColon = (char *)p->pCur;
             if ( p->pCur >= p->pEnd || *p->pCur != ':' )
             {   Msta_JsonFail( p, "expected \":\" in an object." ); free(pKey); goto fail;  }
-            (void)pColon;
             p->pCur++;
             pChild = Msta_JsonParseValue( p );
             if ( pChild == NULL )

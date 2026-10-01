@@ -21,6 +21,9 @@
     3) 修正 ABC 的一个内存安全缺陷：原文件用 long 保存 offset，
        并对 pError 用 sprintf 拼接；这里统一改成 snprintf，
        并把 offset 的类型写成 ssize_t，避免 32 位 long 截断。
+    4) 删掉 msta 不调用的调试/辅助函数：Scl_LibertyItemKey、Scl_LibertyItemIsEqua、
+       Scl_LibertyCountChildren、Scl_LibertyDump/DumpItem/DumpChildren，
+       以及只供它们使用的 Scl_ItemForEachChild 宏。
 
   ABC 的 sclLiberty 只有语法层和工艺映射用的语义层（不读 ff/latch、不认
   timing_type），STA 需要的 setup/hold、时钟脚等信息它没有，因此这里只复用
@@ -47,9 +50,6 @@
 ***********************************************************************/
 
 #include <stdarg.h>
-
-/* 本文件由 msta_lib.c 包含；部分解析辅助函数无需由该模块调用。 */
-#define SCL_LIBERTY_UNUSED __attribute__((unused))
 
 /* ---------------------------------------------------------------------
    数据结构（对应 ABC sclLiberty.c:43-82）
@@ -116,10 +116,7 @@ static inline int Scl_LibertyCompare( Scl_Tree_t *p, Scl_Pair_t Pair, const char
 static inline ssize_t Scl_LibertyItemId( Scl_Tree_t *p, Scl_Item_t *pItem )
 {   return pItem - p->pItems;  }
 
-/* 遍历 pItem 的所有孩子；以及"只遍历 key 等于某个名字的孩子"。 */
-#define Scl_ItemForEachChild( p, pItem, pChild ) \
-    for ( pChild = Scl_LibertyItem(p, pItem->Child); pChild; pChild = Scl_LibertyItem(p, pChild->Next) )
-
+/* 只遍历 pItem 里 key 等于某个名字的孩子。 */
 #define Scl_ItemForEachChildName( p, pItem, pChild, pName ) \
     for ( pChild = Scl_LibertyItem(p, pItem->Child); pChild; pChild = Scl_LibertyItem(p, pChild->Next) ) \
         if ( Scl_LibertyCompare(p, pChild->Key, pName) ) {} else
@@ -487,18 +484,9 @@ static const char *Scl_LibertyReadString( Scl_Tree_t *p, Scl_Pair_t Pair )
         *(pnLen_) = (ssize_t)((pItem_)->Head.End - (pItem_)->Head.Beg); \
     } while (0)
 
-/* 语法树的 key 文本，用于打印调试。 */
-static SCL_LIBERTY_UNUSED const char *Scl_LibertyItemKey( Scl_Tree_t *p, Scl_Item_t *pItem )
-{
-    return Scl_LibertyReadString( p, pItem->Key );
-}
-
-static SCL_LIBERTY_UNUSED int Scl_LibertyItemIsEqua( Scl_Item_t *pItem )
-{   return pItem && pItem->Type == SCL_LIBERTY_EQUA;  }
-
 /* 取一个等式条目的 double 值；取不到就返回默认值并把 *pfOk 置 0。
    Liberty 里 "area : 3.2;" 和 "capacitance : 4.2e-05;" 都走这里。 */
-static SCL_LIBERTY_UNUSED double Scl_LibertyItemDouble( Scl_Tree_t *p, Scl_Item_t *pItem, double Default, int *pfOk )
+static double Scl_LibertyItemDouble( Scl_Tree_t *p, Scl_Item_t *pItem, double Default, int *pfOk )
 {
     char *pEndPtr;
     double Value;
@@ -513,7 +501,7 @@ static SCL_LIBERTY_UNUSED double Scl_LibertyItemDouble( Scl_Tree_t *p, Scl_Item_
 }
 
 /* Liberty 的布尔值写成 "true"/"false"，也有直接写 1/0 的。 */
-static SCL_LIBERTY_UNUSED int Scl_LibertyItemBool( Scl_Tree_t *pTree, Scl_Item_t *pItem, int fDefault )
+static int Scl_LibertyItemBool( Scl_Tree_t *pTree, Scl_Item_t *pItem, int fDefault )
 {
     const char *pText;
     if ( pItem == NULL || pItem->Type != SCL_LIBERTY_EQUA )
@@ -537,56 +525,11 @@ static Scl_Item_t *Scl_LibertyFindChild( Scl_Tree_t *p, Scl_Item_t *pRoot, const
 /* 在顶层条目链上找 key 等于 pName 的条目。
    ABC 直接假定 pItems[0] 就是 library（大多数库确实如此）；这里沿 Next 链兜底，
    因为少数库文件会以 version/define 之类的条目开头。 */
-static SCL_LIBERTY_UNUSED Scl_Item_t *Scl_LibertyFindTop( Scl_Tree_t *p, const char *pName )
+static Scl_Item_t *Scl_LibertyFindTop( Scl_Tree_t *p, const char *pName )
 {
     Scl_Item_t *pItem;
     for ( pItem = Scl_LibertyRoot(p); pItem; pItem = Scl_LibertyItem(p, pItem->Next) )
         if ( Scl_LibertyCompare(p, pItem->Key, pName) == 0 )
             return pItem;
     return NULL;
-}
-
-/* 统计 key 等于 pName 的孩子个数。 */
-static SCL_LIBERTY_UNUSED int Scl_LibertyCountChildren( Scl_Tree_t *p, Scl_Item_t *pRoot, const char *pName )
-{
-    Scl_Item_t *pChild;
-    int n = 0;
-    Scl_ItemForEachChildName( p, pRoot, pChild, pName )
-        n++;
-    return n;
-}
-
-/* 按 Liberty 语法输出语法树。 */
-static void Scl_LibertyDumpItem( FILE *pFile, Scl_Tree_t *p, Scl_Item_t *pItem, int nOffset, int fDepth );
-
-static void Scl_LibertyDumpChildren( FILE *pFile, Scl_Tree_t *p, Scl_Item_t *pItem, int nOffset, int fDepth )
-{
-    Scl_Item_t *pChild;
-    if ( !fDepth ) return;
-    Scl_ItemForEachChild( p, pItem, pChild )
-        Scl_LibertyDumpItem( pFile, p, pChild, nOffset + 2, fDepth - 1 );
-}
-
-static void Scl_LibertyDumpItem( FILE *pFile, Scl_Tree_t *p, Scl_Item_t *pItem, int nOffset, int fDepth )
-{
-    int i;
-    for ( i = 0; i < nOffset; i++ ) fputc( ' ', pFile );
-    if ( pItem->Type == SCL_LIBERTY_EQUA )
-        fprintf( pFile, "%s : %s;\n", Scl_LibertyItemKey(p, pItem), Scl_LibertyItemName(p, pItem) );
-    else if ( pItem->Type == SCL_LIBERTY_LIST )
-        fprintf( pFile, "%s(%s);\n", Scl_LibertyItemKey(p, pItem), Scl_LibertyItemName(p, pItem) );
-    else
-    {
-        fprintf( pFile, "%s(%s) {\n", Scl_LibertyItemKey(p, pItem), Scl_LibertyItemName(p, pItem) );
-        Scl_LibertyDumpChildren( pFile, p, pItem, nOffset, fDepth );
-        for ( i = 0; i < nOffset; i++ ) fputc( ' ', pFile );
-        fprintf( pFile, "}\n" );
-    }
-}
-
-static SCL_LIBERTY_UNUSED void Scl_LibertyDump( Scl_Tree_t *p, FILE *pFile, int fDepth )
-{
-    Scl_Item_t *pItem;
-    Scl_ItemForEachChild( p, Scl_LibertyRoot(p), pItem )
-        Scl_LibertyDumpItem( pFile, p, pItem, 0, fDepth );
 }

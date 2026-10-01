@@ -41,7 +41,6 @@ typedef struct {
     double RiseEdge, FallEdge; /* 一个周期内的边沿相位，ps */
     double SourceLatencyMax, SourceLatencyMin;
     double NetworkLatencyMax, NetworkLatencyMin;
-    double SlewMax, SlewMin;   /* set_clock_transition 按 min/max 记的值，只写不读；分析用 Slew[][] */
     double SourceLatency[2][2], NetworkLatency[2][2]; /* [min/max][fall/rise] */
     double Slew[2][2];        /* set_clock_transition，未设为 MSTA_UNSET */
     int    fPropagated;
@@ -60,8 +59,7 @@ typedef struct {
     /* 分对象的 DRC 限制（set_max_transition/-capacitance/-fanout 带对象时）。 */
     double   DrcMaxTransition, DrcMaxCapacitance, DrcMaxFanout;
     double   DrcMinCapacitance;   /* set_min_capacitance 的分对象限制 */
-    double   InputSlewMax, InputSlewMin; /* 输入摆率 / 驱动单元，ps */
-    double   InputSlewMaxRise, InputSlewMaxFall;
+    double   InputSlewMaxRise, InputSlewMaxFall; /* 输入摆率 / 驱动单元，ps */
     double   InputSlewMinRise, InputSlewMinFall;
     /* set_driving_cell：外部驱动单元。分析时按端口实际负载查它的延迟与摆率，
        并把延迟加到端口到达上。 */
@@ -353,7 +351,6 @@ int  Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
                              const MstaSdcEndpoint *pFrom, const MstaSdcEndpoint *pTo,
                              int fSetup, const MstaSdcObject *pObjects, int nObjects,
                              MstaPathExclude *pOut, int nCap );
-int  Msta_SdcNeedsStartpointPartition( MstaSdc *p );
 int  Msta_SdcExceptionCount( MstaSdc *p );
 /* 按 -from 起点给例外分组、查起点命中哪些 -from 例外：引擎据此把起点分类，
    命中例外不同的起点分开传播（见 msta_timing.c 的 BuildStartClasses）。 */
@@ -379,8 +376,6 @@ double Msta_SdcPathGroupWeight( MstaSdc *p, MstaId NameId );
    没给这一角，交给库里的约束弧（再没有就按 0）。 */
 void Msta_SdcClockGatingValue( MstaSdc *p, int nInst, int fMax,
                                double *pValue, int *pfSet );
-/* 有没有写过 set_clock_gating_check。 */
-int  Msta_SdcHasClockGating( MstaSdc *p );
 
 /* set_max_time_borrow：这个锁存器允许的借时（ps），没设过返回 0。 */
 double Msta_SdcMaxTimeBorrow( MstaSdc *p, int nInst );

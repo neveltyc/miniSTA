@@ -98,31 +98,17 @@ static double ClockSlew( const MstaClockArr *pArr, int fMax, int Local, int Sour
 
 static void MergeClockSummary( MstaClockArr *pArr )
 {
-    int m, e, s;
+    int e, s;
     pArr->MaxArrival = -MSTA_NO_TIME;
     pArr->MaxSlew = 0;
-    pArr->MinArrival = pArr->MinSlew = MSTA_NO_TIME;
-    for ( m = 0; m < 2; m++ )
-        for ( e = 0; e < 2; e++ )
-        {
-            for ( s = 0; s < 2; s++ )
-                if ( ClockTagValid(pArr,m,e,s) )
-                {
-                    if ( m )
-                    {
-                        pArr->MaxArrival = fmax(pArr->MaxArrival,pArr->Arrival[m][e][s]);
-                        pArr->MaxSlew = fmax(pArr->MaxSlew,pArr->Slew[m][e][s]);
-                    }
-                    else
-                    {
-                        pArr->MinArrival = fmin(pArr->MinArrival,pArr->Arrival[m][e][s]);
-                        pArr->MinSlew = fmin(pArr->MinSlew,pArr->Slew[m][e][s]);
-                    }
-                }
-        }
+    for ( e = 0; e < 2; e++ )
+        for ( s = 0; s < 2; s++ )
+            if ( ClockTagValid(pArr,1,e,s) )
+            {
+                pArr->MaxArrival = fmax(pArr->MaxArrival,pArr->Arrival[1][e][s]);
+                pArr->MaxSlew = fmax(pArr->MaxSlew,pArr->Slew[1][e][s]);
+            }
     if ( pArr->MaxArrival == -MSTA_NO_TIME ) pArr->MaxArrival = 0;
-    if ( pArr->MinArrival == MSTA_NO_TIME ) pArr->MinArrival = 0;
-    if ( pArr->MinSlew == MSTA_NO_TIME ) pArr->MinSlew = MSTA_DEFAULT_SLEW;
 }
 
 /* 时钟源延迟（source latency）：主时钟取 SDC 给的值；生成时钟取它源网络上的到达，
@@ -160,7 +146,7 @@ static int InstPinNet( MstaTiming *p, int nInst, MstaId PinName )
 }
 
 /* 查一张延迟表；缺表时退回另一张（rise/fall 互为备份）。 */
-static double ArcDelayEdge( const MstaArc *pArc, double Slew, double Load, int fMax, int fRise )
+static double ArcDelayEdge( const MstaArc *pArc, double Slew, double Load, int fRise )
 {
     const MstaTable *pMain = fRise ? &pArc->DelayRise : &pArc->DelayFall;
     const MstaTable *pAlt = fRise ? &pArc->DelayFall : &pArc->DelayRise;
@@ -169,7 +155,7 @@ static double ArcDelayEdge( const MstaArc *pArc, double Slew, double Load, int f
 }
 
 /* 输出摆率用：查一张转换表，缺表时退回另一张。 */
-static double ArcSlewEdge( const MstaArc *pArc, double Slew, double Load, int fMax, int fRise )
+static double ArcSlewEdge( const MstaArc *pArc, double Slew, double Load, int fRise )
 {
     const MstaTable *pMain = fRise ? &pArc->TransRise : &pArc->TransFall;
     const MstaTable *pAlt = fRise ? &pArc->TransFall : &pArc->TransRise;
@@ -778,11 +764,11 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                 int Label = EffectiveClkRises(p,nClock,pClock->SourceNet,e);
                 pDst->Tags[e] |= 1 << Label;
                 pDst->Arrival[m][e][Label] = ClockArrival(pSrc,m,fClkRise,-1)
-                    + ArcDelayEdge(pArc,Slew,m ? LoadMax : LoadMin,m,e)
+                    + ArcDelayEdge(pArc,Slew,m ? LoadMax : LoadMin,e)
                       * Msta_SdcClockDerateClock(p->pSdc,nMaster,m)
                     + pClock->SourceLatency[m][Label];
                 if ( pClock->fPropagated )
-                    pDst->Slew[m][e][Label] = ArcSlewEdge(pArc,Slew,m ? LoadMax : LoadMin,m,e);
+                    pDst->Slew[m][e][Label] = ArcSlewEdge(pArc,Slew,m ? LoadMax : LoadMin,e);
             }
         ApplyIdealClockValues(p,pClock->SourceNet,pDst);
         pDst->nThroughGates = pSrc->nThroughGates + 1;
@@ -833,7 +819,7 @@ static void PropagateClocks( MstaTiming *p )
                            也做传播，而 SDC 里它本应是理想时钟，所以两种约束都可能是用户想要的源 slew：
                            先取输入 slew，再取时钟 slew，都没给才用 MSTA_DEFAULT_SLEW（不是 0）。 */
                         double ClkSlew = pClock->Slew[m][s], Slew;
-                        if ( !pClock->fPropagated || p->fIdealClocks )
+                        if ( !pClock->fPropagated )
                             Slew = Msta_IsSet(ClkSlew) ? ClkSlew : 0.0;
                         else if ( pClock->fPropagatedSet )
                             Slew = Msta_IsSet(InputSlew) ? InputSlew : 0.0;
@@ -842,7 +828,7 @@ static void PropagateClocks( MstaTiming *p )
                                  : Msta_IsSet(ClkSlew)   ? ClkSlew : MSTA_DEFAULT_SLEW;
                         pArr->Slew[m][e][s] = Slew;
                         pArr->Arrival[m][e][s] = m ? -MSTA_NO_TIME : MSTA_NO_TIME;
-                        if ( NetHasClock(p,c,n) && (n == pClock->SourceNet || !pClock->fPropagated || p->fIdealClocks)
+                        if ( NetHasClock(p,c,n) && (n == pClock->SourceNet || !pClock->fPropagated)
                              && (pArr->Polarity == 0 || s == EffectiveClkRises(p,c,n,e)) )
                         {
                             pArr->fReached = 1;
@@ -853,7 +839,6 @@ static void PropagateClocks( MstaTiming *p )
             ApplyIdealClockValues(p,n,pArr);
         }
     }
-    if ( p->fIdealClocks ) return;
     for ( c = 0; c < nClocks; c++ )
     {
         MstaClock *pClock = Msta_SdcClockByIndex(p->pSdc,c);
@@ -924,8 +909,8 @@ static void PropagateClocks( MstaTiming *p )
                                 Slew = ClockSlew(pInArr,m,i,s);
                                 if ( !p->pfIdealNet[nNet] )
                                 {
-                                    Cand += ArcDelayEdge(pArc,Slew,Load,m,e) * Msta_SdcClockDerateClock(p->pSdc,c,m);
-                                    Slew = ArcSlewEdge(pArc,Slew,Load,m,e);
+                                    Cand += ArcDelayEdge(pArc,Slew,Load,e) * Msta_SdcClockDerateClock(p->pSdc,c,m);
+                                    Slew = ArcSlewEdge(pArc,Slew,Load,e);
                                 }
                                 if ( !ClockTagValid(pArr,m,e,Label) || (m ? Cand > pArr->Arrival[m][e][Label] : Cand < pArr->Arrival[m][e][Label]) )
                                 {
@@ -1059,7 +1044,7 @@ static void BuildTopoOrder( MstaTiming *p )
    ===================================================================== */
 
 /* 判断某个边沿的到达时间是否已经算出来。 */
-static int Msta_ArrivalSet( double Arrival, int fMax )
+static int ArrivalSet( double Arrival, int fMax )
 {
     return fMax ? Arrival > -MSTA_NO_TIME / 2.0 : Arrival < MSTA_NO_TIME / 2.0;
 }
@@ -1091,8 +1076,6 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
     double *pArrM  = pCorner->pArr;
     double *pSlewM = pCorner->pSlew;
     int    *pPrevNet  = pCorner->pPrevNet;
-    int    *pPrevInst = pCorner->pPrevInst;
-    int    *pPrevPin  = pCorner->pPrevPin;
     MstaPrev *pPrevR  = pCorner->pPrevRise;
     MstaPrev *pPrevF  = pCorner->pPrevFall;
     int    *pSrcClock = pCorner->pnLaunchClock;
@@ -1107,13 +1090,13 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
         MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, nNet );
         double BestR = Unset, BestF = Unset;
         double SlewR = MSTA_DEFAULT_SLEW, SlewF = MSTA_DEFAULT_SLEW;
-        int nPrevR = -1, nPrevF = -1, nPinR = -1, nPinF = -1;
+        int nPrevR = -1, nPrevF = -1;
         int nEdgeR = -1, nEdgeF = -1;
         int nDriverInst = pNet->Driver.InstId;
 
         pArrR[nNet] = pArrF[nNet] = Unset;
         pSlewR[nNet] = pSlewF[nNet] = MSTA_DEFAULT_SLEW;
-        pPrevNet[nNet] = pPrevInst[nNet] = pPrevPin[nNet] = -1;
+        pPrevNet[nNet] = -1;
         pPrevR[nNet].Net = pPrevR[nNet].Edge = -1;
         pPrevF[nNet].Net = pPrevF[nNet].Edge = -1;
         pSrcClock[nNet] = -1;
@@ -1185,11 +1168,11 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                                            ? pCons->DriveInSlewRise : SlewR;
                                 double InF = Msta_IsSet(pCons->DriveInSlewFall)
                                            ? pCons->DriveInSlewFall : SlewF;
-                                BestR += ArcDelayEdge( pArc, InR, Load, fMax, 1 );
-                                BestF += ArcDelayEdge( pArc, InF, Load, fMax, 0 );
-                                SlewR = ArcSlewEdge( pArc, InR, Load, fMax, 1 )
+                                BestR += ArcDelayEdge( pArc, InR, Load, 1 );
+                                BestF += ArcDelayEdge( pArc, InF, Load, 0 );
+                                SlewR = ArcSlewEdge( pArc, InR, Load, 1 )
                                       * pCons->DriveMultiply;
-                                SlewF = ArcSlewEdge( pArc, InF, Load, fMax, 0 )
+                                SlewF = ArcSlewEdge( pArc, InF, Load, 0 )
                                       * pCons->DriveMultiply;
                             }
                         }
@@ -1250,15 +1233,13 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             }
                             else
                             {
-                                BestR = Edge + ArcDelayEdge( pArc, ClkSlew, Load, fMax, 1 )
+                                BestR = Edge + ArcDelayEdge( pArc, ClkSlew, Load, 1 )
                                               * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,1);
-                                BestF = Edge + ArcDelayEdge( pArc, ClkSlew, Load, fMax, 0 )
+                                BestF = Edge + ArcDelayEdge( pArc, ClkSlew, Load, 0 )
                                               * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,0);
-                                SlewR = ArcSlewEdge( pArc, ClkSlew, Load, fMax, 1 );
-                                SlewF = ArcSlewEdge( pArc, ClkSlew, Load, fMax, 0 );
+                                SlewR = ArcSlewEdge( pArc, ClkSlew, Load, 1 );
+                                SlewF = ArcSlewEdge( pArc, ClkSlew, Load, 0 );
                             }
-                            pPrevInst[nNet] = nDriverInst;
-                            pPrevPin[nNet]  = pNet->Driver.PinId;
                             pSrcEdge[nNet]  = Edge;
                             pSrcClock[nNet] = nClock;
                             pSrcRises[nNet] = (char)fClkRises;
@@ -1297,7 +1278,6 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             double *pBestE = e ? &BestR : &BestF;
                             double *pSlewBest = e ? &SlewR : &SlewF;
                             int *pPrevBest = e ? &nPrevR : &nPrevF;
-                            int *pPinBest = e ? &nPinR : &nPinF;
                             int *pEdgeBest = e ? &nEdgeR : &nEdgeF;
                             int nInEdge = CoupledInputEdge( Sense, e );
                             double InArr, InSlew, Cand, CandSlew;
@@ -1305,8 +1285,8 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             if ( nInEdge < 0 )
                             {
                                 /* 非单调（non_unate）或未知：对该分析角取最保守的输入边沿。 */
-                                int fR = Msta_ArrivalSet( pArrR[nInNet], fMax );
-                                int fF = Msta_ArrivalSet( pArrF[nInNet], fMax );
+                                int fR = ArrivalSet( pArrR[nInNet], fMax );
+                                int fF = ArrivalSet( pArrF[nInNet], fMax );
                                 if ( !fR && !fF )
                                     continue;
                                 if ( !fF )      nInEdge = 1;
@@ -1314,7 +1294,7 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                                 else            nInEdge = ( fMax ? ( pArrR[nInNet] > pArrF[nInNet] )
                                                                  : ( pArrR[nInNet] < pArrF[nInNet] ) ) ? 1 : 0;
                             }
-                            else if ( !Msta_ArrivalSet( nInEdge ? pArrR[nInNet] : pArrF[nInNet], fMax ) )
+                            else if ( !ArrivalSet( nInEdge ? pArrR[nInNet] : pArrF[nInNet], fMax ) )
                                 continue;
 
                             InArr  = nInEdge ? pArrR[nInNet] : pArrF[nInNet];
@@ -1326,16 +1306,15 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             }
                             else
                             {
-                                Cand = InArr + ArcDelayEdge( pArc, InSlew, Load, fMax, e )
+                                Cand = InArr + ArcDelayEdge( pArc, InSlew, Load, e )
                                               * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,e);
-                                CandSlew = ArcSlewEdge( pArc, InSlew, Load, fMax, e );
+                                CandSlew = ArcSlewEdge( pArc, InSlew, Load, e );
                             }
                             if ( fMax ? ( Cand > *pBestE ) : ( Cand < *pBestE ) )
                             {
                                 *pBestE = Cand;
                                 *pSlewBest = CandSlew;
                                 *pPrevBest = nInNet;
-                                *pPinBest = i;
                                 *pEdgeBest = nInEdge;
                             }
                         }
@@ -1384,14 +1363,11 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
             pArrF[nNet]  = BestF;
             pSlewR[nNet] = SlewR;
             pSlewF[nNet] = SlewF;
-            if ( Msta_ArrivalSet( Best, fMax ) )
+            if ( ArrivalSet( Best, fMax ) )
             {
                 pArrM[nNet]  = Best;
                 pSlewM[nNet] = nUseRise ? SlewR : SlewF;
                 pPrevNet[nNet] = nUseRise ? nPrevR : nPrevF;
-                pPrevPin[nNet] = nUseRise ? nPinR  : nPinF;
-                if ( nDriverInst != MSTA_NO_ID && pPrevInst[nNet] < 0 )
-                    pPrevInst[nNet] = nDriverInst;
                 if ( pPrevNet[nNet] >= 0 )
                 {
                     pSrcClock[nNet] = pSrcClock[pPrevNet[nNet]];
@@ -1413,7 +1389,7 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
    ===================================================================== */
 
 /* 两个整数的最大公约数（跨时钟搜索的周期用整数 ps 算）。 */
-static int Msta_Gcd( int a, int b )
+static int Gcd( int a, int b )
 {
     while ( b != 0 ) { int t = a % b; a = b; b = t; }
     return a < 0 ? -a : a;
@@ -1463,7 +1439,7 @@ static void FindClockPairEdges( MstaTiming *p, int nLaunchClock, int fLaunchRise
     kMax = 1000;
     {
         int nLaunchPs = (int)( LaunchPeriod + 0.5 ), nCapturePs = (int)( CapturePeriod + 0.5 );
-        int g = Msta_Gcd( nLaunchPs, nCapturePs );
+        int g = Gcd( nLaunchPs, nCapturePs );
         if ( g > 0 )
         {
             kMax = ( nCapturePs + g - 1 ) / g;      /* = 公共周期 / 出发周期 */
@@ -1656,8 +1632,9 @@ static int CollectEdgePath( MstaTiming *p, int nEndNet, int fMax, int fEndRise,
     return Count;
 }
 
-/* 按指定的数据边沿回溯，起点也必须跟随该边沿的前驱。 */
-static int TimingStartNetEdge( MstaTiming *p, int nNet, int fMax, int fRise )
+/* 按指定的数据边沿回溯，起点也必须跟随该边沿的前驱。返回起点网络；
+   pfStartRise 非空时带回起点上的数据边沿（用于引脚/端口的 -rise_from/-fall_from）。 */
+static int TimingStartNetEdge( MstaTiming *p, int nNet, int fMax, int fRise, int *pfStartRise )
 {
     int Guard = 0;
     while ( nNet >= 0 && Guard++ < p->pDes->vNets.nSize )
@@ -1668,22 +1645,9 @@ static int TimingStartNetEdge( MstaTiming *p, int nNet, int fMax, int fRise )
         nNet = Prev.Net;
         fRise = Prev.Edge;
     }
+    if ( pfStartRise )
+        *pfStartRise = fRise;
     return nNet;
-}
-
-/* 起点的数据边沿沿同一份前驱反推，用于引脚/端口的 -rise_from/-fall_from。 */
-static int PathStartRise( MstaTiming *p, int nNet, int fMax, int fRise )
-{
-    int Guard = 0;
-    while ( nNet >= 0 && Guard++ < p->pDes->vNets.nSize )
-    {
-        MstaPrev Prev = (fRise ? CornerOf(p,fMax)->pPrevRise
-                              : CornerOf(p,fMax)->pPrevFall)[nNet];
-        if ( Prev.Net < 0 ) break;
-        nNet = Prev.Net;
-        fRise = Prev.Edge;
-    }
-    return fRise;
 }
 
 /* 收集候选路径上的对象（起点 -> 终点方向）：
@@ -1834,7 +1798,8 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
     MstaAsyncCheck *pAsync = MstaAsyncCheckArrayAt(&pCell->vAsync,pCheck->nAsyncCheck);
     int nClkNet = InstPinNet(p,pCheck->InstId,pAsync->ClkPin);
     int nClock, nEndNet = pCheck->nEndNet;
-    int nStart = TimingStartNetEdge(p,nEndNet,pCheck->fRecovery,fDataRise);
+    int fStartRise;
+    int nStart = TimingStartNetEdge(p,nEndNet,pCheck->fRecovery,fDataRise,&fStartRise);
     MstaCorner *pCorner = CornerOf(p,pCheck->fRecovery);
     int *pLaunchClock = CornerOf(p,pCheck->fRecovery)->pnLaunchClock;
     double *pArrival = fDataRise ? CornerOf(p,pCheck->fRecovery)->pArrRise
@@ -1848,7 +1813,7 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
     int fClkRises, nLaunchCycle = 0;
     nClock = nCaptureClock;
     if ( nClkNet < 0 || nClock < 0 || pLaunchClock[nStart] < 0 ||
-         !Msta_ArrivalSet(pArrival[nEndNet],pCheck->fRecovery) ) return;
+         !ArrivalSet(pArrival[nEndNet],pCheck->fRecovery) ) return;
     /* 捕获沿按当前源边沿标签取；它传不到库定义的本地沿时不查。 */
     fClkRises = p->CaptureClockTag;
     if ( !ClockTagValid(ClockArrAt(p,nClock,nClkNet),!pCheck->fRecovery,pAsync->fClkRises,fClkRises) ) return;
@@ -1860,7 +1825,7 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
     From.pObj   = &FromObj;
     From.pClock = Msta_NameStr( Msta_SdcClockByIndex(p->pSdc,pLaunchClock[nStart])->Name );
     From.fRises = pCorner->pfLaunchRises[nStart];
-    FromObj.fRises = PathStartRise(p,nEndNet,pCheck->fRecovery,fDataRise);
+    FromObj.fRises = fStartRise;
     ToObj.fRises = fDataRise;
     To.pObj     = &ToObj;
     To.pClock   = Msta_NameStr( Msta_SdcClockByIndex(p->pSdc,nClock)->Name );
@@ -2015,7 +1980,7 @@ static int ApplyCornerExceptions( MstaTiming *p, MstaCheck *pCheck, MstaRegCheck
     int nPathObjects, fFalse = 0, fKeep = 1;
     BuildStartEndpoint( p, nStart, fSetup, &From, &FromObj );
     BuildEndEndpoint( p, pCheck, pReg, nCaptureClock, fSetup, &To, &ToObj );
-    FromObj.fRises = PathStartRise(p,nEndNet,fSetup,fDataRise);
+    TimingStartNetEdge( p, nEndNet, fSetup, fDataRise, &FromObj.fRises );
     ToObj.fRises = fDataRise;
     nPathObjects = CollectPathObjects(p, nEndNet, fSetup, fDataRise,
                                       PathObjects, MSTA_PATH_OBJECTS);
@@ -2043,7 +2008,7 @@ static int ApplyCornerExceptions( MstaTiming *p, MstaCheck *pCheck, MstaRegCheck
 static void EvaluateCheckCorner( MstaTiming *p, MstaCheck *pCheck, int fSetup,
                                  MstaCell *pCell, MstaRegCheck *pReg,
                                  int nCaptureClock, int nCaptureNet, int nStart,
-                                 int fStartInput, int nOutputRef, double OutDelay,
+                                 int nOutputRef, double OutDelay,
                                  int nCycles, double PathDelay, int fDataRise )
 {
     MstaCorner *pCorner = CornerOf( p, fSetup );
@@ -2114,14 +2079,14 @@ static void CheckEndpointAttempt( MstaTiming *p, MstaCheck *pCheck, int nCapture
                                   MstaPathExclude *pExclude, int *pnExclude, int fDataRise )
 {
     int nEndNet = pCheck->nEndNet;
-    int nStartMax = TimingStartNetEdge( p, nEndNet, 1, fDataRise );
-    int nStartMin = TimingStartNetEdge( p, nEndNet, 0, fDataRise );
+    int nStartMax = TimingStartNetEdge( p, nEndNet, 1, fDataRise, NULL );
+    int nStartMin = TimingStartNetEdge( p, nEndNet, 0, fDataRise, NULL );
     int nCaptureNet = -1;
     int nOutputRefMax = -1, nOutputRefMin = -1;
-    int fSetup = Msta_ArrivalSet(fDataRise ? p->CornerMax.pArrRise[nEndNet]
+    int fSetup = ArrivalSet(fDataRise ? p->CornerMax.pArrRise[nEndNet]
                                          : p->CornerMax.pArrFall[nEndNet], 1)
                  && nStartMax >= 0 && p->CornerMax.pnLaunchClock[nStartMax] >= 0;
-    int fHold = Msta_ArrivalSet(fDataRise ? p->CornerMin.pArrRise[nEndNet]
+    int fHold = ArrivalSet(fDataRise ? p->CornerMin.pArrRise[nEndNet]
                                         : p->CornerMin.pArrFall[nEndNet], 0)
                 && nStartMin >= 0 && p->CornerMin.pnLaunchClock[nStartMin] >= 0;
     int nSetupCycles = 1, nHoldCycles = 1;
@@ -2130,10 +2095,6 @@ static void CheckEndpointAttempt( MstaTiming *p, MstaCheck *pCheck, int nCapture
     MstaCell *pCell = NULL;
     MstaRegCheck *pReg = NULL;
     MstaNetCons *pCons = NULL;
-    int fStartMaxInput, fStartMinInput;
-
-    fStartMaxInput = MstaNetArrayAt(&p->pDes->vNets,nStartMax)->Driver.InstId == MSTA_NO_ID;
-    fStartMinInput = MstaNetArrayAt(&p->pDes->vNets,nStartMin)->Driver.InstId == MSTA_NO_ID;
 
     if ( pCheck->fToRegister )
     {
@@ -2196,10 +2157,10 @@ static void CheckEndpointAttempt( MstaTiming *p, MstaCheck *pCheck, int nCapture
     pCheck->Setup.LaunchClock = pCheck->Hold.LaunchClock = MSTA_NO_ID;
     if ( fSetup )
         EvaluateCheckCorner( p, pCheck, 1, pCell, pReg, nCaptureClock, nCaptureNet, nStartMax,
-                             fStartMaxInput, nOutputRefMax, OutMax, nSetupCycles, PathMax, fDataRise );
+                             nOutputRefMax, OutMax, nSetupCycles, PathMax, fDataRise );
     if ( fHold )
         EvaluateCheckCorner( p, pCheck, 0, pCell, pReg, nCaptureClock, nCaptureNet, nStartMin,
-                             fStartMinInput, nOutputRefMin, OutMin, nHoldCycles, PathMin, fDataRise );
+                             nOutputRefMin, OutMin, nHoldCycles, PathMin, fDataRise );
 }
 
 /* =====================================================================
@@ -2379,8 +2340,6 @@ static void AllocCorner( MstaCorner *pC, int n )
     pC->pdLaunchEdge  = (double *)calloc( (size_t)n, sizeof(double) );
     pC->pfLaunchRises = (char *)calloc( (size_t)n, sizeof(char) );
     pC->pPrevNet      = (int *)malloc( (size_t)n * sizeof(int) );
-    pC->pPrevInst     = (int *)malloc( (size_t)n * sizeof(int) );
-    pC->pPrevPin      = (int *)malloc( (size_t)n * sizeof(int) );
     pC->pPrevRise     = (MstaPrev *)malloc( (size_t)n4 * sizeof(MstaPrev) );
     pC->pPrevFall     = (MstaPrev *)malloc( (size_t)n4 * sizeof(MstaPrev) );
 }
@@ -2397,8 +2356,6 @@ static void FreeCorner( MstaCorner *pC )
     free( pC->pdLaunchEdge );
     free( pC->pfLaunchRises );
     free( pC->pPrevNet );
-    free( pC->pPrevInst );
-    free( pC->pPrevPin );
     free( pC->pPrevRise );
     free( pC->pPrevFall );
     memset( pC, 0, sizeof(MstaCorner) );
@@ -2659,8 +2616,8 @@ static void CheckDataChecks( MstaTiming *p, int nClock )
         MstaDataCheck *pCheck = Msta_SdcDataCheckByIndex( p->pSdc, i );
         int nFrom = pCheck->FromNet, nTo = pCheck->ToNet;
         double FromDelay, Required, Slack;
-        if ( !Msta_ArrivalSet(p->CornerMax.pArr[nFrom],1) || !Msta_ArrivalSet(p->CornerMax.pArr[nTo],1) ||
-             !Msta_ArrivalSet(p->CornerMin.pArr[nFrom],0) || !Msta_ArrivalSet(p->CornerMin.pArr[nTo],0) )
+        if ( !ArrivalSet(p->CornerMax.pArr[nFrom],1) || !ArrivalSet(p->CornerMax.pArr[nTo],1) ||
+             !ArrivalSet(p->CornerMin.pArr[nFrom],0) || !ArrivalSet(p->CornerMin.pArr[nTo],0) )
             continue;
         if ( p->CornerMax.pnLaunchClock[nFrom] != nClock || p->CornerMax.pnLaunchClock[nTo] != nClock ||
              p->CornerMin.pnLaunchClock[nFrom] != nClock || p->CornerMin.pnLaunchClock[nTo] != nClock )
@@ -2682,7 +2639,6 @@ static void CheckDataChecks( MstaTiming *p, int nClock )
                 p->DataCheckSetupTo    = pCheck->ToText;
                 p->DataCheckSetupValue = pCheck->Value;
             }
-            if ( Slack < 0.0 ) p->nDataCheckSetupViol++;
         }
         if ( pCheck->fHold )
         {
@@ -2722,14 +2678,14 @@ static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, 
 
     for ( Edge = 1; Edge >= 0; Edge-- )
     {
-        nStartMax = TimingStartNetEdge(p,nEnNet,1,Edge);
-        nStartMin = TimingStartNetEdge(p,nEnNet,0,Edge);
+        nStartMax = TimingStartNetEdge(p,nEnNet,1,Edge,NULL);
+        nStartMin = TimingStartNetEdge(p,nEnNet,0,Edge,NULL);
         Msta_SdcClockGatingValue( p->pSdc, nInst, 1, &Value, &fSet );
         if ( (fSet || (pGate->SetupArc != MSTA_NO_ID &&
              CheckHasEdge(p, Msta_CellArcById(pInst->pCell,pGate->SetupArc),
                           nInst, 1, Edge))) &&
              ClockTagValid(pClkArr,0,pGate->fClkRises,fClkRises) &&
-             Msta_ArrivalSet(Edge ? p->CornerMax.pArrRise[nEnNet] : p->CornerMax.pArrFall[nEnNet],1) )
+             ArrivalSet(Edge ? p->CornerMax.pArrRise[nEnNet] : p->CornerMax.pArrFall[nEnNet],1) )
         {
             MstaArc *pArc = ( pGate->SetupArc != MSTA_NO_ID )
                           ? Msta_CellArcById( pInst->pCell, pGate->SetupArc ) : NULL;
@@ -2753,7 +2709,7 @@ static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, 
              CheckHasEdge(p, Msta_CellArcById(pInst->pCell,pGate->HoldArc),
                           nInst, 0, Edge))) &&
              ClockTagValid(pClkArr,1,pGate->fClkRises,fClkRises) &&
-             Msta_ArrivalSet(Edge ? p->CornerMin.pArrRise[nEnNet] : p->CornerMin.pArrFall[nEnNet],0) )
+             ArrivalSet(Edge ? p->CornerMin.pArrRise[nEnNet] : p->CornerMin.pArrFall[nEnNet],0) )
         {
             MstaArc *pArc = ( pGate->HoldArc != MSTA_NO_ID )
                           ? Msta_CellArcById( pInst->pCell, pGate->HoldArc ) : NULL;
@@ -3012,8 +2968,7 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
     PropagateClocks( p );              /* 5. 时钟传播 */
     /* 6. 数据到达与检查 */
     p->nDataChecks = 0;
-    p->nDataCheckSetupViol = p->nDataCheckHoldViol = 0;
-    p->WorstDataCheckSetupSlack = p->WorstDataCheckHoldSlack = MSTA_NO_TIME;
+    p->WorstDataCheckSetupSlack = MSTA_NO_TIME;
     p->nClkGatingChecks = 0;
     p->WorstClkGatingSetupSlack = p->WorstClkGatingHoldSlack = MSTA_NO_TIME;
     p->ClkGatingSetupInst = p->ClkGatingHoldInst = -1;
@@ -3095,15 +3050,15 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
     return 1;
 }
 
-static int g_fSetupSort = 1;
+static int s_fSetupSort = 1;
 
 static int CompareSlack( const void *pA, const void *pB )
 {
     const MstaCheck *pX = (const MstaCheck *)pA;
     const MstaCheck *pY = (const MstaCheck *)pB;
-    double a = g_fSetupSort ? (pX->Setup.fChecked ? pX->Setup.Slack : MSTA_NO_TIME)
+    double a = s_fSetupSort ? (pX->Setup.fChecked ? pX->Setup.Slack : MSTA_NO_TIME)
                             : (pX->Hold.fChecked  ? pX->Hold.Slack  : MSTA_NO_TIME);
-    double b = g_fSetupSort ? (pY->Setup.fChecked ? pY->Setup.Slack : MSTA_NO_TIME)
+    double b = s_fSetupSort ? (pY->Setup.fChecked ? pY->Setup.Slack : MSTA_NO_TIME)
                             : (pY->Hold.fChecked  ? pY->Hold.Slack  : MSTA_NO_TIME);
     if ( a < b ) return -1;
     if ( a > b ) return 1;
@@ -3112,7 +3067,7 @@ static int CompareSlack( const void *pA, const void *pB )
 
 void Msta_TimingSortChecks( MstaTiming *p, int fSetup )
 {
-    g_fSetupSort = fSetup;
+    s_fSetupSort = fSetup;
     if ( p->vChecks.nSize > 1 )
         qsort( p->vChecks.pData, (size_t)p->vChecks.nSize, sizeof(MstaCheck), CompareSlack );
 }

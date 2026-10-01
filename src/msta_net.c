@@ -11,7 +11,6 @@
 
 ***********************************************************************/
 
-#include <ctype.h>
 #include <unistd.h>
 #include "msta_net.h"
 #include "msta_json.h"
@@ -371,9 +370,9 @@ static MstaCell *Msta_BlackBoxCell( MstaFlatten *pF, MstaModule *pMod, MstaModCe
     int i = Msta_IntMapGet( &pDes->blackBoxMap, pCell->Type, -1 );
     int c;
     if ( i >= 0 )
-        return MstaCellArray2At( &pDes->vBlackBoxCells, i );
+        return MstaCellArrayAt( &pDes->vBlackBoxCells, i );
 
-    pNew = MstaCellArray2Append( &pDes->vBlackBoxCells );
+    pNew = MstaCellArrayAppend( &pDes->vBlackBoxCells );
     Msta_IntMapSet( &pDes->blackBoxMap, pCell->Type, pDes->vBlackBoxCells.nSize - 1 );
     MstaPinArrayInit( &pNew->vPins );
     MstaArcArrayInit( &pNew->vArcs );
@@ -567,7 +566,7 @@ static void Msta_InferBlackBoxDirs( MstaDesign *pDes )
     /* 剩下的未知方向脚一律当输入：不推断错，只漏推断。 */
     for ( i = 0; i < pDes->vBlackBoxCells.nSize; i++ )
     {
-        MstaCell *pCell = MstaCellArray2At( &pDes->vBlackBoxCells, i );
+        MstaCell *pCell = MstaCellArrayAt( &pDes->vBlackBoxCells, i );
         for ( c = 0; c < pCell->vPins.nSize; c++ )
             if ( pCell->vPins.pData[c].Dir == MSTA_DIR_NO )
                 pCell->vPins.pData[c].Dir = MSTA_DIR_INPUT;
@@ -768,7 +767,7 @@ MstaDesign *Msta_DesignStart( void )
     Msta_IntMapInit( &p->netNameMap, 1 << 16 );
     MstaNetArrayInit( &p->vNets );
     MstaInstArrayInit( &p->vInsts );
-    MstaCellArray2Init( &p->vBlackBoxCells );
+    MstaCellArrayInit( &p->vBlackBoxCells );
     Msta_IntMapInit( &p->blackBoxMap, 256 );
     return p;
 }
@@ -799,13 +798,13 @@ void Msta_DesignFree( MstaDesign *pDes )
     MstaInstArrayFree( &pDes->vInsts );
     for ( i = 0; i < pDes->vBlackBoxCells.nSize; i++ )
     {
-        MstaCell *pCell = MstaCellArray2At( &pDes->vBlackBoxCells, i );
+        MstaCell *pCell = MstaCellArrayAt( &pDes->vBlackBoxCells, i );
         free( pCell->pLibName );
         MstaPinArrayFree( &pCell->vPins );
         MstaArcArrayFree( &pCell->vArcs );
         MstaRegCheckArrayFree( &pCell->vRegs );
     }
-    MstaCellArray2Free( &pDes->vBlackBoxCells );
+    MstaCellArrayFree( &pDes->vBlackBoxCells );
     Msta_IntMapFree( &pDes->modMap );
     Msta_IntMapFree( &pDes->netNameMap );
     Msta_IntMapFree( &pDes->blackBoxMap );

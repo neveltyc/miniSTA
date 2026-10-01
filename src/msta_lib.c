@@ -87,35 +87,7 @@ typedef struct {
     int fColUsesFirst;
 } MstaTemplate;
 
-/* 模板表只在本文件里用，只需要 init/at/append/free 四个动作，
-   所以不套 MstaArrayDefine（宏还会生成这里用不到的按指针查找）。 */
-typedef struct {
-    MstaTemplate *pData;
-    int           nSize;
-    int           nCapacity;
-} MstaTemplateArray;
-
-static void MstaTemplateArrayInit( MstaTemplateArray *p )
-{ p->pData = NULL; p->nSize = p->nCapacity = 0; }
-
-static MstaTemplate *MstaTemplateArrayAt( MstaTemplateArray *p, int i )
-{ assert( 0 <= i && i < p->nSize ); return &p->pData[i]; }
-
-static MstaTemplate *MstaTemplateArrayAppend( MstaTemplateArray *p )
-{
-    if ( p->nSize == p->nCapacity )
-    {
-        int nNew = p->nCapacity ? p->nCapacity * 2 : 8;
-        p->pData = (MstaTemplate *)realloc( p->pData, (size_t)nNew * sizeof(MstaTemplate) );
-        assert( p->pData );
-        p->nCapacity = nNew;
-    }
-    memset( &p->pData[p->nSize], 0, sizeof(MstaTemplate) );
-    return &p->pData[p->nSize++];
-}
-
-static void MstaTemplateArrayFree( MstaTemplateArray *p )
-{ free( p->pData ); p->pData = NULL; p->nSize = p->nCapacity = 0; }
+MstaArrayDefine( MstaTemplate, MstaTemplateArray )
 
 static MstaTemplate *Msta_LibFindTemplate( MstaTemplateArray *pArr, const char *pName )
 {
@@ -264,7 +236,6 @@ static void Msta_LibReadTiming( Scl_Tree_t *pTree, Scl_Item_t *pTiming,
         else if ( !strcasecmp(p, "negative_unate") ) pArc->Sense = MSTA_SENSE_NEGATIVE;
         else if ( !strcasecmp(p, "non_unate") )            pArc->Sense = MSTA_SENSE_NONUNATE;
     }
-    pArc->MaxSlewLimit = -1.0;
 
     /* 四种延迟/摆率表 */
     Msta_LibReadTable( pTree, Scl_LibertyFindChild(pTree, pTiming, "cell_rise"),
@@ -1066,61 +1037,61 @@ int Msta_CellPinIndexOf( MstaCell *pCell, MstaId NameId )
    只在侧输入已有 case/常量值时用于时钟弧裁剪；
    未识别的语法或过多自由变量回退声明的 timing_sense，保持保守。 */
 typedef struct {
-    const char *Text;
-    MstaCell *Cell;
-    const signed char *Values;
-    int Valid, Depth;
+    const char *pText;
+    MstaCell *pCell;
+    const signed char *pValues;
+    int fValid, nDepth;
 } MstaBoolExpr;
 
 static void BoolSpace( MstaBoolExpr *p )
-{ while ( isspace((unsigned char)*p->Text) ) p->Text++; }
+{ while ( isspace((unsigned char)*p->pText) ) p->pText++; }
 static int BoolOr( MstaBoolExpr *p );
 static int BoolXor( MstaBoolExpr *p );
 static int BoolAtom( MstaBoolExpr *p )
 {
     int Value = 0, i;
-    if ( ++p->Depth > 256 ) { p->Valid = 0; p->Depth--; return 0; }
+    if ( ++p->nDepth > 256 ) { p->fValid = 0; p->nDepth--; return 0; }
     BoolSpace(p);
-    if ( *p->Text == '!' ) { p->Text++; Value = !BoolAtom(p); }
-    else if ( *p->Text == '(' )
+    if ( *p->pText == '!' ) { p->pText++; Value = !BoolAtom(p); }
+    else if ( *p->pText == '(' )
     {
-        p->Text++; Value = BoolOr(p); BoolSpace(p);
-        if ( *p->Text != ')' ) p->Valid = 0;
-        else p->Text++;
+        p->pText++; Value = BoolOr(p); BoolSpace(p);
+        if ( *p->pText != ')' ) p->fValid = 0;
+        else p->pText++;
     }
     else
     {
-        const char *Start = p->Text;
-        while ( *p->Text && (isalnum((unsigned char)*p->Text) || strchr("_[].$/",*p->Text)) ) p->Text++;
-        size_t Length = (size_t)(p->Text - Start);
+        const char *Start = p->pText;
+        while ( *p->pText && (isalnum((unsigned char)*p->pText) || strchr("_[].$/",*p->pText)) ) p->pText++;
+        size_t Length = (size_t)(p->pText - Start);
         if ( Length == 1 && (*Start == '0' || *Start == '1') ) Value = *Start - '0';
         else
         {
             int Found = 0;
-            for ( i = 0; i < p->Cell->vPins.nSize; i++ )
+            for ( i = 0; i < p->pCell->vPins.nSize; i++ )
             {
-                const char *Name = Msta_NameStr(p->Cell->vPins.pData[i].Name);
+                const char *Name = Msta_NameStr(p->pCell->vPins.pData[i].Name);
                 if ( strlen(Name) == Length && !strncmp(Name,Start,Length) )
-                { Value = p->Values[i]; if ( Value < 0 || Value > 1 ) p->Valid = 0; Found = 1; break; }
+                { Value = p->pValues[i]; if ( Value < 0 || Value > 1 ) p->fValid = 0; Found = 1; break; }
             }
-            if ( !Found || Length == 0 ) p->Valid = 0;
+            if ( !Found || Length == 0 ) p->fValid = 0;
         }
     }
     BoolSpace(p);
-    while ( *p->Text == '\'' ) { Value = !Value; p->Text++; BoolSpace(p); }
-    p->Depth--;
+    while ( *p->pText == '\'' ) { Value = !Value; p->pText++; BoolSpace(p); }
+    p->nDepth--;
     return Value;
 }
 static int BoolAnd( MstaBoolExpr *p )
 {
     int Value = BoolXor(p);
-    while ( p->Valid )
+    while ( p->fValid )
     {
         BoolSpace(p);
-        char Op = *p->Text;
+        char Op = *p->pText;
         int Implicit = isalnum((unsigned char)Op) || Op == '_' || Op == '(' || Op == '!';
         if ( Op != '&' && Op != '*' && !Implicit ) break;
-        if ( !Implicit ) p->Text++;
+        if ( !Implicit ) p->pText++;
         Value &= BoolXor(p);
     }
     return Value;
@@ -1128,20 +1099,20 @@ static int BoolAnd( MstaBoolExpr *p )
 static int BoolXor( MstaBoolExpr *p )
 {
     int Value = BoolAtom(p);
-    while ( p->Valid )
+    while ( p->fValid )
     {
-        BoolSpace(p); if ( *p->Text != '^' ) break;
-        p->Text++; Value ^= BoolAtom(p);
+        BoolSpace(p); if ( *p->pText != '^' ) break;
+        p->pText++; Value ^= BoolAtom(p);
     }
     return Value;
 }
 static int BoolOr( MstaBoolExpr *p )
 {
     int Value = BoolAnd(p);
-    while ( p->Valid )
+    while ( p->fValid )
     {
-        BoolSpace(p); if ( *p->Text != '|' && *p->Text != '+' ) break;
-        p->Text++; Value |= BoolAnd(p);
+        BoolSpace(p); if ( *p->pText != '|' && *p->pText != '+' ) break;
+        p->pText++; Value |= BoolAnd(p);
     }
     return Value;
 }
@@ -1177,7 +1148,7 @@ int Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char 
             Values[In] = (signed char)f;
             Result[f] = BoolOr(&Expr);
             BoolSpace(&Expr);
-            if ( !Expr.Valid || *Expr.Text ) { free(Values); return pArc->Sense; }
+            if ( !Expr.fValid || *Expr.pText ) { free(Values); return pArc->Sense; }
         }
         if ( Result[0] == 0 && Result[1] == 1 ) Positive = 1;
         if ( Result[0] == 1 && Result[1] == 0 ) Negative = 1;
@@ -1219,7 +1190,7 @@ MstaArc *Msta_CellArcById( MstaCell *pCell, MstaId ArcId )
       （权重超出 [0,1]）。
    2) 双线性：四个角点加权。
    退化情况：1x1 表直接返回；只有一行/一列时退化为线性插值。 */
-static int Msta_TableAxisFind( const double *pAxis, int n, double x, double *pfWeight, const char *pWhat )
+static int Msta_TableAxisFind( const double *pAxis, int n, double x, double *pfWeight )
 {
     int i;
     if ( n <= 1 )
@@ -1262,8 +1233,8 @@ double Msta_TableLookup( const MstaTable *pTable, double Slew, double Load )
     if ( pTable->nRows == 1 && pTable->nCols == 1 )
         return pTable->pValues[0];
 
-    iRow = Msta_TableAxisFind( pTable->pRowIndex, pTable->nRows, RowValue, &wRow, "row" );
-    iCol = Msta_TableAxisFind( pTable->pColIndex, pTable->nCols, ColValue, &wCol, "column" );
+    iRow = Msta_TableAxisFind( pTable->pRowIndex, pTable->nRows, RowValue, &wRow );
+    iCol = Msta_TableAxisFind( pTable->pColIndex, pTable->nCols, ColValue, &wCol );
 
     v = pTable->pValues;
     if ( pTable->nCols == 1 )
@@ -1332,14 +1303,6 @@ void Msta_LibFree( MstaLib *pLib )
 /* ---------------------------------------------------------------------
    timing_type 文本 -> 枚举
    --------------------------------------------------------------------- */
-static const char *s_pTimingTypes[] = {
-    "", "combinational", "rising_edge", "falling_edge", "rise_both", "fall_both",
-    "setup_rising", "setup_falling", "hold_rising", "hold_falling",
-    "clear", "clearp", "preset", "presetp",
-    "recovery_rising", "recovery_falling", "removal_rising", "removal_falling",
-    "setup_falling_rising", "hold_falling_rising"
-};
-
 MstaTimingType Msta_TimingTypeFromName( const char *pName )
 {
     if ( !strcasecmp(pName, "combinational") )                     return MSTA_TT_COMBINATIONAL;
@@ -1357,7 +1320,6 @@ MstaTimingType Msta_TimingTypeFromName( const char *pName )
     if ( !strcasecmp(pName, "recovery_falling") )                  return MSTA_TT_RECOVERY_FALLING;
     if ( !strcasecmp(pName, "removal_rising") )                    return MSTA_TT_REMOVAL_RISING;
     if ( !strcasecmp(pName, "removal_falling") )                   return MSTA_TT_REMOVAL_FALLING;
-    (void)s_pTimingTypes;
     return MSTA_TT_UNKNOWN;
 }
 
@@ -1435,7 +1397,7 @@ void Msta_LibPrintStats( MstaLib *pLib, FILE *pFile )
 void Msta_LibPrintCell( MstaLib *pLib, FILE *pFile, const char *pCellName )
 {
     MstaCell *pCell = Msta_LibFindCell( pLib, pCellName );
-    int i, j;
+    int i;
     if ( pCell == NULL )
     {
         fprintf( pFile, "cell \"%s\" not found\n", pCellName );
@@ -1447,10 +1409,10 @@ void Msta_LibPrintCell( MstaLib *pLib, FILE *pFile, const char *pCellName )
     for ( i = 0; i < pCell->vPins.nSize; i++ )
     {
         MstaPin *pPin = MstaPinArrayAt( &pCell->vPins, i );
-        fprintf( pFile, "  pin %-9s dir=%-8s cap=%.6ff%s%s\n",
+        fprintf( pFile, "  pin %-9s dir=%-8s cap=%.6ff%s\n",
                  Msta_NameTableName(Msta_Names(), pPin->Name),
                  pPin->Dir == MSTA_DIR_INPUT ? "input" : (pPin->Dir == MSTA_DIR_OUTPUT ? "output" : "other"),
-                 pPin->Cap, pPin->fClock ? " clock" : "", pPin->pFunc ? "" : "" );
+                 pPin->Cap, pPin->fClock ? " clock" : "" );
     }
     for ( i = 0; i < pCell->vArcs.nSize; i++ )
     {
@@ -1478,5 +1440,4 @@ void Msta_LibPrintCell( MstaLib *pLib, FILE *pFile, const char *pCellName )
                  pReg->fClkRises ? "posedge" : "negedge",
                  pReg->SetupArc, pReg->HoldArc, pReg->ClkToQArc );
     }
-    (void)j;
 }

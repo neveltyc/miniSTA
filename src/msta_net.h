@@ -110,7 +110,6 @@ typedef struct {
     int        nPins;
 } MstaInst;
 MstaArrayDefine( MstaInst, MstaInstArray )
-MstaArrayDefine( MstaCell, MstaCellArray2 )
 
 /* 结构体带上 tag 名，别的模块（如 msta_cmds.h）可以先只声明指针。 */
 typedef struct MstaDesign {
@@ -127,10 +126,9 @@ typedef struct MstaDesign {
     int             nConst1Net;
 
     /* 库里查不到的单元：造占位 cell（不塞进 pLib，免得污染库统计） */
-    MstaCellArray2  vBlackBoxCells;
+    MstaCellArray   vBlackBoxCells;
     MstaIntMap      blackBoxMap;
     int             nBlackBoxes;
-    int             nFlattenedModules;   /* 模块实例数，用于说明展平规模 */
 } MstaDesign;
 
 /* ---- 读入 ---- */
@@ -140,9 +138,9 @@ void        Msta_DesignFree( MstaDesign *p );
 /* 读 yosys 的 write_json 产物。 */
 int         Msta_DesignReadYosysJson( MstaDesign *p, const char *pJsonFile, int fVerbose );
 
-/* 调用 yosys 把 Verilog 转成 JSON 再读进来。共 nFiles 个文件。
+/* 调用 yosys 把 Verilog 转成 JSON 再读进来。ppFiles 是 nFiles 个 Verilog 文件路径，
    pWorkDir 为中间 JSON 与 yosys 日志所在的目录。 */
-int         Msta_DesignReadVerilog( MstaDesign *p, const char **ppVerilogFiles, int nFiles,
+int         Msta_DesignReadVerilog( MstaDesign *p, const char **ppFiles, int nFiles,
                                     const char *pWorkDir, int fVerbose );
 
 /* ---- 展平与查询 ---- */

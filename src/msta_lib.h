@@ -111,7 +111,6 @@ typedef struct {
     MstaTable TransFall;      /* fall_transition */
     MstaTable ConstraintRise; /* setup/hold 的 rise_constraint */
     MstaTable ConstraintFall; /* setup/hold 的 fall_constraint */
-    double    MaxSlewLimit;   /* 本弧输入脚上的 max_transition，-1 表示没写 */
 } MstaArc;
 
 /* ---------------------------------------------------------------------
