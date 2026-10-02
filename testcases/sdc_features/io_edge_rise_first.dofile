@@ -1,4 +1,4 @@
-read_liberty ../sta_compare/lib/osu018_stdcells.lib
+read_liberty ../lib/sky130.lib
 read_verilog ../sta_compare/netlist.v
 current_design simple
 read_sdc io_edge_rise_first.sdc

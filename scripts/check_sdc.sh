@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="${ROOT}/build"
 
 grep -Eq '^external[[:space:]]+50\.000' "${LOG}/testcases_sdc_features_clock_groups.dofile.log"
-grep -Fq 'setup : WNS    9.748 ns' "${LOG}/testcases_sdc_features_add_delay.dofile.log"
+grep -Fq 'setup : WNS    9.624 ns' "${LOG}/testcases_sdc_features_add_delay.dofile.log"
 grep -Fq 'capture clock: external @ 50.000 ns' "${LOG}/testcases_sdc_features_add_delay.dofile.log"
 # external/spare 与 core 之间是异步域，跨域的那条 input->register 路径要被排除掉。
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_clock_groups.dofile.log"
@@ -20,7 +20,7 @@ grep -Eq '^slow[[:space:]]+20\.000' "${LOG}/testcases_sdc_features_generated.dof
 grep -Eq '^slow[[:space:]]+20\.000[[:space:]]+0\.100[[:space:]]+0\.100' "${LOG}/testcases_sdc_features_generated.dofile.log"
 grep -Fq 'capture clock: master @ 11.200 ns' "${LOG}/testcases_sdc_features_generated.dofile.log"
 grep -Fq 'capture clock: master @ 1.500 ns' "${LOG}/testcases_sdc_features_generated.dofile.log"
-grep -Fq '最大插入延迟 0.689 ns' "${LOG}/testcases_sdc_features_generated.dofile.log"
+grep -Fq '最大插入延迟 0.794 ns' "${LOG}/testcases_sdc_features_generated.dofile.log"
 # create_generated_clock -edges：用主时钟的第 1/3/5 个边沿定义新时钟。
 # 主时钟波形 1.0/4.0、周期 10 → rise@1、fall@11、下个 rise@21：周期 20，
 # 与 generated.sdc 的 -divide_by 2 是同一个波形。
@@ -32,9 +32,9 @@ grep -A1 -E '^duty30' "${LOG}/testcases_sdc_features_generated_edges_duty.dofile
     | grep -Fq '  edges 1.000/4.000 ns'
 grep -A1 -E '^shifted' "${LOG}/testcases_sdc_features_generated_edges_shift.dofile.log" \
     | grep -Fq '  edges 1.500/4.200 ns'
-grep -Fq 'setup : WNS    8.513 ns' "${LOG}/testcases_sdc_features_generated_edges.dofile.log"
-grep -Fq 'setup : WNS    8.813 ns' "${LOG}/testcases_sdc_features_generated_edges_duty.dofile.log"
-grep -Fq 'setup : WNS   -0.972 ns' "${LOG}/testcases_sdc_features_generated_edges_shift.dofile.log"
+grep -Fq 'setup : WNS    8.584 ns' "${LOG}/testcases_sdc_features_generated_edges.dofile.log"
+grep -Fq 'setup : WNS    8.884 ns' "${LOG}/testcases_sdc_features_generated_edges_duty.dofile.log"
+grep -Fq 'setup : WNS   -0.729 ns' "${LOG}/testcases_sdc_features_generated_edges_shift.dofile.log"
 grep -Fq 'startpoint : inp2' "${LOG}/testcases_sdc_features_reconverge.dofile.log"
 grep -Fq 'endpoint   : f1' "${LOG}/testcases_sdc_features_reconverge.dofile.log"
 grep -Fq 'startpoint : inp2' "${LOG}/testcases_sdc_features_same_clock_exception.dofile.log"
@@ -48,8 +48,8 @@ fi
 grep -Fq 'hold path (min corner, to register)' "${LOG}/testcases_sdc_features_false_setup.dofile.log"
 grep -Fq 'capture edge                             100.000' "${LOG}/testcases_sdc_features_multicycle.dofile.log"
 grep -Fq 'hold edge                                  0.000' "${LOG}/testcases_sdc_features_multicycle.dofile.log"
-grep -Fq 'setup : WNS   19.709 ns' "${LOG}/testcases_sdc_features_units.dofile.log"
-grep -Fq 'hold  : WNS   -9.784 ns' "${LOG}/testcases_sdc_features_units.dofile.log"
+grep -Fq 'setup : WNS   19.490 ns' "${LOG}/testcases_sdc_features_units.dofile.log"
+grep -Fq 'hold  : WNS   -9.561 ns' "${LOG}/testcases_sdc_features_units.dofile.log"
 grep -Fq 'startpoint : inp1' "${LOG}/testcases_sdc_features_path_budget.dofile.log"
 grep -Fq 'startpoint : inp2' "${LOG}/testcases_sdc_features_case_disable.dofile.log"
 
@@ -62,7 +62,7 @@ grep -Fq 'set_voltage：按对象设置电压未建模；约束作废' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 grep -Fq '跳过 1 条命令，其余约束照常生效' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
-grep -Fq 'setup : WNS   19.748 ns' "${LOG}/testcases_sdc_features_tolerant.dofile.log"
+grep -Fq 'setup : WNS   19.624 ns' "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 grep -Fq '未约束 0 个' "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 
 # -through：组内取"或"，组与组按路径顺序匹配，顺序反了就不命中。
@@ -81,10 +81,10 @@ fi
 # 列表里套集合、位置参数写成列表 {d clk}：from_list 后半段的这些写法与
 # from_list_flat 的平铺写法（位置参数分开写）效果相同——两份报告除首行（用例名）
 # 外逐行一致，且没有约束作废。这些写法确实生效：hold 到 q 推后一个 slow 周期并
-# 归入 out_grp；clk 的输入转换时间 0.2 让捕获沿从 -18.381 变成 -18.357。
+# 归入 out_grp；clk 的输入转换时间 0.2 让捕获沿从 -18.206 变成 -18.156。
 FROM_FLAT="${LOG}/testcases_sdc_features_from_list_flat.dofile.log"
-grep -Fq 'capture clock: slow @ -18.357 ns' "${FROM_LIST}"
-grep -Eq '^out_grp[[:space:]]+1\.00[[:space:]]+0[[:space:]]+-[[:space:]]+-[[:space:]]+1[[:space:]]+19\.695' "${FROM_LIST}"
+grep -Fq 'capture clock: slow @ -18.156 ns' "${FROM_LIST}"
+grep -Eq '^out_grp[[:space:]]+1\.00[[:space:]]+0[[:space:]]+-[[:space:]]+-[[:space:]]+1[[:space:]]+19\.896' "${FROM_LIST}"
 if grep -Eq '约束作废|未建模或写错' "${FROM_LIST}"; then
     echo 'from_list：列表里套集合或位置参数列表的写法被作废了' >&2
     exit 1
@@ -119,8 +119,8 @@ for edge_case in through_edge through_edge_rise; do
     fi
 done
 # rise/fall 的 I/O 延迟按保守方式合并，结果与 SDC 命令顺序无关。
-grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_io_edge_rise_first.dofile.log"
-grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_io_edge_fall_first.dofile.log"
+grep -Fq 'setup : WNS   44.860 ns' "${LOG}/testcases_sdc_features_io_edge_rise_first.dofile.log"
+grep -Fq 'setup : WNS   44.860 ns' "${LOG}/testcases_sdc_features_io_edge_fall_first.dofile.log"
 
 # set_operating_conditions / set_voltage：选择分析角（bc_wc）并记录/报告电压温度；
 # 库里没有 K 因子时明确告警"表值原样用"。
@@ -136,7 +136,7 @@ grep -Fq 'set_operating_conditions：-analysis_type on_chip_variation 未建模�
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 
 # 显式库限定必须精确匹配，不能静默改用另一个库里的同名单元。
-grep -Fq 'set_driving_cell：单元 "no_such_lib/INVX1" 不在指定的库里；约束作废' \
+grep -Fq 'set_driving_cell：单元 "no_such_lib/sky130_fd_sc_hd__inv_1" 不在指定的库里；约束作废' \
     "${LOG}/testcases_sdc_features_bad_driving_library.dofile.log"
 grep -Fq '1 条命令未建模或写错，已忽略' \
     "${LOG}/testcases_sdc_features_bad_driving_library.dofile.log"
@@ -202,10 +202,10 @@ grep -Fq '面积  : 37.5（目标 100000.0，余量 99962.5）' \
 grep -Fq 'setup : WNS    8.737 ns' "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
 
 # set_clock_transition / set_timing_derate 对 slack 的影响。
-grep -Fq 'setup : WNS   19.678 ns' "${LOG}/testcases_sdc_features_clock_transition.dofile.log"
-grep -Fq 'hold  : WNS   -9.740 ns' "${LOG}/testcases_sdc_features_clock_transition.dofile.log"
-grep -Fq 'setup : WNS   19.680 ns' "${LOG}/testcases_sdc_features_timing_derate.dofile.log"
-grep -Fq 'hold  : WNS   -9.806 ns' "${LOG}/testcases_sdc_features_timing_derate.dofile.log"
+grep -Fq 'setup : WNS   19.384 ns' "${LOG}/testcases_sdc_features_clock_transition.dofile.log"
+grep -Fq 'hold  : WNS   -9.458 ns' "${LOG}/testcases_sdc_features_clock_transition.dofile.log"
+grep -Fq 'setup : WNS   19.439 ns' "${LOG}/testcases_sdc_features_timing_derate.dofile.log"
+grep -Fq 'hold  : WNS   -9.605 ns' "${LOG}/testcases_sdc_features_timing_derate.dofile.log"
 
 # 时钟间不确定度：只作用于 -from/-to 指定的那对时钟。
 grep -Fq -- '- clock uncertainty                       -0.500' "${LOG}/testcases_sdc_features_inter_clock_uncertainty.dofile.log"
@@ -240,22 +240,24 @@ fi
 grep -Fq 'setup : WNS    3.599 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"
 
 # 理想网络（set_ideal_network）：不累计延迟。同一张网表的对照——4 级缓冲的时钟树
-# 插入延迟 0.584 ns，把时钟端口标成理想网络后整棵树都是 0，-no_propagate 只去掉
-# ct2 那一级（0.442 ns）。三个用例的 slack 差就是时钟偏差被去掉的那部分。
+# 插入延迟 0.315 ns，把时钟端口标成理想网络后整棵树都是 0；-no_propagate 只把 ct2
+# 这一级当成零延迟（摆率沿用它输入端的值），后面两级照常算，最深一级是 0.242 ns。
+# hold 最差路径是 f1 -> f2，slack 随 f2 的插入延迟变化：noprop 比基准多出的
+# 0.073 ns 正是 f2 插入延迟少掉的那部分（0.315 - 0.242）。
 # 时钟端口没有 set_input_transition，传播时钟源 slew 按 SDC 取 0。
-grep -Fq '时钟树：网络 5 根，算出插入延迟的 5 根，最深 4 级缓冲，最大插入延迟 0.584 ns' \
+grep -Fq '时钟树：网络 5 根，算出插入延迟的 5 根，最深 4 级缓冲，最大插入延迟 0.315 ns' \
     "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
-grep -Fq 'setup : WNS    8.672 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
-grep -Fq 'hold  : WNS   -0.316 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
+grep -Fq 'setup : WNS    8.552 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
+grep -Fq 'hold  : WNS    0.107 ns' "${LOG}/testcases_sdc_features_ideal_network.dofile.log"
 grep -Fq '最大插入延迟 0.000 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
-grep -Fq 'setup : WNS    8.813 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
-grep -Fq 'hold  : WNS   -0.003 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
-grep -Fq '最大插入延迟 0.442 ns' "${LOG}/testcases_sdc_features_ideal_network_noprop.dofile.log"
-grep -Fq 'hold  : WNS   -0.177 ns' "${LOG}/testcases_sdc_features_ideal_network_noprop.dofile.log"
+grep -Fq 'setup : WNS    8.669 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
+grep -Fq 'hold  : WNS    0.304 ns' "${LOG}/testcases_sdc_features_ideal_network_tree.dofile.log"
+grep -Fq '最大插入延迟 0.242 ns' "${LOG}/testcases_sdc_features_ideal_network_noprop.dofile.log"
+grep -Fq 'hold  : WNS    0.180 ns' "${LOG}/testcases_sdc_features_ideal_network_noprop.dofile.log"
 # set_ideal_latency / set_ideal_transition：理想网络上的延迟与摆率取给定值。
 grep -Fq '最大插入延迟 0.500 ns' "${LOG}/testcases_sdc_features_ideal_network_value.dofile.log"
 grep -Fq 'capture clock: core @ 10.200 ns' "${LOG}/testcases_sdc_features_ideal_network_value.dofile.log"
-grep -Fq 'setup : WNS    8.336 ns' "${LOG}/testcases_sdc_features_ideal_network_value.dofile.log"
+grep -Fq 'setup : WNS    8.158 ns' "${LOG}/testcases_sdc_features_ideal_network_value.dofile.log"
 # 标准写法不该产生任何 sdc 告警：三条命令都要被认下来。
 for idea_case in ideal_network ideal_network_tree ideal_network_noprop ideal_network_value; do
     if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_${idea_case}.dofile.log"; then
@@ -274,8 +276,8 @@ grep -Fq '  时钟 slow       网络 1 根，算出插入延迟的 1 根，最�
 # 慢钟那一拍给得紧，最差 slack 必须出自 slow：-add 进来的时钟真的参与了检查。
 grep -Fq 'launch clock : slow @ 0.000 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 grep -Fq 'capture clock: slow @ 50.000 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
-grep -Fq 'setup : WNS    4.754 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
-grep -Fq 'hold  : WNS    0.050 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
+grep -Fq 'setup : WNS    4.857 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
+grep -Fq 'hold  : WNS    0.076 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_clock_add.dofile.log"; then
     echo 'clock_add：标准写法不应该产生 sdc 告警' >&2
     exit 1
@@ -285,8 +287,8 @@ fi
 # 是 slow 第 1 拍（50）对 core 第 3 拍（60）。
 grep -Fq 'launch clock : slow @ 50.000 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 grep -Fq 'capture clock: core @ 60.000 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
-grep -Fq 'setup : WNS  -35.246 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
-grep -Fq 'hold  : WNS    0.050 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
+grep -Fq 'setup : WNS  -35.143 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
+grep -Fq 'hold  : WNS    0.076 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"; then
     echo 'clock_add_align：标准写法不应该产生 sdc 告警' >&2
     exit 1
@@ -295,8 +297,8 @@ fi
 # set_input_delay -clock_fall：出发沿和到达时间都参照时钟下降沿（25 ns）。
 grep -Fq '  inp1                                           30.000     30.000   (input port )' \
     "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
-grep -Fq 'setup : WNS   19.748 ns' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
-grep -Fq 'hold  : WNS   -9.820 ns' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
+grep -Fq 'setup : WNS   19.624 ns' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
+grep -Fq 'hold  : WNS   -9.628 ns' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
 if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"; then
     echo 'input_clock_fall：标准写法不应该产生 sdc 告警' >&2
     exit 1
@@ -304,20 +306,20 @@ fi
 
 # set_clock_sense：时钟路径上的反相器自动把 FF 的有效沿取反（捕捉沿落到 fall
 # 沿 10.0），-positive 把它强制回 rise 沿，-stop_propagation 让时钟不再往下传。
-grep -Fq '最深 2 级缓冲，最大插入延迟 0.170 ns' \
+grep -Fq '最深 2 级缓冲，最大插入延迟 0.081 ns' \
     "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-# 输入延迟参照的出发沿是时钟 rise（0），捕捉沿是反相后的 fall（10.168）；
-# hold 取不晚于出发沿的那个捕捉沿（-9.832）。
-grep -Fq 'capture clock: clk @ 10.168 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-grep -Fq 'capture clock: clk @ -9.832 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-grep -Fq 'setup : WNS    8.668 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-grep -Fq 'hold  : WNS    9.831 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
-# -positive：捕捉沿回到 20.168，slack 差一个半周期（10 ns）。
-grep -Fq 'capture clock: clk @ 20.168 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
-grep -Fq 'setup : WNS   18.668 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
+# 输入延迟参照的出发沿是时钟 rise（0），捕捉沿是反相后的 fall（10.081）；
+# hold 取不晚于出发沿的那个捕捉沿（-9.919）。
+grep -Fq 'capture clock: clk @ 10.081 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+grep -Fq 'capture clock: clk @ -9.919 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+grep -Fq 'setup : WNS    8.576 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+grep -Fq 'hold  : WNS    9.953 ns' "${LOG}/testcases_sdc_features_clock_sense.dofile.log"
+# -positive：捕捉沿回到 20.081，slack 差一个半周期（10 ns）。
+grep -Fq 'capture clock: clk @ 20.081 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
+grep -Fq 'setup : WNS   18.576 ns' "${LOG}/testcases_sdc_features_clock_sense_positive.dofile.log"
 # -stop_propagation：时钟停在反相器输出，后面那级网络不再算插入延迟，
 # 下面的 FF 没有时钟可用（端点算未约束）。
-grep -Fq '时钟树：网络 3 根，算出插入延迟的 2 根，最深 1 级缓冲，最大插入延迟 0.035 ns' \
+grep -Fq '时钟树：网络 3 根，算出插入延迟的 2 根，最深 1 级缓冲，最大插入延迟 0.019 ns' \
     "${LOG}/testcases_sdc_features_clock_sense_stop.dofile.log"
 grep -Fq '寄存器 1 个   端点 2 个   未约束 2 个' \
     "${LOG}/testcases_sdc_features_clock_sense_stop.dofile.log"
@@ -432,16 +434,16 @@ tclsh "${ROOT}/scripts/sdc_bridge.tcl" "${LOG}/compat_quiet_list.sdc" "${LOG}/co
 grep -Fq '["set_false_path","-to",["\u001epq","d"]]' "${LOG}/compat_quiet_list.json"
 
 # 方言写法（C 侧）：有的工具把 -no_propagate 写成 -no_propagation，这条认但告警。
-printf 'set_ideal_network -no_propagation [get_pins ct2/Y]\n' > "${LOG}/compat_ideal_network.sdc"
+printf 'set_ideal_network -no_propagation [get_pins ct2/X]\n' > "${LOG}/compat_ideal_network.sdc"
 ( cd "${ROOT}/testcases/sdc_features" && "${ROOT}/build/msta" -q -c \
-    "read_liberty ../sta_compare/lib/osu018_stdcells.lib; read_verilog ideal_network.v; \
+    "read_liberty ../lib/sky130.lib; read_verilog ideal_network.v; \
      current_design ideal_demo; read_sdc ideal_network.sdc; \
      read_sdc ${LOG}/compat_ideal_network.sdc; report_clock_tree" ) \
     > "${LOG}/compat_ideal_network.log" 2>&1
 grep -Fq 'set_ideal_network：-no_propagation 不是 SDC 1.8 语法，按 -no_propagate 处理' \
     "${LOG}/compat_ideal_network.log"
-# 认下来之后行为与 -no_propagate 一致（0.442 ns）；如果被丢掉会是整棵树的 0.584 ns。
-grep -Fq '最大插入延迟 0.442 ns' "${LOG}/compat_ideal_network.log"
+# 认下来之后行为与 -no_propagate 一致（0.242 ns）；如果被丢掉会是整棵树的 0.315 ns。
+grep -Fq '最大插入延迟 0.242 ns' "${LOG}/compat_ideal_network.log"
 
 # 从 RTL 综合出的 sky130 网表有 39 个异步复位 FF，hold 角由复位释放路径上的
 # removal 检查主导。
@@ -452,20 +454,20 @@ grep -Fq '寄存器 39 个   端点 125 个   未约束 0 个' "${LOG}/testcases
 # group_path：命中的路径归到命名组，报告按组出 WNS/TNS；分组不改变 slack。
 grep -Fq 'path group   : reg_grp' "${LOG}/testcases_sdc_features_group_path.dofile.log"
 grep -Fq 'path group   : out_grp' "${LOG}/testcases_sdc_features_group_path.dofile.log"
-grep -Eq '^reg_grp[[:space:]]+2\.00[[:space:]]+1[[:space:]]+44\.754' \
+grep -Eq '^reg_grp[[:space:]]+2\.00[[:space:]]+1[[:space:]]+44\.860' \
     "${LOG}/testcases_sdc_features_group_path.dofile.log"
-grep -Eq '^out_grp[[:space:]]+1\.00[[:space:]]+1[[:space:]]+19\.707[[:space:]]+0\.000[[:space:]]+1[[:space:]]+-9\.781' \
+grep -Eq '^out_grp[[:space:]]+1\.00[[:space:]]+1[[:space:]]+19\.482[[:space:]]+0\.000[[:space:]]+1[[:space:]]+-9\.554' \
     "${LOG}/testcases_sdc_features_group_path.dofile.log"
 # 带 group_path 的那一版 slack 和不带的基准一致（分组只换报告的组织方式）。
-grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_group_path.dofile.log"
-grep -Fq 'hold  : WNS   -9.781 ns' "${LOG}/testcases_sdc_features_group_path.dofile.log"
+grep -Fq 'setup : WNS   19.482 ns' "${LOG}/testcases_sdc_features_group_path.dofile.log"
+grep -Fq 'hold  : WNS   -9.554 ns' "${LOG}/testcases_sdc_features_group_path.dofile.log"
 # -default 组收命名组之外的所有路径。
 grep -Fq 'path group   : **default**' "${LOG}/testcases_sdc_features_group_path_default.dofile.log"
-grep -Eq '^\*\*default\*\*[[:space:]]+1\.00[[:space:]]+1[[:space:]]+19\.707' \
+grep -Eq '^\*\*default\*\*[[:space:]]+1\.00[[:space:]]+1[[:space:]]+19\.482' \
     "${LOG}/testcases_sdc_features_group_path_default.dofile.log"
 # -from/-through 也参与分组匹配。
 grep -Fq 'path group   : in_grp' "${LOG}/testcases_sdc_features_group_path_through.dofile.log"
-grep -Eq '^in_grp[[:space:]]+1\.00[[:space:]]+1[[:space:]]+44\.754' \
+grep -Eq '^in_grp[[:space:]]+1\.00[[:space:]]+1[[:space:]]+44\.860' \
     "${LOG}/testcases_sdc_features_group_path_through.dofile.log"
 # 和路径例外一起用时，分组跟着"最终获胜的那条路径"走（次优路径仍在 u_mux 上）。
 grep -Fq 'path group   : mux_grp' "${LOG}/testcases_sdc_features_group_path_exception.dofile.log"
@@ -502,61 +504,67 @@ grep -Fq '(锁存器：开沿起算，max_time_borrow 0.500 ns 取代上面的�
     "${LOG}/testcases_sdc_features_latch_borrow.dofile.log"
 
 # get_libs / get_lib_cells / get_lib_pins：库对象查询，结果就是名字。
-grep -Fq 'LIBS : osu018_stdcells' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
-grep -Fq 'CELL : NAND2X1' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
-grep -Fq 'QUAL : osu018_stdcells/NAND2X1' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
-grep -Fq 'PINS : A B Y' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
-# 查询结果喂给 set_driving_cell：到达时间 5.000 -> 5.064，与直接写名字的版本逐位一致。
-grep -Eq '^  inp1[[:space:]]+5\.064[[:space:]]+5\.064' \
+grep -Fq 'LIBS : sky130_fd_sc_hd__tt_025C_1v80' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
+grep -Fq 'CELL : sky130_fd_sc_hd__nand2_1' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
+grep -Fq 'QUAL : sky130_fd_sc_hd__tt_025C_1v80/sky130_fd_sc_hd__nand2_1' \
     "${LOG}/testcases_sdc_features_lib_query.dofile.log"
-grep -Eq '^  inp1[[:space:]]+5\.064[[:space:]]+5\.064' \
+grep -Fq 'PINS : A B Y' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
+# 查询结果喂给 set_driving_cell：到达时间 5.000 -> 5.053（加上 nand2_1 A->Y 的上升延迟），
+# 与直接写名字的版本逐位一致。
+grep -Eq '^  inp1[[:space:]]+5\.053[[:space:]]+5\.053' \
+    "${LOG}/testcases_sdc_features_lib_query.dofile.log"
+grep -Eq '^  inp1[[:space:]]+5\.053[[:space:]]+5\.053' \
     "${LOG}/testcases_sdc_features_lib_query_literal.dofile.log"
-grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
-grep -Fq 'hold  : WNS   -9.781 ns' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
+grep -Fq 'setup : WNS   19.482 ns' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
+grep -Fq 'hold  : WNS   -9.554 ns' "${LOG}/testcases_sdc_features_lib_query.dofile.log"
 
 # all_registers -clock / -rise_clock / -fall_clock：按时钟树（含有效沿）挑寄存器。
 # clkB 域有 2 个寄存器，
 # 切掉它们出发的路径后正好 2 个端点被排除；
 # clkA 上只有 c1 是真正的下降沿（c2 挂在反相时钟上、有效沿是上升），
 # 所以 -fall_clock clkA 只切掉 c1 -> q3 一条，c2 -> q4 仍然报出来。
-grep -Fq '未约束 0 个   路径例外排除 2 个' "${LOG}/testcases_sdc_features_all_registers_clock.dofile.log"
-grep -Fq 'setup : WNS    3.812 ns' "${LOG}/testcases_sdc_features_all_registers_clock.dofile.log"
-grep -Fq '未约束 3 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_all_registers_clock_edge.dofile.log"
+# c1/c2 的异步复位脚接常量 1，它们的 recovery/removal 共 4 个端点没有数据到达，
+# 两份用例都算在"未约束"里；edge 用例另有 clkB 没定义时的 3 个端点。
+grep -Fq '未约束 4 个   路径例外排除 2 个' "${LOG}/testcases_sdc_features_all_registers_clock.dofile.log"
+grep -Fq 'setup : WNS    3.601 ns' "${LOG}/testcases_sdc_features_all_registers_clock.dofile.log"
+grep -Fq '未约束 7 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_all_registers_clock_edge.dofile.log"
 grep -Fq 'startpoint : c2' "${LOG}/testcases_sdc_features_all_registers_clock_edge.dofile.log"
 
 # set_timing_derate 分对象：分对象的值覆盖全局（不是相乘）。
-# 基准（不带 derate）是 f1/Q 0.165、u2/Y 0.060、u3/Y 0.068、f1 的检查值 -0.188，
+# 基准（不带 derate）是 f1/Q 0.298、u2/Y 0.039、u3/Y 0.181、f1 的检查值 -0.101，
 # 所以全局 1.1 + u2 上 1.2 + f1 的 -cell_check 1.2 应当得到下面这一组数。
-grep -Eq '^  f1/Q[[:space:]]+0\.181' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
-grep -Eq '^  u2/Y[[:space:]]+0\.072' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
-grep -Eq '^  u3/Y[[:space:]]+0\.075' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
-grep -Fq '  - setup check (from lib)                        -0.226' \
+grep -Eq '^  f1/Q[[:space:]]+0\.327' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
+grep -Eq '^  u2/Y[[:space:]]+0\.046' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
+grep -Eq '^  u3/Y[[:space:]]+0\.200' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
+grep -Fq '  - setup check (from lib)                        -0.121' \
     "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
-# -rise 只管上升沿：u2 上升沿 ×1.5（0.060 -> 0.089），下降沿仍是全局 1.1。
-grep -Eq '^  u2/Y[[:space:]]+0\.089' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
+# -rise 只管上升沿：u2 上升沿 ×1.5（0.050 -> 0.075），同一条路径上 f1/Q 下降沿、
+# u3/Y 下降沿仍是全局 1.1（0.290 -> 0.319、0.041 -> 0.045）。
+grep -Eq '^  u2/Y[[:space:]]+0\.075' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
+grep -Eq '^  f1/Q[[:space:]]+0\.319' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
 
 # set_load -subtract_pin_load：注解值就是总负载（脚电容不再另加），
 # 与"把注解值减掉脚电容"的写法结果相同。
-grep -Eq '^  f1/Q[[:space:]]+0\.210' "${LOG}/testcases_sdc_features_load_subtract.dofile.log"
-grep -Eq '^  f1/Q[[:space:]]+0\.210' "${LOG}/testcases_sdc_features_load_subtract_literal.dofile.log"
-grep -Fq 'data arrival time                            0.352' \
+grep -Eq '^  f1/Q[[:space:]]+0\.605' "${LOG}/testcases_sdc_features_load_subtract.dofile.log"
+grep -Eq '^  f1/Q[[:space:]]+0\.605' "${LOG}/testcases_sdc_features_load_subtract_literal.dofile.log"
+grep -Fq 'data arrival time                            0.917' \
     "${LOG}/testcases_sdc_features_load_subtract.dofile.log"
 
 # get_* -of_objects：按对象关系推集合（父对象也可以是 all_* 这类整体集合）。
 # 三份用例分别切掉一个端点。
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_of_objects.dofile.log"
-grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_get_of_objects.dofile.log"
+grep -Fq 'setup : WNS   19.482 ns' "${LOG}/testcases_sdc_features_get_of_objects.dofile.log"
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_of_objects_net.dofile.log"
-grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_get_of_objects_net.dofile.log"
+grep -Fq 'setup : WNS   44.860 ns' "${LOG}/testcases_sdc_features_get_of_objects_net.dofile.log"
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_of_objects_all.dofile.log"
-grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_get_of_objects_all.dofile.log"
+grep -Fq 'setup : WNS   19.482 ns' "${LOG}/testcases_sdc_features_get_of_objects_all.dofile.log"
 
 # get_* -filter：属性来自 C 侧导出的设计索引，表达式用 Tcl 的 expr 求值
 # （属性名补 $、裸词加引号、=~ 翻成通配匹配）。
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_filter.dofile.log"
-grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_get_filter.dofile.log"
+grep -Fq 'setup : WNS   44.860 ns' "${LOG}/testcases_sdc_features_get_filter.dofile.log"
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_get_filter_pins.dofile.log"
-grep -Fq 'setup : WNS   19.707 ns' "${LOG}/testcases_sdc_features_get_filter_pins.dofile.log"
+grep -Fq 'setup : WNS   19.482 ns' "${LOG}/testcases_sdc_features_get_filter_pins.dofile.log"
 
 grep -Fq 'instances after flatten: 25142' "${LOG}/testcases_eth_sky130_eth.dofile.log"
 grep -Fq '寄存器 10543 个   端点 13133 个' "${LOG}/testcases_eth_sky130_eth.dofile.log"

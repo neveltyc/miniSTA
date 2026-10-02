@@ -115,7 +115,7 @@ namespace eval msta {
             }
             lappend tokens $tok
         }
-        # SDC 过滤表达式里的裸词按字符串处理（ref_name == DFFPOSX1），而 Tcl 的 expr 要求
+        # SDC 过滤表达式里的裸词按字符串处理（ref_name == sky130_fd_sc_hd__dfxtp_1），而 Tcl 的 expr 要求
         # 变量写成 $name、字符串写成 "..."：属性名前面补 $，其余裸词加引号。
         set quoted {}
         foreach tok $tokens {

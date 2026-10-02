@@ -1,4 +1,4 @@
-read_liberty lib/osu018_stdcells.lib
+read_liberty ../lib/sky130.lib
 read_verilog netlist.v
 link_design simple
 read_sdc common.sdc

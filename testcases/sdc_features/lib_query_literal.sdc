@@ -9,4 +9,4 @@ set_load 0.05 [get_ports out]
 set_output_delay -clock core -max 30.0 [get_ports out]
 set_output_delay -clock core -min -10.0 [get_ports out]
 
-set_driving_cell -lib_cell NAND2X1 -pin Y -from_pin A [get_ports inp1]
+set_driving_cell -lib_cell sky130_fd_sc_hd__nand2_1 -pin Y -from_pin A [get_ports inp1]

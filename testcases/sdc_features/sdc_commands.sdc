@@ -48,7 +48,7 @@ set_propagated_clock [get_clocks sweep_clk]
 
 set_case_analysis 0 [get_ports my_shift_en]
 set_drive 1.0 [get_ports my_cti]
-set_driving_cell -lib_cell INVX1 [get_ports my_cfi]
+set_driving_cell -lib_cell sky130_fd_sc_hd__inv_1 [get_ports my_cfi]
 set_fanout_load 3 [get_ports my_cfi]
 set_input_transition 0.05 [get_ports my_cti]
 set_load 0.01 [get_ports my_cfo]

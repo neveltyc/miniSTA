@@ -1,5 +1,7 @@
 // 本文件改写自 OpenTimer（https://github.com/OpenTimer/OpenTimer）的 example/simple/simple.v，
-// 改动：删去 NOR2X1 u4 与线网 n2，触发器 f1 由 DFFNEGX1 改为 DFFPOSX1、D 端改接 n1。
+// 改动：删去 NOR2X1 u4 与线网 n2，触发器 f1 由 DFFNEGX1 改为 DFFPOSX1、D 端改接 n1；
+// 单元换成 sky130_fd_sc_hd 的对应单元（NAND2X1→nand2_1、DFFPOSX1→dfxtp_1、
+// INVX1→inv_1、INVX2→inv_2）。
 // OpenTimer 按 MIT 许可证分发，许可证全文见仓库 THIRD_PARTY_NOTICES.md。
 // Copyright (c) 2018-2021 Tsung-Wei Huang and Martin D. F. Wong
 module simple (
@@ -27,9 +29,9 @@ wire tau2015_clk;
 wire out;
 
 // Start cells
-NAND2X1 u1 ( .A(inp1), .B(inp2), .Y(n1) );
-DFFPOSX1 f1 ( .D(n1), .CLK(tau2015_clk), .Q(n3) );
-INVX1 u2 ( .A(n3), .Y(n4) );
-INVX2 u3 ( .A(n4), .Y(out) );
+sky130_fd_sc_hd__nand2_1 u1 ( .A(inp1), .B(inp2), .Y(n1) );
+sky130_fd_sc_hd__dfxtp_1 f1 ( .D(n1), .CLK(tau2015_clk), .Q(n3) );
+sky130_fd_sc_hd__inv_1 u2 ( .A(n3), .Y(n4) );
+sky130_fd_sc_hd__inv_2 u3 ( .A(n4), .Y(out) );
 
 endmodule

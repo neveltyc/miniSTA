@@ -1,4 +1,4 @@
-read_celllib lib/osu018_stdcells.lib
+read_celllib ../lib/sky130.lib
 read_verilog netlist.v
 read_sdc opentimer.sdc
 update_timing

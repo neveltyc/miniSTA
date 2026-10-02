@@ -13,11 +13,11 @@ set_output_delay -clock core -min -10.0 [get_ports out]
 
 # 库对象查询：只取名字看结果（集合本身是给命令用的，打印要用 msta::collectionNames）。
 puts "LIBS : [msta::collectionNames [get_libs *]]"
-puts "CELL : [msta::collectionNames [get_lib_cells NAND2X1]]"
-puts "QUAL : [msta::collectionNames [get_lib_cells osu018_stdcells/NAND2X1]]"
-puts "PINS : [msta::collectionNames [get_lib_pins -of_objects [get_lib_cells NAND2X1] {A B Y}]]"
+puts "CELL : [msta::collectionNames [get_lib_cells sky130_fd_sc_hd__nand2_1]]"
+puts "QUAL : [msta::collectionNames [get_lib_cells sky130_fd_sc_hd__tt_025C_1v80/sky130_fd_sc_hd__nand2_1]]"
+puts "PINS : [msta::collectionNames [get_lib_pins -of_objects [get_lib_cells sky130_fd_sc_hd__nand2_1] {A B Y}]]"
 
-set_driving_cell -lib_cell [get_lib_cells NAND2X1] \
-    -pin [get_lib_pins -of_objects [get_lib_cells NAND2X1] Y] \
-    -from_pin [get_lib_pins -of_objects [get_lib_cells NAND2X1] A] \
+set_driving_cell -lib_cell [get_lib_cells sky130_fd_sc_hd__nand2_1] \
+    -pin [get_lib_pins -of_objects [get_lib_cells sky130_fd_sc_hd__nand2_1] Y] \
+    -from_pin [get_lib_pins -of_objects [get_lib_cells sky130_fd_sc_hd__nand2_1] A] \
     [get_ports inp1]

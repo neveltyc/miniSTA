@@ -1,5 +1,5 @@
 # group_path 也接受 -from/-through/-rise_from 这类集合选项：
-# 从 inp1 出发、经过 u1（NAND2X1）到寄存器的路径归 in_grp，其余落 **default** 组。
+# 从 inp1 出发、经过 u1（nand2_1）到寄存器的路径归 in_grp，其余落 **default** 组。
 create_clock -name core -period 50.0 [get_ports tau2015_clk]
 set_input_delay -clock core -max 5.0 [get_ports inp1]
 set_input_delay -clock core -min 0.0 [get_ports inp1]

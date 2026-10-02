@@ -47,7 +47,7 @@ report_checks -max_paths 5 -hold
 也可以直接执行命令串，路径相对于当前工作目录：
 
 ```bash
-./build/msta -c "read_liberty testcases/sta_compare/lib/osu018_stdcells.lib; read_verilog testcases/sta_compare/netlist.v; current_design simple; read_sdc testcases/sta_compare/common.sdc; report_checks -max_paths 3 -setup"
+./build/msta -c "read_liberty testcases/lib/sky130.lib; read_verilog testcases/sta_compare/netlist.v; current_design simple; read_sdc testcases/sta_compare/common.sdc; report_checks -max_paths 3 -setup"
 ```
 
 使用 `-q` 减少过程输出，使用 `-o report.txt` 将报告写入文件：

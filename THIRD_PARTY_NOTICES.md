@@ -45,7 +45,6 @@ Martin D. F. Wong（The University of Utah / University of Illinois at
 Urbana-Champaign）所有，按 MIT 许可证收录，用来验证本工程的 SDC 子集。
 `testcases/sta_compare/netlist.v` 与 `opentimer.sdc` 改写自 OpenTimer 的
 `example/simple/simple.v` 与 `simple.sdc`，改动写在各自的文件头里。
-（同一示例用到的 `osu018_stdcells.lib` 不属于 OpenTimer，见下面的 OSU 一节。）
 
 MIT License
 
@@ -113,53 +112,15 @@ PicoRV32 版权归 Claire Xenia Wolf <claire@yosyshq.com> 所有（2015-2021）�
 `testcases/multi_vt/netlist/multi_vt_soc.v` 是这些 RTL 的综合结果，其中包含
 PicoRV32 的逻辑，文件开头保留了 PicoRV32 的版权与许可声明。
 
-## OSU 标准单元库（osu018_stdcells）
-
-文件：`testcases/sta_compare/lib/osu018_stdcells.lib`
-
-Oklahoma State University VLSI Computer Architecture Research Group 发布的
-OSU 0.18um 标准单元库，取自 https://github.com/stineje/MOSIS_SCMOS
-（`latest/cadence/lib/tsmc018/signalstorm/osu018_stdcells.lib`），除文件开头
-补上的许可声明注释外，内容与上游一致。**该库的许可条款只允许研究与教育用途
-（research and educational purposes only），不在本工程 MIT 许可证范围内**；
-条款原文（上游 `OSU_Copyright`）如下：
-
-    This software is being provided to you, the LICENSEE, by the Oklahoma
-    State University (OSU) under the following license.  By
-    obtaining, using and/or copying this software, you agree that you have
-    read, understood, and will comply with these terms and conditions:
-
-    Permission to use, copy, and modify this software and its documentation for
-    research and educational purposes only and without fee or royalty is hereby
-    granted, provided that you agree to comply with the following copyright
-    notice and statements, including the disclaimer, and that the same appear
-    on ALL copies of the software and documentation, including modifications
-    that you make for internal use or for distribution:
-
-    Copyright 1999-2016 by the Oklahoma State University.
-    All rights reserved.
-
-    THIS SOFTWARE IS PROVIDED "AS IS", AND OSU MAKES NO REPRESENTATIONS OR
-    WARRANTIES, EXPRESS OR IMPLIED.  By way of example, but not limitation,
-    OSU MAKES NO REPRESENTATIONS OR WARRANTIES OF MERCHANTABILITY OR FITNESS
-    FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF THE LICENSED SOFTWARE OR
-    DOCUMENTATION WILL NOT INFRINGE ANY THIRD PARTY PATENTS, COPYRIGHTS,
-    TRADEMARKS OR OTHER RIGHTS.
-
-    The name of the Oklahoma State University or OSU may NOT be
-    used in advertising or publicity pertaining to distribution of the
-    software.  Title to copyright in this software and any associated
-    documentation shall at all times remain with OSU, and USER agrees to
-    preserve same.
-
 ## SkyWater SKY130 标准单元库（sky130_fd_sc_hd）
 
 文件：`testcases/lib/sky130.lib`
 
 SkyWater SKY130 PDK 高密度标准单元库 `sky130_fd_sc_hd` 的 `tt_025C_1v80` 角
 （https://github.com/google/skywater-pdk-libs-sky130_fd_sc_hd），按 Apache
-License 2.0 分发。仓库里的网表（`testcases/synth_sky130/`、`testcases/wrp/`
-以及下面几份综合网表）只引用该库的单元名。
+License 2.0 分发。仓库里的网表（`testcases/synth_sky130/`、`testcases/wrp/`、
+`testcases/sdc_features/`、`testcases/sta_compare/` 以及下面几份综合网表）只引用
+该库的单元名。
 
     Copyright 2020 The SkyWater PDK Authors
 
