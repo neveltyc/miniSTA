@@ -25,13 +25,16 @@
 #include "msta_util.h"
 #include "msta_json.h"
 
-/* 与 scripts/sdc_bridge.tcl 的集合类型标记保持一致。
+/* 展开后的一条命令：每个词一项。
+   pKinds 与 scripts/sdc_bridge.tcl 的集合类型标记保持一致。
    小写类型 = 该集合用了 -quiet（方言写法，即其他工具支持、SDC 1.8 里没有的非标准写法），
-   压掉"没匹配到对象"的提示。 */
+   压掉"没匹配到对象"的提示。pArg 记每个词来自命令的第几个 Tcl 参数：一个参数
+   可能是展开成多个名字的集合，选项的值要按参数取。 */
 typedef struct {
     char **ppText;
     char  *pKinds;
     char  *pQuiet;
+    int   *pArg;
     int    nSize;
     int    nCap;
 } MstaSdcArgList;
@@ -91,11 +94,13 @@ static void Msta_SdcArgListPush( MstaSdcArgList *pL, char *pText, char Kind, cha
         pL->ppText = (char **)realloc( pL->ppText, (size_t)pL->nCap * sizeof(char *) );
         pL->pKinds = (char *)realloc( pL->pKinds, (size_t)pL->nCap );
         pL->pQuiet = (char *)realloc( pL->pQuiet, (size_t)pL->nCap );
-        assert( pL->ppText && pL->pKinds && pL->pQuiet );
+        pL->pArg   = (int *)realloc( pL->pArg, (size_t)pL->nCap * sizeof(int) );
+        assert( pL->ppText && pL->pKinds && pL->pQuiet && pL->pArg );
     }
     pL->ppText[pL->nSize] = pText;
     pL->pKinds[pL->nSize] = Kind;
     pL->pQuiet[pL->nSize] = fQuiet;
+    pL->pArg[pL->nSize]   = 0;
     pL->nSize++;
 }
 
@@ -104,6 +109,7 @@ static void Msta_SdcArgListFree( MstaSdcArgList *pL )
     free( pL->ppText );
     free( pL->pKinds );
     free( pL->pQuiet );
+    free( pL->pArg );
     memset( pL, 0, sizeof(MstaSdcArgList) );
 }
 
@@ -304,85 +310,105 @@ static int Msta_SdcResolveNets( MstaDesign *pDes, const char *pTarget, int **ppN
 /* =====================================================================
    选项表与通用解析器
 
-   每条命令的语法写成一张选项表（MstaSdcOpt 数组）：选项名 + 种类。
-   通用解析器 Msta_SdcParseCmd 按表把 argv 拆成一个 MstaSdcCmd：
-   哪些开关出现了、各选项取到了什么值、剩下哪些位置参数（数值、对象名）。
-   处理函数通过 Msta_SdcHasFlag / Msta_SdcOptValue 这类访问函数和
-   ppPos 位置参数数组取结果。
+   每条命令的语法写在分发表 s_vSdcCommands 的一行里（MstaSdcCmdDef）：
+   选项表、位置参数的形状（开头有没有一个值、对象个数的上下限）和处理函数。
+   通用解析器 Msta_SdcParseCmd 按它从左到右读 argv，拆成一个 MstaSdcCmd，
+   并统一检查语法（规则见 docs/sdc.md 的"命令解析规则"）：
+   - 只有"以 - 开头、后面跟字母"的词才是选项；-5 这样的负数永远是值；
+   - 不认识的选项、带值选项缺值、同一个选项写了两次：作废整条约束；
+   - 位置参数开头可以有一个值，其余是对象；多出来的值、对象太多或太少：
+     同样作废整条约束。
+   处理函数只做语义，取结果用 Msta_SdcHasFlag / Msta_SdcOptValue /
+   Msta_SdcOptList 和 pValue / ppObjs。
    ===================================================================== */
 
-/* 选项的种类：决定解析器怎样认出这个选项、怎样取它的值。 */
+/* 选项的种类：决定解析器怎样取它的值。Tcl 里选项的值是紧跟的下一个参数；
+   一个参数可能是 get_* 集合，展开后是多个名字。 */
 typedef enum {
     MSTA_SDC_FLAG,         /* 开关，如 -add：出现就算数 */
-    MSTA_SDC_VALUE,        /* 带一个值，如 -period 5。值不能长得像选项（以 - 开头的
-                              非数字），否则这次出现不算；写了多次时只认第一次取到值的 */
-    MSTA_SDC_VALUE_RAW,    /* 带一个值，值可以以 - 开头，如 -edge_shift {-0.1 0 0}；
-                              只认第一次出现 */
-    MSTA_SDC_FLAG_NUMBER,  /* 开关，后面紧跟数值时数值归它，如 -setup 0.1（方言写法）；
-                              带值写了多次时取最后一个 */
-    MSTA_SDC_RF_VALUE,     /* 带一个值，并且认 -rise_/-fall_ 前缀的变体：表里写 -from，
-                              -rise_from / -fall_from 也算它，同时记下边沿 'r' / 'f' */
-    MSTA_SDC_GROUP,        /* 可以重复的对象组，如 -group：每出现一次开一个新组，
-                              后面的对象名都归入这个组（只用于顺序模式） */
-    MSTA_SDC_RF_LIST       /* 带一串对象，如 -through a b c：一直取到下一个以 - 开头的词
-                              为止，一个都没有算缺值；认 -rise_/-fall_ 前缀的变体；
-                              每次出现都按顺序记下来（只用于顺序模式） */
+    MSTA_SDC_VALUE,        /* 带一个值，如 -period 5：下一个参数，只能是一个词 */
+    MSTA_SDC_OBJECTS,      /* 带一组对象，如 -clock [get_clocks {a b}]：下一个参数里的
+                              所有名字（Tcl 列表 {a b} 也拆开） */
+    MSTA_SDC_LIST          /* 带一串对象，如 -from a b：Tcl 桥会把 -from/-to/-through/-group
+                              后面的列表拆成多个参数，所以一直取到下一个选项或数值为止 */
 } MstaSdcOptKind;
+
+/* 选项的附加属性，可以用 | 组合。 */
+#define MSTA_SDC_RF      1 /* 也认 -rise_xxx / -fall_xxx 写法，并记下用的是哪个边沿 */
+#define MSTA_SDC_REPEAT  2 /* 可以写多次，每次是单独的一组，如 -through、-group（只用于 LIST） */
+#define MSTA_SDC_IGNORE  4 /* 认得但不建模：告警后忽略这个选项，约束照常生效 */
+#define MSTA_SDC_REJECT  8 /* 认得但不建模：出现就作废整条约束 */
 
 /* 选项表的一行。表以 pName == NULL 的一行结尾。 */
 typedef struct {
     const char     *pName;
     MstaSdcOptKind  Kind;
+    int             Attr;
 } MstaSdcOpt;
 
-/* 解析模式：同一种选项表，有三种读 argv 的方式。 */
+/* 位置参数开头的值。 */
 typedef enum {
-    MSTA_SDC_SCAN,         /* 扫描：每个选项各自在整条命令里找自己，剩下的数值和
-                              对象名就是位置参数，所以数值可以写在选项之间任意位置 */
-    MSTA_SDC_ORDERED,      /* 顺序：从左到右读，以 - 开头的词都当选项，选项的值就是
-                              紧跟的下一个词；遇到第一个认不出的选项就停下 */
-    MSTA_SDC_WORDS         /* 没有选项：每个词（包括以 - 开头的词和空串）都是位置参数 */
-} MstaSdcParseMode;
+    MSTA_SDC_NO_VALUE,     /* 没有值，位置参数全是对象 */
+    MSTA_SDC_NUMBER,       /* 第一个位置参数是数值 */
+    MSTA_SDC_WORD          /* 第一个位置参数是一个词（set_case_analysis 的 0/1/zero/one） */
+} MstaSdcValueKind;
 
 /* 解析结果。下标为 k 的数组对应选项表的第 k 行；数组都挂在本条命令的
    临时内存上（读下一条命令时一起释放）。 */
 typedef struct {
     const MstaSdcOpt *pOpts;   /* 这条命令的选项表 */
+    const char   *pName;       /* 命令名（argv[0]），告警用 */
     int           argc;
-    char        **argv;        /* argv[0] 是命令名 */
-    int          *pUsed;       /* 扫描模式：argv[i] 已被某个选项认领 */
-    int          *pAt;         /* 选项第一次生效的位置（argv 下标），0 = 没出现 */
-    const char  **ppValue;     /* 选项取到的值，NULL = 没取到 */
-    char         *pEdge;       /* MSTA_SDC_RF_VALUE 选项的边沿：'r' / 'f' / 0 */
-    char        **ppPos;       /* 位置参数，按出现顺序 */
-    int          *pPosAt;      /* 位置参数在 argv 里的下标 */
-    int           nPos;
-    char        **ppMember;    /* MSTA_SDC_GROUP 组里的对象名，按出现顺序 */
-    int          *pMemberAt;   /* 它们在 argv 里的下标 */
-    int          *pMemberGroup;/* 它们属于第几组（从 1 数） */
-    int           nMembers;
-    int           nGroups;     /* 一共开了几个组 */
-    int          *pListOpt;    /* MSTA_SDC_RF_LIST 选项的每次出现，按顺序：选项表下标、 */
+    char        **argv;
+    int          *pAt;         /* 选项出现的位置（argv 下标），0 = 没出现 */
+    const char  **ppValue;     /* MSTA_SDC_VALUE 选项的值 */
+    char         *pEdge;       /* MSTA_SDC_RF 选项用的写法：'r' / 'f' / 0 */
+    int          *pListOpt;    /* 对象类选项（OBJECTS / LIST）的每次出现，按顺序：选项表下标、 */
     char         *pListEdge;   /*   边沿（'r' / 'f' / 0）、 */
-    int          *pListBeg;    /*   对象在 argv 里的范围 [Beg, End)，选项词本身在 Beg-1 */
-    int          *pListEnd;
+    char       ***pppListWords;/*   对象名数组、 */
+    int          *pListCount;  /*   对象个数 */
     int           nLists;
-    int           iBad;        /* 第一个"长得像选项却没被认领"的词的下标：不认识的
-                                  选项，或没取到值的选项。0 = 没有。要不要为此告警
-                                  由各条命令自己决定 */
-    int           fBadNoValue; /* 顺序模式：iBad 处是认得的选项，只是后面没有值 */
+    const char   *pValue;      /* 位置参数开头的值；没有值的命令为 NULL */
+    char        **ppObjs;      /* 位置参数里的对象 */
+    int           nObjs;
 } MstaSdcCmd;
 
 /* 命令的处理函数：拿解析结果做语义——查对象、换算单位、写模型。 */
 typedef void (*MstaSdcHandler)( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
 
-/* 分发表的一行：命令名、解析模式、选项表、处理函数。 */
+/* 分发表的一行：一条命令的完整语法加处理函数。 */
 typedef struct {
     const char       *pName;
-    MstaSdcParseMode  Mode;
-    const MstaSdcOpt *pOpts;
+    const MstaSdcOpt *pOpts;      /* 选项表 */
+    MstaSdcValueKind  Value;      /* 位置参数开头的值 */
+    int               nMinObjs;   /* 对象至少几个 */
+    int               nMaxObjs;   /* 对象最多几个，-1 = 不限 */
     MstaSdcHandler    pfHandler;
 } MstaSdcCmdDef;
+
+/* 作废整条约束：告警 "<命令>: <原因>; constraint rejected"，并计入忽略数。
+   命令的所有语法和取值错误都走这里，措辞因此一致。 */
+static void Msta_SdcReject( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pFormat, ... )
+{
+    char sReason[400];
+    va_list Args;
+    va_start( Args, pFormat );
+    vsnprintf( sReason, sizeof(sReason), pFormat, Args );
+    va_end( Args );
+    Msta_WarnOnce( "%s: %s; constraint rejected", pCmd->pName, sReason );
+    p->nCommandsIgnored++;
+}
+
+/* 只提醒、约束照常生效："<命令>: <说明>"。 */
+static void Msta_SdcNote( const MstaSdcCmd *pCmd, const char *pFormat, ... )
+{
+    char sText[400];
+    va_list Args;
+    va_start( Args, pFormat );
+    vsnprintf( sText, sizeof(sText), pFormat, Args );
+    va_end( Args );
+    Msta_WarnOnce( "%s: %s", pCmd->pName, sText );
+}
 
 /* 在本条命令的临时内存上分配 n 个清零的元素（多给一个，n 为 0 也能用）。 */
 static void *Msta_SdcArenaZeros( int n, size_t nSize )
@@ -392,20 +418,22 @@ static void *Msta_SdcArenaZeros( int n, size_t nSize )
     return Msta_SdcArenaKeep( pMem );
 }
 
-/* 以 - 开头又不是数值的词，才算"长得像选项"；-0.5 这样的负数是普通的值。 */
+/* 选项词：以 - 开头、后面是字母或下划线，并且不是数值（-inf 这类算数值）。
+   所以 -5、-0.1、"-0.1 0 0" 都是值，不是选项。 */
 static int Msta_SdcLooksLikeOption( const char *pWord )
 {
-    return pWord[0] == '-' && !Msta_SdcIsNumber( pWord );
+    return pWord[0] == '-' && ( isalpha( (unsigned char)pWord[1] ) || pWord[1] == '_' ) &&
+           !Msta_SdcIsNumber( pWord );
 }
 
-/* pWord 是不是选项 pOpt：RF_VALUE / RF_LIST 选项还认 -rise_/-fall_ 前缀的变体，
+/* pWord 是不是选项 pOpt：带 MSTA_SDC_RF 的选项还认 -rise_/-fall_ 前缀的变体，
    边沿写进 *pEdge（不带前缀写 0）。 */
 static int Msta_SdcWordIsOpt( const char *pWord, const MstaSdcOpt *pOpt, char *pEdge )
 {
     *pEdge = 0;
     if ( !strcmp( pWord, pOpt->pName ) )
         return 1;
-    if ( pOpt->Kind != MSTA_SDC_RF_VALUE && pOpt->Kind != MSTA_SDC_RF_LIST )
+    if ( !( pOpt->Attr & MSTA_SDC_RF ) )
         return 0;
     /* 选项名去掉开头的 '-' 再接到前缀后面：-from -> -rise_from */
     if ( !strncmp( pWord, "-rise_", 6 ) && !strcmp( pWord + 6, pOpt->pName + 1 ) )
@@ -425,196 +453,150 @@ static int Msta_SdcFindOpt( const MstaSdcOpt *pOpts, const char *pWord, char *pE
     return -1;
 }
 
-/* 把 argv[i] 记成下一个位置参数。 */
-static void Msta_SdcCmdAddPos( MstaSdcCmd *pCmd, int i )
+/* 位置参数拆成"开头的值 + 对象"，并按分发表检查个数。ppPos[i] 在 argv 的
+   下标是 pPosAt[i]。有错时告警作废并返回 0。 */
+static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaSdcCmd *pCmd,
+                                    char **ppPos, int *pPosAt, int nPos )
 {
-    pCmd->pPosAt[pCmd->nPos] = i;
-    pCmd->ppPos[pCmd->nPos++] = pCmd->argv[i];
-}
-
-/* 记下选项 k 在下标 i 处生效（只记第一次的位置）。 */
-static void Msta_SdcCmdSeen( MstaSdcCmd *pCmd, int k, int i )
-{
-    if ( pCmd->pAt[k] == 0 )
-        pCmd->pAt[k] = i;
-}
-
-/* 扫描模式。每个选项各自在整条 argv 里找自己并把用到的词标为"已认领"；
-   最后既没被认领、又不像选项的词就是位置参数。 */
-static void Msta_SdcParseScan( MstaSdcCmd *pCmd )
-{
-    int argc = pCmd->argc, i, k;
-    char **argv = pCmd->argv;
+    int i, iFirst = 0;
     char Edge;
-    for ( k = 0; pCmd->pOpts[k].pName; k++ )
+    if ( pDef->Value != MSTA_SDC_NO_VALUE )
     {
-        const char *pName = pCmd->pOpts[k].pName;
-        MstaSdcOptKind Kind = pCmd->pOpts[k].Kind;
-        if ( Kind == MSTA_SDC_FLAG || Kind == MSTA_SDC_FLAG_NUMBER )
-        {
-            for ( i = 1; i < argc; i++ )
-                if ( !strcmp( argv[i], pName ) )
-                {
-                    pCmd->pUsed[i] = 1;
-                    Msta_SdcCmdSeen( pCmd, k, i );
-                }
-            /* 带数值的开关：每个后面紧跟数值的出现都把数值记下，最后一个留下。 */
-            for ( i = 1; Kind == MSTA_SDC_FLAG_NUMBER && i + 1 < argc; i++ )
-                if ( !strcmp( argv[i], pName ) && Msta_SdcIsNumber( argv[i+1] ) )
-                {
-                    pCmd->ppValue[k] = argv[i+1];
-                    pCmd->pUsed[i+1] = 1;
-                }
-        }
-        else if ( Kind == MSTA_SDC_VALUE || Kind == MSTA_SDC_VALUE_RAW )
-        {
-            for ( i = 1; i + 1 < argc; i++ )
-            {
-                if ( strcmp( argv[i], pName ) )
-                    continue;
-                if ( Kind == MSTA_SDC_VALUE && Msta_SdcLooksLikeOption( argv[i+1] ) )
-                    continue;
-                pCmd->ppValue[k] = argv[i+1];
-                pCmd->pUsed[i] = pCmd->pUsed[i+1] = 1;
-                Msta_SdcCmdSeen( pCmd, k, i );
-                break;
-            }
-        }
+        if ( nPos == 0 )
+        { Msta_SdcReject( p, pCmd, "needs a value" ); return 0; }
+        if ( pDef->Value == MSTA_SDC_NUMBER && !Msta_SdcIsNumber( ppPos[0] ) )
+        { Msta_SdcReject( p, pCmd, "value \"%s\" is not a number", ppPos[0] ); return 0; }
+        pCmd->pValue = ppPos[0];
+        iFirst = 1;
+    }
+    /* 对象里不能再有数值：只有一个值的命令写了两个数。紧跟在开关后面的数
+       是 "-max 2 -min 1" 这类写法，告警里点明。 */
+    for ( i = iFirst; i < nPos; i++ )
+    {
+        const char *pPrev = pCmd->argv[ pPosAt[i] - 1 ];
+        int k;
+        if ( !Msta_SdcIsNumber( ppPos[i] ) )
+            continue;
+        k = Msta_SdcFindOpt( pCmd->pOpts, pPrev, &Edge );
+        if ( k >= 0 && pCmd->pOpts[k].Kind == MSTA_SDC_FLAG )
+            Msta_SdcReject( p, pCmd, "\"%s %s\" is not SDC 1.8 syntax (%s takes no value)",
+                            pPrev, ppPos[i], pPrev );
         else
-            assert( Kind == MSTA_SDC_RF_VALUE );    /* 下面一起处理；组和对象串只用于顺序模式 */
+            Msta_SdcReject( p, pCmd, "unexpected value \"%s\"", ppPos[i] );
+        return 0;
     }
-    /* RF_VALUE 选项（-from/-to 及其 -rise_/-fall_ 变体）一起从左往右读：紧跟的下一个词
-       不管长什么样都是值，读过的值不再当选项看；同一选项写多次时最后一次算数。 */
-    for ( i = 1; i + 1 < argc; i++ )
-        for ( k = 0; pCmd->pOpts[k].pName; k++ )
-        {
-            if ( pCmd->pOpts[k].Kind != MSTA_SDC_RF_VALUE ||
-                 !Msta_SdcWordIsOpt( argv[i], &pCmd->pOpts[k], &Edge ) )
-                continue;
-            pCmd->ppValue[k] = argv[i+1];
-            pCmd->pEdge[k] = Edge;
-            pCmd->pUsed[i] = pCmd->pUsed[i+1] = 1;
-            Msta_SdcCmdSeen( pCmd, k, i );
-            i++;
-            break;
-        }
-    /* 剩下的词：像选项的记为"没认领"，空串丢掉，其余是位置参数。 */
-    for ( i = 1; i < argc; i++ )
+    pCmd->ppObjs = ppPos + iFirst;
+    pCmd->nObjs  = nPos - iFirst;
+    if ( pCmd->nObjs < pDef->nMinObjs )
+    { Msta_SdcReject( p, pCmd, "needs an object list" ); return 0; }
+    if ( pDef->nMaxObjs >= 0 && pCmd->nObjs > pDef->nMaxObjs )
     {
-        if ( pCmd->pUsed[i] )
-            continue;
-        if ( Msta_SdcLooksLikeOption( argv[i] ) )
-        {
-            if ( pCmd->iBad == 0 )
-                pCmd->iBad = i;
-            continue;
-        }
-        if ( argv[i][0] != 0 )
-            Msta_SdcCmdAddPos( pCmd, i );
+        Msta_SdcReject( p, pCmd, "unexpected argument \"%s\"", pCmd->ppObjs[pDef->nMaxObjs] );
+        return 0;
     }
+    return 1;
 }
 
-/* 顺序模式。从左到右读：选项按种类吃掉自己的值；不认识的、以 - 开头的词，
-   或者缺值的选项，让解析停下（记在 iBad）；其余的词在出现过组选项之后归入
-   最近的组，之前的是位置参数。 */
-static void Msta_SdcParseOrdered( MstaSdcCmd *pCmd )
+/* 把 Tcl 列表文本（如 -clock {a b} 传来的 "a b"）按空白拆成多个词，挂在临时内存上。 */
+static int Msta_SdcSplitWords( const char *pText, char ***pppWords )
 {
-    int argc = pCmd->argc, i, k;
-    char **argv = pCmd->argv;
-    char Edge = 0;
-    for ( i = 1; i < argc; i++ )
-    {
-        k = Msta_SdcFindOpt( pCmd->pOpts, argv[i], &Edge );
-        if ( k >= 0 )
-        {
-            MstaSdcOptKind Kind = pCmd->pOpts[k].Kind;
-            int fTakesValue = Kind == MSTA_SDC_VALUE || Kind == MSTA_SDC_VALUE_RAW ||
-                              Kind == MSTA_SDC_RF_VALUE;
-            if ( fTakesValue && i + 1 >= argc )     /* 选项在末尾、没有值 */
-            {
-                pCmd->iBad = i;
-                pCmd->fBadNoValue = 1;
-                return;
-            }
-            if ( Kind == MSTA_SDC_RF_LIST )
-            {
-                int j = i + 1;
-                while ( j < argc && argv[j][0] != '-' )  /* 对象一直取到下一个选项词 */
-                    j++;
-                if ( j == i + 1 )                       /* 一个对象都没有 */
-                {
-                    pCmd->iBad = i;
-                    pCmd->fBadNoValue = 1;
-                    return;
-                }
-                Msta_SdcCmdSeen( pCmd, k, i );
-                pCmd->pListOpt[pCmd->nLists]  = k;
-                pCmd->pListEdge[pCmd->nLists] = Edge;
-                pCmd->pListBeg[pCmd->nLists]  = i + 1;
-                pCmd->pListEnd[pCmd->nLists]  = j;
-                pCmd->nLists++;
-                i = j - 1;                              /* 跳过这串对象 */
-                continue;
-            }
-            Msta_SdcCmdSeen( pCmd, k, i );
-            if ( Kind == MSTA_SDC_GROUP )
-                pCmd->nGroups++;
-            else if ( fTakesValue )
-            {
-                pCmd->ppValue[k] = argv[++i];        /* 紧跟的下一个词就是值，跳过它 */
-                pCmd->pEdge[k] = Edge;
-            }
-            else if ( Kind == MSTA_SDC_FLAG_NUMBER && i + 1 < argc && Msta_SdcIsNumber( argv[i+1] ) )
-                pCmd->ppValue[k] = argv[++i];
-            continue;
-        }
-        if ( argv[i][0] == '-' )
-        {
-            pCmd->iBad = i;
-            return;
-        }
-        if ( pCmd->nGroups > 0 )
-        {
-            pCmd->pMemberAt[pCmd->nMembers] = i;
-            pCmd->pMemberGroup[pCmd->nMembers] = pCmd->nGroups;
-            pCmd->ppMember[pCmd->nMembers++] = argv[i];
-        }
-        else
-            Msta_SdcCmdAddPos( pCmd, i );
-    }
+    char *pCopy = Msta_SdcArena( "%s", pText ), *pTok;
+    char **ppWords = (char **)Msta_SdcArenaZeros( (int)strlen(pText), sizeof(char *) );
+    int n = 0;
+    for ( pTok = strtok( pCopy, " \t" ); pTok != NULL; pTok = strtok( NULL, " \t" ) )
+        ppWords[n++] = pTok;
+    *pppWords = ppWords;
+    return n;
 }
 
-/* 通用解析器：按 pDef 的选项表和模式把 argv 拆进 *pCmd。
-   解析本身不告警，所有告警都由处理函数按命令语义给出。 */
-static void Msta_SdcParseCmd( const MstaSdcCmdDef *pDef, int argc, char **argv, MstaSdcCmd *pCmd )
+/* 通用解析器：按 pDef 把 argv 从左到右拆进 *pCmd。pArg[i] 是 argv[i] 来自第几个
+   Tcl 参数，用来确定选项的值有多少个词。选项词按种类取值；其余的词都是位置参数。
+   语法有错时告警、作废整条约束（计入忽略数）并返回 0，处理函数就不会被调用。 */
+static int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **argv,
+                             const int *pArg, MstaSdcCmd *pCmd )
 {
-    int nOpts = 0, i;
+    char **ppPos = (char **)Msta_SdcArenaZeros( argc, sizeof(char *) );
+    int *pPosAt  = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    int nOpts = 0, nPos = 0, i, j, k;
+    char Edge;
     while ( pDef->pOpts[nOpts].pName )
         nOpts++;
     memset( pCmd, 0, sizeof(MstaSdcCmd) );
     pCmd->pOpts        = pDef->pOpts;
+    pCmd->pName        = argv[0];
     pCmd->argc         = argc;
     pCmd->argv         = argv;
-    pCmd->pUsed        = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
     pCmd->pAt          = (int *)Msta_SdcArenaZeros( nOpts, sizeof(int) );
     pCmd->ppValue      = (const char **)Msta_SdcArenaZeros( nOpts, sizeof(char *) );
     pCmd->pEdge        = (char *)Msta_SdcArenaZeros( nOpts, sizeof(char) );
-    pCmd->ppPos        = (char **)Msta_SdcArenaZeros( argc, sizeof(char *) );
-    pCmd->pPosAt       = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
-    pCmd->ppMember     = (char **)Msta_SdcArenaZeros( argc, sizeof(char *) );
-    pCmd->pMemberAt    = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
-    pCmd->pMemberGroup = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
     pCmd->pListOpt     = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
     pCmd->pListEdge    = (char *)Msta_SdcArenaZeros( argc, sizeof(char) );
-    pCmd->pListBeg     = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
-    pCmd->pListEnd     = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
-    if ( pDef->Mode == MSTA_SDC_SCAN )
-        Msta_SdcParseScan( pCmd );
-    else if ( pDef->Mode == MSTA_SDC_ORDERED )
-        Msta_SdcParseOrdered( pCmd );
-    else
-        for ( i = 1; i < argc; i++ )
-            Msta_SdcCmdAddPos( pCmd, i );
+    pCmd->pppListWords = (char ***)Msta_SdcArenaZeros( argc, sizeof(char **) );
+    pCmd->pListCount   = (int *)Msta_SdcArenaZeros( argc, sizeof(int) );
+    for ( i = 1; i < argc; i++ )
+    {
+        const MstaSdcOpt *pOpt;
+        char **ppWords = NULL;
+        int nWords = 0;
+        if ( !Msta_SdcLooksLikeOption( argv[i] ) )
+        {
+            pPosAt[nPos] = i;
+            ppPos[nPos++] = argv[i];
+            continue;
+        }
+        k = Msta_SdcFindOpt( pDef->pOpts, argv[i], &Edge );
+        pOpt = k >= 0 ? &pDef->pOpts[k] : NULL;
+        if ( pOpt == NULL || ( pOpt->Attr & MSTA_SDC_REJECT ) )
+        { Msta_SdcReject( p, pCmd, "option \"%s\" is not modeled", argv[i] ); return 0; }
+        if ( pCmd->pAt[k] > 0 && !( pOpt->Attr & MSTA_SDC_REPEAT ) )
+        { Msta_SdcReject( p, pCmd, "option \"%s\" is given more than once", pOpt->pName ); return 0; }
+        if ( pCmd->pAt[k] == 0 )
+            pCmd->pAt[k] = i;
+        pCmd->pEdge[k] = Edge;
+        if ( pOpt->Kind == MSTA_SDC_FLAG )
+            ;
+        else if ( pOpt->Kind == MSTA_SDC_LIST )
+        {
+            /* 对象一直取到下一个选项词或数值：对象名不会是数，数是位置参数里的值。 */
+            for ( j = i + 1; j < argc; j++ )
+                if ( Msta_SdcLooksLikeOption( argv[j] ) || Msta_SdcIsNumber( argv[j] ) )
+                    break;
+            ppWords = argv + i + 1;
+            nWords  = j - i - 1;
+            if ( nWords == 0 )
+            { Msta_SdcReject( p, pCmd, "option \"%s\" has an empty object list", argv[i] ); return 0; }
+        }
+        else
+        {
+            /* VALUE 和 OBJECTS 取紧跟的下一个参数（它展开出的所有词）。 */
+            if ( i + 1 >= argc || Msta_SdcLooksLikeOption( argv[i+1] ) )
+            { Msta_SdcReject( p, pCmd, "option \"%s\" needs a value", argv[i] ); return 0; }
+            for ( j = i + 1; j < argc && pArg[j] == pArg[i+1]; j++ )
+                ;
+            ppWords = argv + i + 1;
+            nWords  = j - i - 1;
+            if ( pOpt->Kind == MSTA_SDC_VALUE && nWords > 1 )
+            { Msta_SdcReject( p, pCmd, "option \"%s\" takes a single value", argv[i] ); return 0; }
+            if ( pOpt->Kind == MSTA_SDC_VALUE )
+                pCmd->ppValue[k] = argv[i+1];
+            else if ( nWords == 1 && strpbrk( argv[i+1], " \t" ) != NULL )
+                nWords = Msta_SdcSplitWords( argv[i+1], &ppWords );
+        }
+        if ( pOpt->Kind == MSTA_SDC_LIST || pOpt->Kind == MSTA_SDC_OBJECTS )
+        {
+            pCmd->pListOpt[pCmd->nLists]     = k;
+            pCmd->pListEdge[pCmd->nLists]    = Edge;
+            pCmd->pppListWords[pCmd->nLists] = ppWords;
+            pCmd->pListCount[pCmd->nLists]   = nWords;
+            pCmd->nLists++;
+        }
+        if ( pOpt->Attr & MSTA_SDC_IGNORE )
+            Msta_SdcNote( pCmd, "option \"%s\" is not modeled; ignored", argv[i] );
+        /* 跳过刚取走的值或对象（拆开的 Tcl 列表在 argv 里只占一个词） */
+        if ( pOpt->Kind != MSTA_SDC_FLAG )
+            i = j - 1;
+    }
+    return Msta_SdcSplitPositional( p, pDef, pCmd, ppPos, pPosAt, nPos );
 }
 
 /* 选项名在表里的下标。名字不在表里说明处理函数和选项表对不上，是代码错误。 */
@@ -628,36 +610,73 @@ static int Msta_SdcOptIndex( const MstaSdcCmd *pCmd, const char *pName )
     return 0;
 }
 
-/* 选项是否生效过：开关出现过，或带值的选项取到了值。 */
+/* 选项是否出现过。 */
 static int Msta_SdcHasFlag( const MstaSdcCmd *pCmd, const char *pName )
 {
     return pCmd->pAt[ Msta_SdcOptIndex( pCmd, pName ) ] > 0;
 }
 
-/* 选项第一次生效的位置（argv 下标），0 = 没出现。需要按出现顺序处理时用。 */
-static int Msta_SdcOptAt( const MstaSdcCmd *pCmd, const char *pName )
-{
-    return pCmd->pAt[ Msta_SdcOptIndex( pCmd, pName ) ];
-}
-
-/* 选项的值，没取到返回 NULL。 */
+/* MSTA_SDC_VALUE 选项的值，没写返回 NULL。 */
 static const char *Msta_SdcOptValue( const MstaSdcCmd *pCmd, const char *pName )
 {
     return pCmd->ppValue[ Msta_SdcOptIndex( pCmd, pName ) ];
 }
 
-/* RF_VALUE 选项是用哪种写法给的：-rise_xxx 返回 'r'，-fall_xxx 返回 'f'，否则 0。 */
+/* 带 MSTA_SDC_RF 的选项是用哪种写法给的：-rise_xxx 返回 'r'，-fall_xxx 返回 'f'，否则 0。 */
 static char Msta_SdcOptEdge( const MstaSdcCmd *pCmd, const char *pName )
 {
     return pCmd->pEdge[ Msta_SdcOptIndex( pCmd, pName ) ];
 }
 
+/* 只能写一次的对象类选项（OBJECTS / LIST）：对象写进 *pppWords，返回个数；没写返回 0。 */
+static int Msta_SdcOptList( const MstaSdcCmd *pCmd, const char *pName, char ***pppWords )
+{
+    int k = Msta_SdcOptIndex( pCmd, pName ), l;
+    *pppWords = NULL;
+    for ( l = 0; l < pCmd->nLists; l++ )
+        if ( pCmd->pListOpt[l] == k )
+        {
+            *pppWords = pCmd->pppListWords[l];
+            return pCmd->pListCount[l];
+        }
+    return 0;
+}
+
+/* 必须写的选项没写：告警作废，返回 0。 */
+static int Msta_SdcRequire( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pName )
+{
+    if ( Msta_SdcHasFlag( pCmd, pName ) )
+        return 1;
+    Msta_SdcReject( p, pCmd, "option \"%s\" is required", pName );
+    return 0;
+}
+
 /* ---------------- 公共子语法：几条命令共用的写法 ---------------- */
+
+/* 数值的取值范围。 */
+#define MSTA_SDC_ANY       0   /* 任意数 */
+#define MSTA_SDC_NONNEG    1   /* 不能为负，如负载、摆率、面积 */
+#define MSTA_SDC_POSITIVE  2   /* 必须为正，如周期、电压、倍数 */
+
+/* 把 pText 读成数值并检查范围；pWhat 是告警里对它的称呼（如 "-weight"、"value"）。
+   不合格时告警作废并返回 0。 */
+static int Msta_SdcGetNumber( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pWhat,
+                              const char *pText, int Range, double *pValue )
+{
+    if ( !Msta_SdcIsNumber( pText ) )
+    { Msta_SdcReject( p, pCmd, "%s \"%s\" is not a number", pWhat, pText ); return 0; }
+    *pValue = atof( pText );
+    if ( Range == MSTA_SDC_POSITIVE && *pValue <= 0.0 )
+    { Msta_SdcReject( p, pCmd, "%s must be positive (got %s)", pWhat, pText ); return 0; }
+    if ( Range == MSTA_SDC_NONNEG && *pValue < 0.0 )
+    { Msta_SdcReject( p, pCmd, "%s must not be negative (got %s)", pWhat, pText ); return 0; }
+    return 1;
+}
 
 /* -min/-max 与 -rise/-fall 决定一个值落在哪几个 [角][边沿] 格子里。
    角 0 = min、1 = max；边沿 0 = fall、1 = rise（与 MstaClock::Slew 等数组的下标一致）。
-   一对限定都没写等于两个都选：只写 -max 选中 max 的 rise 和 fall 两格，
-   什么都不写四格全选。 */
+   一对限定都没写（或都写了）等于两个都选：只写 -max 选中 max 的 rise 和 fall
+   两格，什么都不写四格全选。 */
 static void Msta_SdcMinMaxRiseFall( int fMin, int fMax, int fRise, int fFall, int Sel[2][2] )
 {
     int m, e;
@@ -665,6 +684,13 @@ static void Msta_SdcMinMaxRiseFall( int fMin, int fMax, int fRise, int fFall, in
         for ( e = 0; e < 2; e++ )
             Sel[m][e] = ( m ? ( fMax || !fMin ) : ( fMin || !fMax ) ) &&
                         ( e ? ( fRise || !fFall ) : ( fFall || !fRise ) );
+}
+
+/* 从命令里读 -min/-max/-rise/-fall 四个开关，算出掩码。 */
+static void Msta_SdcCmdMinMaxRiseFall( const MstaSdcCmd *pCmd, int Sel[2][2] )
+{
+    Msta_SdcMinMaxRiseFall( Msta_SdcHasFlag( pCmd, "-min" ), Msta_SdcHasFlag( pCmd, "-max" ),
+                            Msta_SdcHasFlag( pCmd, "-rise" ), Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
 }
 
 /* 把 Value 写进 Target 里被 Sel 选中的格子。 */
@@ -690,53 +716,96 @@ static void Msta_SdcStoreMinMaxRiseFall4( int Sel[2][2], double Value,
     if ( Sel[0][0] ) *pMinFall = Value;
 }
 
-/* 一个数值配一对限定开关（-max/-min、-setup/-hold）。
-   pNameA / pNameB 是表里的两个 MSTA_SDC_FLAG_NUMBER 选项，值有两种写法：
-   - 标准写法 "[-max] [-min] 2"：值是第一个位置参数。两个开关都没写时两边都用它，
-     否则只给写了开关、还没取到值的那边；
-   - 方言写法 "-max 2 -min 1"：开关后面紧跟的数值只给这一边（解析器已经取好）。
-   两边的值写进 *ppA / *ppB（NULL = 没有）。返回对象列表在 ppPos 里的起点：
-   第一个位置参数被当成值用掉时为 1，否则为 0。 */
-static int Msta_SdcPairValues( const MstaSdcCmd *pCmd, const char *pNameA, const char *pNameB,
-                               const char **ppA, const char **ppB )
+/* 只写 -rise 或只写 -fall 时返回 'r' / 'f'，否则（都没写或都写了）返回 0。 */
+static char Msta_SdcCmdEdge( const MstaSdcCmd *pCmd )
 {
-    int fA = Msta_SdcHasFlag( pCmd, pNameA );
-    int fB = Msta_SdcHasFlag( pCmd, pNameB );
-    *ppA = Msta_SdcOptValue( pCmd, pNameA );
-    *ppB = Msta_SdcOptValue( pCmd, pNameB );
-    if ( pCmd->nPos == 0 || !Msta_SdcIsNumber( pCmd->ppPos[0] ) )
-        return 0;
-    if ( !fA && !fB )
-        *ppA = *ppB = pCmd->ppPos[0];
-    else
-    {
-        if ( fA && *ppA == NULL ) *ppA = pCmd->ppPos[0];
-        if ( fB && *ppB == NULL ) *ppB = pCmd->ppPos[0];
-    }
-    return 1;
+    int fRise = Msta_SdcHasFlag( pCmd, "-rise" ), fFall = Msta_SdcHasFlag( pCmd, "-fall" );
+    return ( fRise && !fFall ) ? 'r' : ( fFall && !fRise ) ? 'f' : 0;
 }
 
-/* 对象列表：把位置参数 ppPos[iFirst..] 逐个解析成网络（端口、引脚、
-   网络名、总线基名都行），按出现顺序收进一个数组；解析不到的对象当场告警。
-   数组挂在本条命令的临时内存上。返回网络个数。 */
-static int Msta_SdcPosNets( MstaDesign *pDes, const MstaSdcCmd *pCmd, int iFirst, int **ppNets )
+/* 对象列表 -> 网络。每个对象可以是端口、引脚、网络名或总线基名；找不到的对象
+   当场告警并跳过。一个网络都没找到时告警作废并返回 -1。数组挂在临时内存上。 */
+static int Msta_SdcObjectNets( MstaSdc *p, MstaDesign *pDes, const MstaSdcCmd *pCmd,
+                               char **ppNames, int nNames, int **ppNets )
 {
     MstaSdcIntArray vNets;
     int i;
     MstaSdcIntArrayInit( &vNets );
-    for ( i = iFirst; i < pCmd->nPos; i++ )
-        Msta_SdcResolveNetsInto( pDes, pCmd->ppPos[i], &vNets );
+    for ( i = 0; i < nNames; i++ )
+        Msta_SdcResolveNetsInto( pDes, ppNames[i], &vNets );
     *ppNets = (int *)Msta_SdcArenaKeep( vNets.pData );
+    if ( vNets.nSize == 0 )
+    {
+        Msta_SdcReject( p, pCmd, "none of the objects was found" );
+        return -1;
+    }
     return vNets.nSize;
 }
 
-/* 路径描述：路径类命令（set_false_path、set_multicycle_path、
-   set_max_delay、set_min_delay、group_path）共用的 -from / -through / -to 三段，
-   在选项表里写成三个 MSTA_SDC_RF_LIST 选项，所以 -rise_from、-fall_through 这类
-   带边沿的写法也认。Tcl 桥已经把这些选项后面的列表拆成了多个词。
-   - -from / -to 写多次时最后一次算数；
-   - 每个 -through 是一组可以互相替代的对象（组内取"或"），多个 -through 按路径上
-     的先后顺序依次经过。 */
+/* 对象列表 -> 时钟（vClocks 里的下标）。不认识的时钟当场告警并跳过；
+   一个都不认识时告警作废并返回 -1。 */
+static int Msta_SdcObjectClocks( MstaSdc *p, const MstaSdcCmd *pCmd,
+                                 char **ppNames, int nNames, int **ppClocks )
+{
+    int *pClocks = (int *)Msta_SdcArenaZeros( nNames, sizeof(int) );
+    int i, n = 0;
+    for ( i = 0; i < nNames; i++ )
+    {
+        int j = Msta_SdcClockIndexOf( p, Msta_NameId( ppNames[i] ) );
+        if ( j < 0 )
+            Msta_SdcNote( pCmd, "unknown clock \"%s\"", ppNames[i] );
+        else
+            pClocks[n++] = j;
+    }
+    *ppClocks = pClocks;
+    if ( n == 0 )
+    {
+        Msta_SdcReject( p, pCmd, "none of the clocks was found" );
+        return -1;
+    }
+    return n;
+}
+
+/* 对象列表 -> 实例。fCellNames=1 时找不到的名字再当库单元名，取用到这个单元的
+   所有实例。找不到的对象当场告警并跳过；一个实例都没得到时告警作废并返回 -1。 */
+static int Msta_SdcObjectInsts( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, const MstaSdcCmd *pCmd,
+                                char **ppNames, int nNames, int fCellNames, int **ppInsts )
+{
+    MstaSdcIntArray vInsts;
+    int i, k;
+    MstaSdcIntArrayInit( &vInsts );
+    for ( i = 0; i < nNames; i++ )
+    {
+        int nInst = Msta_DesignFindInstByName( pDes, ppNames[i] );
+        MstaCell *pCell = ( nInst < 0 && fCellNames ) ? Msta_LibFindCell( pLib, ppNames[i] ) : NULL;
+        if ( nInst >= 0 )
+            *MstaSdcIntArrayAppend( &vInsts ) = nInst;
+        else if ( pCell != NULL )
+        {
+            for ( k = 0; k < pDes->vInsts.nSize; k++ )
+                if ( MstaInstArrayAt(&pDes->vInsts,k)->pCell == pCell )
+                    *MstaSdcIntArrayAppend( &vInsts ) = k;
+        }
+        else
+            Msta_SdcNote( pCmd, fCellNames ? "unknown instance or cell \"%s\"" : "unknown instance \"%s\"",
+                          ppNames[i] );
+    }
+    *ppInsts = (int *)Msta_SdcArenaKeep( vInsts.pData );
+    if ( vInsts.nSize == 0 )
+    {
+        Msta_SdcReject( p, pCmd, "none of the objects was found" );
+        return -1;
+    }
+    return vInsts.nSize;
+}
+
+/* 路径描述：路径类命令（set_false_path、set_multicycle_path、set_max_delay、
+   set_min_delay、group_path）共用的 -from / -through / -to 三段，在选项表里写成
+   三个带 MSTA_SDC_RF 的 MSTA_SDC_LIST 选项（-through 还带 MSTA_SDC_REPEAT），
+   所以 -rise_from、-fall_through 这类写法也认。Tcl 桥已经把这些选项后面的列表
+   拆成了多个词。
+   每个 -through 是一组可以互相替代的对象（组内取"或"），多个 -through 按路径上
+   的先后顺序依次经过。 */
 typedef struct {
     char         **ppFrom;     /* -from 的对象名（指向 argv），nFrom 个；没写时为 0 个 */
     int            nFrom;
@@ -749,88 +818,47 @@ typedef struct {
     int            nThru;
 } MstaSdcPath;
 
-/* 从解析结果里取出路径描述。-through 的条目总数超过 MSTA_SDC_MAX_THRU 时停下，
-   返回那个 -through 在 argv 里的下标（不告警，见 Msta_SdcPathSyntaxError）；
-   正常返回 0。 */
-static int Msta_SdcGetPath( const MstaSdcCmd *pCmd, MstaSdcPath *pPath )
+/* 从解析结果里取出路径描述。-through 的条目总数超过 MSTA_SDC_MAX_THRU 时
+   告警作废并返回 0。 */
+static int Msta_SdcGetPath( MstaSdc *p, const MstaSdcCmd *pCmd, MstaSdcPath *pPath )
 {
     int l, k;
     memset( pPath, 0, sizeof(MstaSdcPath) );
+    pPath->nFrom  = Msta_SdcOptList( pCmd, "-from", &pPath->ppFrom );
+    pPath->FromRF = Msta_SdcOptEdge( pCmd, "-from" );
+    pPath->nTo    = Msta_SdcOptList( pCmd, "-to", &pPath->ppTo );
+    pPath->ToRF   = Msta_SdcOptEdge( pCmd, "-to" );
     for ( l = 0; l < pCmd->nLists; l++ )
     {
-        const char *pName = pCmd->pOpts[ pCmd->pListOpt[l] ].pName;
-        int Beg = pCmd->pListBeg[l], End = pCmd->pListEnd[l];
-        char Edge = pCmd->pListEdge[l];
-        if ( !strcmp( pName, "-from" ) )
+        char **ppWords = pCmd->pppListWords[l];
+        if ( strcmp( pCmd->pOpts[ pCmd->pListOpt[l] ].pName, "-through" ) )
+            continue;
+        if ( pPath->nThru + 1 + pCmd->pListCount[l] > MSTA_SDC_MAX_THRU )
         {
-            pPath->ppFrom = pCmd->argv + Beg;
-            pPath->nFrom  = End - Beg;
-            pPath->FromRF = Edge;
+            Msta_SdcReject( p, pCmd, "more than %d -through objects", MSTA_SDC_MAX_THRU );
+            return 0;
         }
-        else if ( !strcmp( pName, "-to" ) )
+        pPath->Thru[pPath->nThru].Text = MSTA_NO_ID;      /* 新的一组从分隔条目开始 */
+        pPath->Thru[pPath->nThru].Kind = MSTA_SDC_THRU_SEP;
+        pPath->Thru[pPath->nThru].RF   = 0;
+        pPath->nThru++;
+        for ( k = 0; k < pCmd->pListCount[l]; k++ )
         {
-            pPath->ppTo = pCmd->argv + Beg;
-            pPath->nTo  = End - Beg;
-            pPath->ToRF = Edge;
-        }
-        else
-        {
-            assert( !strcmp( pName, "-through" ) );
-            if ( pPath->nThru + 1 + ( End - Beg ) > MSTA_SDC_MAX_THRU )
-                return Beg - 1;
-            pPath->Thru[pPath->nThru].Text = MSTA_NO_ID;      /* 新的一组从分隔条目开始 */
-            pPath->Thru[pPath->nThru].Kind = MSTA_SDC_THRU_SEP;
-            pPath->Thru[pPath->nThru].RF   = 0;
+            pPath->Thru[pPath->nThru].Text = Msta_NameId( ppWords[k] );
+            pPath->Thru[pPath->nThru].Kind = Msta_SdcKindOf( ppWords[k] );
+            pPath->Thru[pPath->nThru].RF   = pCmd->pListEdge[l];
             pPath->nThru++;
-            for ( k = Beg; k < End; k++ )
-            {
-                pPath->Thru[pPath->nThru].Text = Msta_NameId( pCmd->argv[k] );
-                pPath->Thru[pPath->nThru].Kind = Msta_SdcKindOf( pCmd->argv[k] );
-                pPath->Thru[pPath->nThru].RF   = Edge;
-                pPath->nThru++;
-            }
         }
     }
-    return 0;
-}
-
-/* 路径类命令的语法错误。iThruOver 是 Msta_SdcGetPath 的返回值。
-   解析在第一个错误处就停了，记下的 -through 都在它前面，所以 -through 超限
-   （如果有）总是最早的错误。返回：
-   0 = 没有错；
-   1 = -through 超限，或路径选项后面一个对象都没有（这两种在这里告警）；
-   2 = 不认识的选项（argv[iBad]），由调用方按自己的措辞告警；
-   3 = 其他带值选项缺值（argv[iBad]），由调用方处理。 */
-static int Msta_SdcPathSyntaxError( const MstaSdcCmd *pCmd, int iThruOver )
-{
-    const char *pWord;
-    char Edge;
-    if ( iThruOver > 0 )
-    {
-        Msta_WarnOnce("path exception has more than %d -through objects; constraint rejected",
-                      MSTA_SDC_MAX_THRU);
-        return 1;
-    }
-    if ( pCmd->iBad == 0 )
-        return 0;
-    if ( !pCmd->fBadNoValue )
-        return 2;
-    /* 缺值的是路径选项（对象串）时就是"空集合" */
-    pWord = pCmd->argv[pCmd->iBad];
-    if ( pCmd->pOpts[ Msta_SdcFindOpt( pCmd->pOpts, pWord, &Edge ) ].Kind == MSTA_SDC_RF_LIST )
-    {
-        Msta_WarnOnce("path exception option \"%s\" has an empty collection; constraint rejected",
-                      pWord);
-        return 1;
-    }
-    return 3;
+    return 1;
 }
 
 /* =====================================================================
    各条命令
 
-   每条命令一张选项表（它的语法）加一个处理函数（它的语义），
-   两者在"读入与分发"一节的分发表 s_vSdcCommands 里配对。
+   每条命令一张选项表加一个处理函数；位置参数的形状写在分发表
+   s_vSdcCommands 里（"读入与分发"一节）。处理函数被调用时语法已经检查过，
+   只需检查取值、查对象、写模型。
    ===================================================================== */
 
 /* ---------------- 时钟 ---------------- */
@@ -855,91 +883,72 @@ static MstaClock *Msta_SdcNewClock( MstaSdc *p, const char *pName )
     return pClock;
 }
 
-/* create_clock [-name 名字] -period 周期 [-waveform {上升 下降}] [-add] [源端口]
-   -period 的 "多周期波形"（{4 8}）写法不支持；只认标量。 */
+/* 网络 nNet 上是否已经有时钟。 */
+static int Msta_SdcNetHasClock( MstaSdc *p, int nNet )
+{
+    int i;
+    for ( i = 0; i < p->vClocks.nSize; i++ )
+        if ( Msta_SdcClockByIndex(p,i)->SourceNet == nNet )
+            return 1;
+    return 0;
+}
+
+/* create_clock -period 周期 [-name 名字] [-waveform {上升 下降}] [-add] [源端口]
+   -period 的 "多周期波形"（{4 8}）写法不支持；只认标量。不写 -name 时，
+   源端口名就是时钟名；同一个源上的第二个时钟要写 -add。 */
 static const MstaSdcOpt s_vCreateClockOpts[] = {
-    { "-name",     MSTA_SDC_VALUE },
-    { "-period",   MSTA_SDC_VALUE },
-    { "-waveform", MSTA_SDC_VALUE },
-    { "-add",      MSTA_SDC_FLAG  },
-    { NULL,        MSTA_SDC_FLAG  } };
+    { "-name",     MSTA_SDC_VALUE, 0 },
+    { "-period",   MSTA_SDC_VALUE, 0 },
+    { "-waveform", MSTA_SDC_VALUE, 0 },
+    { "-add",      MSTA_SDC_FLAG,  0 },
+    { NULL,        MSTA_SDC_FLAG,  0 } };
 
 static void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    const char *pPeriod = Msta_SdcOptValue( pCmd, "-period" );
-    const char *pName   = Msta_SdcOptValue( pCmd, "-name" );
-    const char *pWave   = Msta_SdcOptValue( pCmd, "-waveform" );
-    int fAdd = Msta_SdcHasFlag( pCmd, "-add" );
-    char **pTargets = pCmd->ppPos;          /* 位置参数就是源端口/引脚 */
-    int nTargets = pCmd->nPos;
-    double Rise = 0.0, Fall = -1.0;
-    int nSource = MSTA_NO_ID, i;
+    const char *pName = Msta_SdcOptValue( pCmd, "-name" );
+    const char *pWave = Msta_SdcOptValue( pCmd, "-waveform" );
+    double Period, Rise = 0.0, Fall;
+    int nSource = MSTA_NO_ID, *pNets;
+    MstaClock *pClock;
 
-    if ( pPeriod == NULL )
-    {
-        Msta_WarnOnce( "create_clock without -period is ignored" );
+    if ( !Msta_SdcRequire( p, pCmd, "-period" ) ||
+         !Msta_SdcGetNumber( p, pCmd, "-period", Msta_SdcOptValue( pCmd, "-period" ),
+                             MSTA_SDC_POSITIVE, &Period ) )
         return;
-    }
-    if ( !Msta_SdcIsNumber(pPeriod) || Msta_SdcToPs(p,pPeriod) <= 0.0 )
-    {
-        Msta_WarnOnce( "create_clock needs a positive numeric -period" );
-        return;
-    }
+    Fall = 0.5 * Period;
     if ( pWave )
     {
         char Extra;
-        if ( sscanf(pWave,"%lf %lf %c",&Rise,&Fall,&Extra) != 2 )
-        { Msta_WarnOnce("create_clock: -waveform needs exactly two edge times"); return; }
+        if ( sscanf( pWave, "%lf %lf %c", &Rise, &Fall, &Extra ) != 2 )
+        { Msta_SdcReject( p, pCmd, "-waveform needs exactly two edge times" ); return; }
+        if ( Rise < 0.0 || Fall <= Rise || Fall >= Period )
+        { Msta_SdcReject( p, pCmd, "-waveform must satisfy 0 <= rise < fall < period" ); return; }
     }
-    if ( pWave && (Rise < 0.0 || Fall <= Rise || Fall >= atof(pPeriod)) )
+    if ( pCmd->nObjs > 1 )
+    { Msta_SdcReject( p, pCmd, "multiple source objects are not modeled" ); return; }
+    if ( pName == NULL && pCmd->nObjs == 0 )
+    { Msta_SdcReject( p, pCmd, "needs -name or a source object" ); return; }
+    if ( pName == NULL )
+        pName = pCmd->ppObjs[0];
+    if ( Msta_SdcFindClock( p, pName ) )
+    { Msta_SdcReject( p, pCmd, "clock \"%s\" already exists", pName ); return; }
+    if ( pCmd->nObjs == 1 )
     {
-        Msta_WarnOnce("create_clock: waveform must satisfy 0 <= rise < fall < period");
-        return;
-    }
-    if ( nTargets > 1 )
-    { Msta_WarnOnce("create_clock with multiple source pins is not modeled; clock rejected"); return; }
-    if ( pName == NULL && nTargets == 0 )
-    {
-        Msta_WarnOnce( "create_clock needs either -name <c> or a port" );
-        return;
-    }
-    if ( Msta_SdcFindClock(p,pName ? pName : pTargets[0]) )
-    {
-        Msta_WarnOnce("create_clock: duplicate clock name \"%s\" is ignored",
-                      pName ? pName : pTargets[0]);
-        return;
-    }
-    if ( nTargets == 1 )
-    {
-        int *pNets;
-        int nCount = Msta_SdcResolveNets( pDes, pTargets[0], &pNets );
-        if ( nCount != 1 )
-        { Msta_WarnOnce("create_clock source must resolve to one net"); return; }
+        if ( Msta_SdcResolveNets( pDes, pCmd->ppObjs[0], &pNets ) != 1 )
+        { Msta_SdcReject( p, pCmd, "the source must resolve to one net" ); return; }
         nSource = pNets[0];
-        for ( i = 0; i < p->vClocks.nSize; i++ )
-            if ( Msta_SdcClockByIndex(p,i)->SourceNet == nSource )
-            {
-                /* -add 之外的写法是"换掉这个源脚上的时钟"，msta 不做替换。 */
-                if ( !fAdd )
-                {
-                    Msta_WarnOnce("create_clock on a source that already has a clock "
-                                  "needs -add; clock rejected");
-                    return;
-                }
-                break;
-            }
+        /* 不写 -add 是"换掉这个源上的时钟"，msta 不做替换。 */
+        if ( !Msta_SdcHasFlag( pCmd, "-add" ) && Msta_SdcNetHasClock( p, nSource ) )
+        { Msta_SdcReject( p, pCmd, "the source already has a clock (use -add for another one)" ); return; }
     }
-    /* 不写 -name 时，端口名就是时钟名（SDC 惯例）。 */
+    pClock = Msta_SdcNewClock( p, pName );
+    pClock->Period   = Period * p->TimeScalePs;
+    pClock->RiseEdge = Rise * p->TimeScalePs;
+    pClock->FallEdge = Fall * p->TimeScalePs;
+    if ( pCmd->nObjs == 1 )
     {
-        MstaClock *pClock = Msta_SdcNewClock( p, pName ? pName : pTargets[0] );
-        pClock->Period = Msta_SdcToPs( p,pPeriod );
-        pClock->RiseEdge = Rise * p->TimeScalePs;
-        pClock->FallEdge = pWave ? Fall * p->TimeScalePs : 0.5 * pClock->Period;
-        if ( nTargets > 0 )
-        {
-            pClock->SourceNet  = nSource;
-            pClock->SourceText = Msta_NameId( pTargets[0] );
-        }
+        pClock->SourceNet  = nSource;
+        pClock->SourceText = Msta_NameId( pCmd->ppObjs[0] );
     }
 }
 
@@ -972,264 +981,232 @@ static double Msta_SdcClockEdgeTime( MstaClock *pClock, int nEdge )
     return Phase + (double)( n / 2 ) * pClock->Period;
 }
 
-/* create_generated_clock [-name 名字] -source 主时钟源 [-master_clock 主时钟]
+/* 分频/倍频系数：必须是 1..1000000 的整数。 */
+static int Msta_SdcGetRatio( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pName, double *pRatio )
+{
+    const char *pText = Msta_SdcOptValue( pCmd, pName );
+    *pRatio = 1.0;
+    if ( pText == NULL )
+        return 1;
+    if ( !Msta_SdcGetNumber( p, pCmd, pName, pText, MSTA_SDC_POSITIVE, pRatio ) )
+        return 0;
+    if ( *pRatio > 1000000.0 || *pRatio != (double)(int)*pRatio )
+    { Msta_SdcReject( p, pCmd, "%s must be a positive integer (got %s)", pName, pText ); return 0; }
+    return 1;
+}
+
+/* create_generated_clock -source 主时钟源 [-name 名字] [-master_clock 主时钟]
        [-divide_by n | -multiply_by n] [-duty_cycle d] [-invert]
        [-edges {e1 e2 e3} [-edge_shift {s1 s2 s3}]] 目标引脚
-   创建支持分频、倍频和反相的生成时钟。-add / -combinational 认得但不建模。 */
+   创建支持分频、倍频和反相的生成时钟。-add / -combinational 不建模。 */
 static const MstaSdcOpt s_vGeneratedClockOpts[] = {
-    { "-name",          MSTA_SDC_VALUE     },
-    { "-source",        MSTA_SDC_VALUE     },
-    { "-master_clock",  MSTA_SDC_VALUE     },
-    { "-divide_by",     MSTA_SDC_VALUE     },
-    { "-multiply_by",   MSTA_SDC_VALUE     },
-    { "-duty_cycle",    MSTA_SDC_VALUE     },
-    { "-edges",         MSTA_SDC_VALUE_RAW },
-    { "-edge_shift",    MSTA_SDC_VALUE_RAW },   /* 值常以负数开头，如 {-0.1 0 0} */
-    { "-invert",        MSTA_SDC_FLAG      },
-    { "-add",           MSTA_SDC_FLAG      },
-    { "-combinational", MSTA_SDC_FLAG      },
-    { NULL,             MSTA_SDC_FLAG      } };
+    { "-name",          MSTA_SDC_VALUE, 0               },
+    { "-source",        MSTA_SDC_VALUE, 0               },
+    { "-master_clock",  MSTA_SDC_VALUE, 0               },
+    { "-divide_by",     MSTA_SDC_VALUE, 0               },
+    { "-multiply_by",   MSTA_SDC_VALUE, 0               },
+    { "-duty_cycle",    MSTA_SDC_VALUE, 0               },
+    { "-edges",         MSTA_SDC_VALUE, 0               },
+    { "-edge_shift",    MSTA_SDC_VALUE, 0               },
+    { "-invert",        MSTA_SDC_FLAG,  0               },
+    { "-add",           MSTA_SDC_FLAG,  MSTA_SDC_REJECT },
+    { "-combinational", MSTA_SDC_FLAG,  MSTA_SDC_REJECT },
+    { NULL,             MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     const char *pName       = Msta_SdcOptValue( pCmd, "-name" );
     const char *pSource     = Msta_SdcOptValue( pCmd, "-source" );
     const char *pMasterName = Msta_SdcOptValue( pCmd, "-master_clock" );
-    const char *pDivide     = Msta_SdcOptValue( pCmd, "-divide_by" );
-    const char *pMultiply   = Msta_SdcOptValue( pCmd, "-multiply_by" );
     const char *pDuty       = Msta_SdcOptValue( pCmd, "-duty_cycle" );
     const char *pEdges      = Msta_SdcOptValue( pCmd, "-edges" );
     const char *pShifts     = Msta_SdcOptValue( pCmd, "-edge_shift" );
-    int fInvert = Msta_SdcHasFlag( pCmd, "-invert" );
-    char **pTargets = pCmd->ppPos;          /* 位置参数就是目标引脚/端口 */
-    int nTargets = pCmd->nPos;
-    MstaClock *pMaster, *pClock;
-    int *pNets, nCount, i, fEdges = 0;
-    double Div = 1.0, Mult = 1.0, Duty = 50.0;
-    double vEdges[3], vShifts[3];
-    if ( Msta_SdcHasFlag( pCmd, "-add" ) )
-    { Msta_WarnOnce("create_generated_clock: -add is not modeled; clock rejected"); return; }
-    if ( Msta_SdcHasFlag( pCmd, "-combinational" ) )
-    { Msta_WarnOnce("create_generated_clock: -combinational is not modeled; clock rejected"); return; }
-    if ( pSource == NULL || nTargets != 1 )
-    { Msta_WarnOnce("create_generated_clock needs -source and one target pin/port"); return; }
-    if ( pDivide && pMultiply )
-    { Msta_WarnOnce("create_generated_clock cannot combine -divide_by and -multiply_by"); return; }
-    if ( pEdges != NULL && ( pDivide || pMultiply || pDuty != NULL ) )
-    {
-        Msta_WarnOnce("create_generated_clock: -edges cannot combine with -divide_by/-multiply_by/-duty_cycle");
+    const char *pTarget     = pCmd->ppObjs[0];
+    MstaClock *pMaster = NULL, *pClock;
+    int *pNets, i;
+    double Div, Mult, Duty = 50.0;
+    double vEdges[3], vShifts[3] = { 0.0, 0.0, 0.0 };
+
+    if ( !Msta_SdcRequire( p, pCmd, "-source" ) )
         return;
-    }
-    if ( pDivide ) Div = atof(pDivide);
-    if ( pMultiply ) Mult = atof(pMultiply);
-    if ( pDuty ) Duty = atof(pDuty);
-    if ( Div <= 0.0 || Mult <= 0.0 || Div > 1000000.0 || Mult > 1000000.0 ||
-         Div != (double)(int)Div ||
-         Mult != (double)(int)Mult || Duty <= 0.0 || Duty >= 100.0 )
-    { Msta_WarnOnce("create_generated_clock needs positive ratio and 0 < duty_cycle < 100"); return; }
+    if ( pEdges != NULL && ( Msta_SdcHasFlag( pCmd, "-divide_by" ) ||
+                             Msta_SdcHasFlag( pCmd, "-multiply_by" ) || pDuty != NULL ) )
+    { Msta_SdcReject( p, pCmd, "-edges cannot be combined with -divide_by/-multiply_by/-duty_cycle" ); return; }
+    if ( Msta_SdcHasFlag( pCmd, "-divide_by" ) && Msta_SdcHasFlag( pCmd, "-multiply_by" ) )
+    { Msta_SdcReject( p, pCmd, "-divide_by and -multiply_by cannot be combined" ); return; }
+    if ( !Msta_SdcGetRatio( p, pCmd, "-divide_by", &Div ) ||
+         !Msta_SdcGetRatio( p, pCmd, "-multiply_by", &Mult ) )
+        return;
+    if ( pDuty != NULL && !Msta_SdcGetNumber( p, pCmd, "-duty_cycle", pDuty, MSTA_SDC_ANY, &Duty ) )
+        return;
+    if ( Duty <= 0.0 || Duty >= 100.0 )
+    { Msta_SdcReject( p, pCmd, "-duty_cycle must be between 0 and 100 (got %s)", pDuty ); return; }
+    if ( pShifts != NULL && pEdges == NULL )
+    { Msta_SdcReject( p, pCmd, "-edge_shift needs -edges" ); return; }
     /* -edges {e1 e2 e3}：用主时钟的第 e1/e2/e3 个边沿定义新时钟的
        上升沿、下降沿和下一个上升沿。边号从 1 开始数：1 = 首个上升沿，
        2 = 首个下降沿，3 = 第二个上升沿……。 */
     if ( pEdges != NULL )
     {
-        int nS;
         if ( Msta_SdcParseNumberList( pEdges, vEdges, 3 ) != 3 )
-        { Msta_WarnOnce("create_generated_clock -edges needs exactly three edge numbers"); return; }
-        nS = pShifts ? Msta_SdcParseNumberList( pShifts, vShifts, 3 ) : 0;
-        if ( pShifts != NULL && nS != 3 )
-        { Msta_WarnOnce("create_generated_clock: -edge_shift needs as many values as -edges"); return; }
+        { Msta_SdcReject( p, pCmd, "-edges needs exactly three edge numbers" ); return; }
+        if ( pShifts != NULL && Msta_SdcParseNumberList( pShifts, vShifts, 3 ) != 3 )
+        { Msta_SdcReject( p, pCmd, "-edge_shift needs as many values as -edges" ); return; }
         for ( i = 0; i < 3; i++ )
         {
             if ( vEdges[i] < 1.0 || vEdges[i] != (double)(int)vEdges[i] )
-            { Msta_WarnOnce("create_generated_clock: -edges values must be positive integers"); return; }
+            { Msta_SdcReject( p, pCmd, "-edges values must be positive integers" ); return; }
             if ( i > 0 && vEdges[i] <= vEdges[i-1] )
-            { Msta_WarnOnce("create_generated_clock: -edges values must increase"); return; }
+            { Msta_SdcReject( p, pCmd, "-edges values must increase" ); return; }
         }
-        fEdges = 1;
     }
-    pMaster = pMasterName ? Msta_SdcFindClock(p,pMasterName) : NULL;
-    if ( pMasterName && pMaster == NULL )
-    { Msta_WarnOnce("create_generated_clock: unknown master clock \"%s\"",pMasterName); return; }
-    if ( pMaster == NULL )
+    /* 主时钟：-master_clock 点名，或者 -source 所在网络上的那个时钟。 */
+    if ( pMasterName != NULL )
     {
-        nCount = Msta_SdcResolveNets( pDes, pSource, &pNets );
-        for ( i = 0; i < p->vClocks.nSize && pMaster == NULL; i++ )
-            if ( nCount > 0 && Msta_SdcClockByIndex(p,i)->SourceNet == pNets[0] )
-                pMaster = Msta_SdcClockByIndex(p,i);
+        pMaster = Msta_SdcFindClock( p, pMasterName );
+        if ( pMaster == NULL )
+        { Msta_SdcReject( p, pCmd, "unknown master clock \"%s\"", pMasterName ); return; }
     }
+    else if ( Msta_SdcResolveNets( pDes, pSource, &pNets ) > 0 )
+        for ( i = 0; i < p->vClocks.nSize && pMaster == NULL; i++ )
+            if ( Msta_SdcClockByIndex(p,i)->SourceNet == pNets[0] )
+                pMaster = Msta_SdcClockByIndex(p,i);
     if ( pMaster == NULL )
-    { Msta_WarnOnce("create_generated_clock: no master clock for \"%s\"",pSource); return; }
-    nCount = Msta_SdcResolveNets( pDes, pTargets[0], &pNets );
-    if ( nCount != 1 )
-    { Msta_WarnOnce("create_generated_clock target must resolve to one net"); return; }
-    for ( i = 0; i < p->vClocks.nSize; i++ )
-        if ( Msta_SdcClockByIndex(p,i)->SourceNet == pNets[0] )
-        { Msta_WarnOnce("create_generated_clock target already has a clock; clock rejected"); return; }
-    if ( pName == NULL ) pName = pTargets[0];
-    if ( Msta_SdcFindClock(p,pName) )
-    { Msta_WarnOnce("create_generated_clock: duplicate clock \"%s\"",pName); return; }
+    { Msta_SdcReject( p, pCmd, "no master clock for \"%s\"", pSource ); return; }
+    if ( Msta_SdcResolveNets( pDes, pTarget, &pNets ) != 1 )
+    { Msta_SdcReject( p, pCmd, "the target must resolve to one net" ); return; }
+    if ( Msta_SdcNetHasClock( p, pNets[0] ) )
+    { Msta_SdcReject( p, pCmd, "the target already has a clock" ); return; }
+    if ( pName == NULL )
+        pName = pTarget;
+    if ( Msta_SdcFindClock( p, pName ) )
+    { Msta_SdcReject( p, pCmd, "clock \"%s\" already exists", pName ); return; }
     /* Append 可能重新分配 vClocks，先把主时钟的各项值取出来。 */
     {
         double Period = pMaster->Period * Div / Mult;
         double Rise = pMaster->RiseEdge;
         double Fall = Rise + Period * Duty / 100.0;
         MstaId MasterName = pMaster->Name;
-        if ( fEdges )
+        if ( pEdges != NULL )
         {
-            double Shift[3] = { 0.0, 0.0, 0.0 };
-            for ( i = 0; pShifts != NULL && i < 3; i++ )
-                Shift[i] = vShifts[i] * p->TimeScalePs;
-            Rise = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[0] ) + Shift[0];
-            Fall = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[1] ) + Shift[1];
-            Period = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[2] ) + Shift[2] - Rise;
+            Rise = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[0] ) + vShifts[0] * p->TimeScalePs;
+            Fall = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[1] ) + vShifts[1] * p->TimeScalePs;
+            Period = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[2] ) + vShifts[2] * p->TimeScalePs - Rise;
             if ( Period <= 0.0 || Fall <= Rise )
-            {
-                Msta_WarnOnce("create_generated_clock: -edges gives a non-positive period; clock rejected");
-                return;
-            }
+            { Msta_SdcReject( p, pCmd, "-edges gives a non-positive period" ); return; }
         }
-        pClock = Msta_SdcNewClock(p,pName);
+        pClock = Msta_SdcNewClock( p, pName );
         pClock->MasterClock = MasterName;
-        pClock->Period = Period;
-        pClock->RiseEdge = Rise;
-        pClock->FallEdge = Fall;
-        if ( fInvert )
-        {
-            pClock->RiseEdge = pClock->FallEdge;
-            pClock->FallEdge = Rise;
-        }
-        pClock->SourceNet = pNets[0];
-        pClock->SourceText = Msta_NameId(pTargets[0]);
+        pClock->Period   = Period;
+        pClock->RiseEdge = Msta_SdcHasFlag( pCmd, "-invert" ) ? Fall : Rise;
+        pClock->FallEdge = Msta_SdcHasFlag( pCmd, "-invert" ) ? Rise : Fall;
+        pClock->SourceNet  = pNets[0];
+        pClock->SourceText = Msta_NameId( pTarget );
     }
 }
 
 /* set_clock_uncertainty [-setup] [-hold] [-rise|-fall] 值 时钟列表
-   set_clock_uncertainty [-setup] [-hold] -from|-rise_from|-fall_from 时钟
-                         -to|-rise_to|-fall_to 时钟 值
-   给一个或多个时钟、或者一对时钟之间设置 setup/hold 不确定度。
-   -setup 0.1 -hold 0.05 这种把值直接跟在 -setup/-hold 后面的写法是方言，也接受。 */
+   set_clock_uncertainty [-setup] [-hold] -from|-rise_from|-fall_from 时钟列表
+                         -to|-rise_to|-fall_to 时钟列表 值
+   给时钟、或者两组时钟之间设置 setup/hold 不确定度。-setup/-hold 都没写时两者
+   都设；裸 -rise/-fall 限定的是 -to 一侧（捕获沿）的边沿。 */
 static const MstaSdcOpt s_vClockUncertaintyOpts[] = {
-    { "-setup", MSTA_SDC_FLAG_NUMBER },
-    { "-hold",  MSTA_SDC_FLAG_NUMBER },
-    { "-rise",  MSTA_SDC_FLAG        },
-    { "-fall",  MSTA_SDC_FLAG        },
-    { "-from",  MSTA_SDC_RF_VALUE    },
-    { "-to",    MSTA_SDC_RF_VALUE    },
-    { NULL,     MSTA_SDC_FLAG        } };
+    { "-setup", MSTA_SDC_FLAG, 0           },
+    { "-hold",  MSTA_SDC_FLAG, 0           },
+    { "-rise",  MSTA_SDC_FLAG, 0           },
+    { "-fall",  MSTA_SDC_FLAG, 0           },
+    { "-from",  MSTA_SDC_LIST, MSTA_SDC_RF },
+    { "-to",    MSTA_SDC_LIST, MSTA_SDC_RF },
+    { NULL,     MSTA_SDC_FLAG, 0           } };
 
 static void Msta_SdcSetClockUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    const char *pSetup, *pHold;
-    const char *pFrom  = Msta_SdcOptValue( pCmd, "-from" );
-    const char *pTo    = Msta_SdcOptValue( pCmd, "-to" );
-    char FromRF = Msta_SdcOptEdge( pCmd, "-from" );
-    char ToRF   = Msta_SdcOptEdge( pCmd, "-to" );
-    int fSetup = Msta_SdcHasFlag( pCmd, "-setup" );
-    int fHold  = Msta_SdcHasFlag( pCmd, "-hold" );
-    int fRise  = Msta_SdcHasFlag( pCmd, "-rise" );
-    int fFall  = Msta_SdcHasFlag( pCmd, "-fall" );
-    char **pRest;
-    int nRest, i;
+    int fSetup = Msta_SdcHasFlag( pCmd, "-setup" ) || !Msta_SdcHasFlag( pCmd, "-hold" );
+    int fHold  = Msta_SdcHasFlag( pCmd, "-hold" ) || !Msta_SdcHasFlag( pCmd, "-setup" );
+    double Value = Msta_SdcToPs( p, pCmd->pValue );
+    char **ppFrom, **ppTo, ToRF = Msta_SdcOptEdge( pCmd, "-to" );
+    int nFrom = Msta_SdcOptList( pCmd, "-from", &ppFrom );
+    int nTo   = Msta_SdcOptList( pCmd, "-to", &ppTo );
+    int *pFrom = NULL, *pTo = NULL, *pClocks, nClocks, i, j, c;
 
-    /* 裸 -rise/-fall 限定的是 -to 一侧（捕获沿）的边沿。 */
-    if ( fRise && !fFall && ToRF == 0 ) ToRF = 'r';
-    if ( fFall && !fRise && ToRF == 0 ) ToRF = 'f';
-    /* 不确定度的值：-setup/-hold 后面紧跟的数值，或者第一个位置参数；
-       其余位置参数是时钟。 */
-    i = Msta_SdcPairValues( pCmd, "-setup", "-hold", &pSetup, &pHold );
-    pRest = pCmd->ppPos + i;
-    nRest = pCmd->nPos - i;
-    if ( fSetup && fHold )
+    if ( ToRF == 0 )
+        ToRF = Msta_SdcCmdEdge( pCmd );
+    if ( nFrom == 0 && nTo == 0 )
     {
-        if ( pSetup == NULL ) pSetup = pHold;
-        if ( pHold == NULL ) pHold = pSetup;
-    }
-    if ( pFrom != NULL || pTo != NULL )
-    {
-        MstaClock *pFromClock = pFrom ? Msta_SdcFindClock(p,pFrom) : NULL;
-        MstaClock *pToClock   = pTo   ? Msta_SdcFindClock(p,pTo)   : NULL;
-        if ( pFrom && pFromClock == NULL )
-        { Msta_WarnOnce("set_clock_uncertainty: no clock named \"%s\"",pFrom); return; }
-        if ( pTo && pToClock == NULL )
-        { Msta_WarnOnce("set_clock_uncertainty: no clock named \"%s\"",pTo); return; }
-        if ( pSetup == NULL && pHold == NULL )
-        { Msta_WarnOnce("set_clock_uncertainty needs an uncertainty value"); return; }
-        if ( nRest > 0 )
-            Msta_WarnOnce("set_clock_uncertainty: object list is ignored for -from/-to form");
-        for ( i = 0; i < 2; i++ )
+        if ( pCmd->nObjs == 0 )
+        { Msta_SdcReject( p, pCmd, "needs a clock list or -from/-to" ); return; }
+        nClocks = Msta_SdcObjectClocks( p, pCmd, pCmd->ppObjs, pCmd->nObjs, &pClocks );
+        for ( i = 0; i < nClocks; i++ )
         {
-            const char *pValue = i ? pHold : pSetup;
-            MstaInterClockUnc *pUnc;
-            if ( pValue == NULL )
-                continue;
-            pUnc = MstaInterClockUncArrayAppend( &p->vInterClockUnc );
-            pUnc->FromClock = pFromClock ? pFromClock->Name : MSTA_NO_ID;
-            pUnc->ToClock   = pToClock   ? pToClock->Name   : MSTA_NO_ID;
-            pUnc->FromRF = FromRF;
-            pUnc->ToRF = ToRF;
-            pUnc->fSetup = i ? 0 : 1;
-            pUnc->fHold  = i ? 1 : 0;
-            pUnc->Value  = Msta_SdcToPs( p, pValue );
+            MstaClock *pClock = Msta_SdcClockByIndex( p, pClocks[i] );
+            if ( fSetup ) pClock->UncertaintySetup = Value;
+            if ( fHold )  pClock->UncertaintyHold  = Value;
         }
         return;
     }
-    if ( nRest == 0 || (fSetup && pSetup == NULL) || (fHold && pHold == NULL) ||
-         (pSetup == NULL && pHold == NULL) )
-    {
-        Msta_WarnOnce( "set_clock_uncertainty needs a value and clock objects" );
+    /* -from/-to 形式：两组时钟两两之间各记一条；没写的一侧表示任意时钟。 */
+    if ( pCmd->nObjs > 0 )
+    { Msta_SdcReject( p, pCmd, "a clock list cannot be combined with -from/-to" ); return; }
+    if ( nFrom > 0 && ( nFrom = Msta_SdcObjectClocks( p, pCmd, ppFrom, nFrom, &pFrom ) ) < 0 )
         return;
-    }
-    for ( i = 0; i < nRest; i++ )
-    {
-        MstaClock *pClock = Msta_SdcFindClock( p, pRest[i] );
-        if ( pClock == NULL )
-        {
-            Msta_WarnOnce( "set_clock_uncertainty: no clock named \"%s\"", pRest[i] );
-            continue;
-        }
-        if ( pSetup )
-            pClock->UncertaintySetup = Msta_SdcToPs( p,pSetup );
-        if ( pHold )
-            pClock->UncertaintyHold = Msta_SdcToPs( p,pHold );
-    }
+    if ( nTo > 0 && ( nTo = Msta_SdcObjectClocks( p, pCmd, ppTo, nTo, &pTo ) ) < 0 )
+        return;
+    for ( i = 0; i < ( nFrom > 0 ? nFrom : 1 ); i++ )
+        for ( j = 0; j < ( nTo > 0 ? nTo : 1 ); j++ )
+            for ( c = 0; c < 2; c++ )
+            {
+                MstaInterClockUnc *pUnc;
+                if ( c == 0 ? !fSetup : !fHold )
+                    continue;
+                pUnc = MstaInterClockUncArrayAppend( &p->vInterClockUnc );
+                pUnc->FromClock = nFrom > 0 ? Msta_SdcClockByIndex( p, pFrom[i] )->Name : MSTA_NO_ID;
+                pUnc->ToClock   = nTo   > 0 ? Msta_SdcClockByIndex( p, pTo[j] )->Name   : MSTA_NO_ID;
+                pUnc->FromRF = Msta_SdcOptEdge( pCmd, "-from" );
+                pUnc->ToRF   = ToRF;
+                pUnc->fSetup = c == 0;
+                pUnc->fHold  = c == 1;
+                pUnc->Value  = Value;
+            }
 }
 
-/* set_clock_latency [-source] [-min|-max|-early|-late] [-rise|-fall] [-clock 时钟] 延迟 时钟列表
+/* set_clock_latency [-source] [-min|-max|-early|-late] [-rise|-fall] [-clock 时钟列表] 延迟 [时钟列表]
    设置理想时钟分析的源延迟 / 网络延迟。-early/-late 与 -min/-max 同义；
-   手册允许用 -clock clock_list 代替对象列表。 */
+   要设的时钟可以写在 -clock 后面，也可以写成对象列表。 */
 static const MstaSdcOpt s_vClockLatencyOpts[] = {
-    { "-clock",  MSTA_SDC_VALUE },
-    { "-source", MSTA_SDC_FLAG  },
-    { "-min",    MSTA_SDC_FLAG  },
-    { "-max",    MSTA_SDC_FLAG  },
-    { "-early",  MSTA_SDC_FLAG  },
-    { "-late",   MSTA_SDC_FLAG  },
-    { "-rise",   MSTA_SDC_FLAG  },
-    { "-fall",   MSTA_SDC_FLAG  },
-    { NULL,      MSTA_SDC_FLAG  } };
+    { "-clock",  MSTA_SDC_OBJECTS, 0 },
+    { "-source", MSTA_SDC_FLAG,    0 },
+    { "-min",    MSTA_SDC_FLAG, 0 },
+    { "-max",    MSTA_SDC_FLAG, 0 },
+    { "-early",  MSTA_SDC_FLAG, 0 },
+    { "-late",   MSTA_SDC_FLAG, 0 },
+    { "-rise",   MSTA_SDC_FLAG, 0 },
+    { "-fall",   MSTA_SDC_FLAG, 0 },
+    { NULL,      MSTA_SDC_FLAG, 0 } };
 
 static void Msta_SdcSetClockLatency( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    const char *pClockOpt = Msta_SdcOptValue( pCmd, "-clock" );
-    int fSource = Msta_SdcHasFlag( pCmd, "-source" );
     int fMax = Msta_SdcHasFlag( pCmd, "-max" ) || Msta_SdcHasFlag( pCmd, "-late" );
     int fMin = Msta_SdcHasFlag( pCmd, "-min" ) || Msta_SdcHasFlag( pCmd, "-early" );
-    int Sel[2][2], i;
-    double Delay;
-    if ( pCmd->nPos < 1 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    { Msta_WarnOnce("set_clock_latency needs a delay and clock objects"); return; }
-    Delay = Msta_SdcToPs(p,pCmd->ppPos[0]);
+    double Delay = Msta_SdcToPs( p, pCmd->pValue );
+    char **ppOpt, **ppNames;
+    int nOpt = Msta_SdcOptList( pCmd, "-clock", &ppOpt );
+    int Sel[2][2], *pClocks, nClocks, i;
+
+    /* 要设的时钟：-clock 的列表加上对象列表。 */
+    ppNames = (char **)Msta_SdcArenaZeros( nOpt + pCmd->nObjs, sizeof(char *) );
+    for ( i = 0; i < nOpt; i++ )
+        ppNames[i] = ppOpt[i];
+    for ( i = 0; i < pCmd->nObjs; i++ )
+        ppNames[nOpt + i] = pCmd->ppObjs[i];
+    if ( nOpt + pCmd->nObjs == 0 )
+    { Msta_SdcReject( p, pCmd, "needs a clock list" ); return; }
+    nClocks = Msta_SdcObjectClocks( p, pCmd, ppNames, nOpt + pCmd->nObjs, &pClocks );
     Msta_SdcMinMaxRiseFall( fMin, fMax, Msta_SdcHasFlag( pCmd, "-rise" ),
                             Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
-    /* 要设的时钟：-clock 的值（写了的话）排第一，然后是延迟值后面的位置参数。
-       下标 0 留给 -clock，位置参数从 1 开始正好跳过延迟值。 */
-    for ( i = pClockOpt ? 0 : 1; i < pCmd->nPos; i++ )
+    for ( i = 0; i < nClocks; i++ )
     {
-        const char *pName = i == 0 ? pClockOpt : pCmd->ppPos[i];
-        MstaClock *pClock = Msta_SdcFindClock(p,pName);
-        if ( pClock == NULL )
-        { Msta_WarnOnce("set_clock_latency: unknown clock \"%s\"",pName); continue; }
-        if ( fSource )
+        MstaClock *pClock = Msta_SdcClockByIndex( p, pClocks[i] );
+        if ( Msta_SdcHasFlag( pCmd, "-source" ) )
         {
             Msta_SdcStoreMinMaxRiseFall( pClock->SourceLatency, Sel, Delay );
             pClock->SourceLatencyMax = fmax(pClock->SourceLatency[1][0],pClock->SourceLatency[1][1]);
@@ -1241,246 +1218,158 @@ static void Msta_SdcSetClockLatency( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
             pClock->NetworkLatencyMax = fmax(pClock->NetworkLatency[1][0],pClock->NetworkLatency[1][1]);
             pClock->NetworkLatencyMin = fmin(pClock->NetworkLatency[0][0],pClock->NetworkLatency[0][1]);
             /* 网络延迟是对时钟树延迟的估计，只对理想时钟有意义：给了它就是要用
-               估计值代替沿时钟树算出的真实延迟，所以这个时钟按理想时钟处理。 */
-            pClock->fPropagated = 0;
+               估计值代替沿时钟树算出的真实延迟，所以这个时钟按理想时钟处理。
+               它也撤销此前的 set_propagated_clock（SDC 里后写的为准）。 */
+            pClock->fPropagated = pClock->fPropagatedSet = 0;
         }
     }
 }
 
-/* set_propagated_clock 时钟列表
-   把选中的时钟改成按时钟树传播。这条命令没有选项，每个词都当时钟名查。 */
-static const MstaSdcOpt s_vPropagatedClockOpts[] = {
-    { NULL, MSTA_SDC_FLAG } };
+/* 没有选项的命令共用的空选项表。 */
+static const MstaSdcOpt s_vNoOpts[] = {
+    { NULL, MSTA_SDC_FLAG, 0 } };
 
+/* set_propagated_clock 时钟列表
+   把选中的时钟改成按时钟树传播。 */
 static void Msta_SdcSetPropagatedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int i;
-    if ( pCmd->nPos == 0 )
-    { Msta_WarnOnce("set_propagated_clock needs clock objects"); return; }
-    for ( i = 0; i < pCmd->nPos; i++ )
+    int *pClocks, nClocks, i;
+    nClocks = Msta_SdcObjectClocks( p, pCmd, pCmd->ppObjs, pCmd->nObjs, &pClocks );
+    for ( i = 0; i < nClocks; i++ )
     {
-        MstaClock *pClock = Msta_SdcFindClock(p,pCmd->ppPos[i]);
-        if ( pClock ) pClock->fPropagated = pClock->fPropagatedSet = 1;
-        else Msta_WarnOnce("set_propagated_clock: unknown clock \"%s\"",pCmd->ppPos[i]);
+        MstaClock *pClock = Msta_SdcClockByIndex( p, pClocks[i] );
+        pClock->fPropagated = pClock->fPropagatedSet = 1;
     }
 }
+
+/* 只有 -min/-max/-rise/-fall 四个开关的命令共用的选项表
+   （set_clock_transition、set_ideal_latency、set_ideal_transition）。 */
+static const MstaSdcOpt s_vMinMaxRiseFallOpts[] = {
+    { "-min",  MSTA_SDC_FLAG, 0 },
+    { "-max",  MSTA_SDC_FLAG, 0 },
+    { "-rise", MSTA_SDC_FLAG, 0 },
+    { "-fall", MSTA_SDC_FLAG, 0 },
+    { NULL,    MSTA_SDC_FLAG, 0 } };
 
 /* set_clock_transition [-rise|-fall] [-min|-max] 摆率 时钟列表
-   给时钟源指定摆率；不写这里就用时钟网络上的输入摆率或默认值。 */
-static const MstaSdcOpt s_vClockTransitionOpts[] = {
-    { "-min",  MSTA_SDC_FLAG },
-    { "-max",  MSTA_SDC_FLAG },
-    { "-rise", MSTA_SDC_FLAG },
-    { "-fall", MSTA_SDC_FLAG },
-    { NULL,    MSTA_SDC_FLAG } };
-
+   给时钟源指定摆率；不写这里就用时钟网络上的输入摆率或默认值。
+   虚拟时钟没有源，跳过。 */
 static void Msta_SdcSetClockTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int Sel[2][2], i;
+    int Sel[2][2], *pClocks, nClocks, i;
     double Slew;
-    if ( pCmd->nPos < 2 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    { Msta_WarnOnce("set_clock_transition needs a value and clock objects"); return; }
-    Slew = Msta_SdcToPs(p,pCmd->ppPos[0]);
-    Msta_SdcMinMaxRiseFall( Msta_SdcHasFlag( pCmd, "-min" ), Msta_SdcHasFlag( pCmd, "-max" ),
-                            Msta_SdcHasFlag( pCmd, "-rise" ), Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
-    for ( i = 1; i < pCmd->nPos; i++ )
+    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
+        return;
+    Msta_SdcCmdMinMaxRiseFall( pCmd, Sel );
+    nClocks = Msta_SdcObjectClocks( p, pCmd, pCmd->ppObjs, pCmd->nObjs, &pClocks );
+    for ( i = 0; i < nClocks; i++ )
     {
-        const char *pName = pCmd->ppPos[i];
-        MstaClock *pClock = Msta_SdcFindClock(p,pName);
-        if ( pClock == NULL )
-        { Msta_WarnOnce("set_clock_transition: unknown clock \"%s\"",pName); continue; }
+        MstaClock *pClock = Msta_SdcClockByIndex( p, pClocks[i] );
         if ( pClock->SourceNet < 0 )
-        { Msta_WarnOnce("set_clock_transition on virtual clock \"%s\" is ignored",pName); continue; }
-        Msta_SdcStoreMinMaxRiseFall( pClock->Slew, Sel, Slew );
+            Msta_SdcNote( pCmd, "virtual clock \"%s\" has no source; ignored", Msta_NameStr(pClock->Name) );
+        else
+            Msta_SdcStoreMinMaxRiseFall( pClock->Slew, Sel, Slew * p->TimeScalePs );
     }
-}
-
-/* -clock 的取值可能是裸名字、Tcl 列表（空格分隔）或 get_clocks 的集合标记
-   （\x1e<kind> 打头、名字之间用 \x1f 分隔），这里逐个取出来。 */
-static const char *Msta_SdcNextClockName( const char **ppList, char *pName, size_t nCap )
-{
-    const char *p = *ppList;
-    size_t n = 0;
-    if ( p == NULL )
-        return NULL;
-    if ( p[0] == '\x1e' )               /* 集合标记：跳过 \x1e 和类型字符 */
-        p += 2;
-    while ( *p == ' ' || *p == '\t' || *p == '\x1f' )
-        p++;
-    if ( *p == 0 )
-    {
-        *ppList = NULL;
-        return NULL;
-    }
-    while ( *p && *p != ' ' && *p != '\t' && *p != '\x1f' && n + 1 < nCap )
-        pName[n++] = *p++;
-    pName[n] = 0;
-    *ppList = p;
-    return pName;
 }
 
 /* set_clock_sense [-positive|-negative] [-stop_propagation] [-clock 时钟列表] 引脚列表
    记下某个脚/网络上的时钟极性（-negative）和"这个时钟到这里不再往下传"。
-   -pulse 认得但不建模。 */
+   不写 -clock 时对所有时钟生效。-pulse 不建模。 */
 static const MstaSdcOpt s_vClockSenseOpts[] = {
-    { "-positive",         MSTA_SDC_FLAG  },
-    { "-negative",         MSTA_SDC_FLAG  },
-    { "-stop_propagation", MSTA_SDC_FLAG  },
-    { "-clock",            MSTA_SDC_VALUE },
-    { "-pulse",            MSTA_SDC_VALUE },
-    { NULL,                MSTA_SDC_FLAG  } };
+    { "-positive",         MSTA_SDC_FLAG,  0               },
+    { "-negative",         MSTA_SDC_FLAG,  0               },
+    { "-stop_propagation", MSTA_SDC_FLAG,  0               },
+    { "-clock",            MSTA_SDC_OBJECTS, 0             },
+    { "-pulse",            MSTA_SDC_VALUE, MSTA_SDC_REJECT },
+    { NULL,                MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetClockSense( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    const char *pClockList = Msta_SdcOptValue( pCmd, "-clock" );
     int fPos  = Msta_SdcHasFlag( pCmd, "-positive" );
     int fNeg  = Msta_SdcHasFlag( pCmd, "-negative" );
     int fStop = Msta_SdcHasFlag( pCmd, "-stop_propagation" );
-    char **pRest = pCmd->ppPos;             /* 位置参数是引脚/网络 */
-    int nRest = pCmd->nPos, i, j;
+    char **ppClocks;
+    int nClockNames = Msta_SdcOptList( pCmd, "-clock", &ppClocks );
+    int *pClocks = NULL, nClocks = 0, *pNets, nNets, i, j;
 
-    if ( Msta_SdcOptValue( pCmd, "-pulse" ) )
-    {
-        Msta_WarnOnce( "set_clock_sense -pulse is not modeled; constraint rejected" );
-        p->nCommandsIgnored++;
-        return;
-    }
     if ( fPos && fNeg )
-    {
-        Msta_WarnOnce( "set_clock_sense cannot combine -positive and -negative; "
-                       "constraint rejected" );
-        p->nCommandsIgnored++;
-        return;
-    }
+    { Msta_SdcReject( p, pCmd, "-positive and -negative cannot be combined" ); return; }
     if ( !fPos && !fNeg && !fStop )
-    {
-        Msta_WarnOnce( "set_clock_sense needs -positive, -negative or -stop_propagation" );
+    { Msta_SdcReject( p, pCmd, "needs -positive, -negative or -stop_propagation" ); return; }
+    for ( i = 0; i < pCmd->nObjs; i++ )
+        if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'C' )
+        { Msta_SdcReject( p, pCmd, "clock objects are not modeled (use -clock)" ); return; }
+    if ( nClockNames > 0 &&
+         ( nClocks = Msta_SdcObjectClocks( p, pCmd, ppClocks, nClockNames, &pClocks ) ) < 0 )
         return;
-    }
-    if ( nRest < 1 )
-    {
-        Msta_WarnOnce( "set_clock_sense needs a pin" );
+    if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
         return;
-    }
-    for ( i = 0; i < nRest; i++ )
-    {
-        int *pNets, nFound;
-        if ( Msta_SdcKindOf( pRest[i] ) == 'C' )
+    for ( i = 0; i < nNets; i++ )
+        for ( j = 0; j < ( nClocks > 0 ? nClocks : 1 ); j++ )
         {
-            Msta_WarnOnce( "set_clock_sense: clock objects are not modeled, "
-                           "use -clock; constraint rejected" );
-            p->nCommandsIgnored++;
-            return;
+            MstaClockSense *pSense = MstaClockSenseArrayAppend( &p->vClockSense );
+            pSense->Net = pNets[i];
+            pSense->Clock = nClocks > 0 ? Msta_SdcClockByIndex( p, pClocks[j] )->Name : MSTA_NO_ID;
+            pSense->Polarity = fNeg ? -1 : ( fPos ? 1 : 0 );
+            pSense->fStop = fStop;
         }
-        nFound = Msta_SdcResolveNets( pDes, pRest[i], &pNets );
-        for ( j = 0; j < nFound; j++ )
-        {
-            const char *pList = pClockList;
-            char sClock[256];
-            int fAnyClock = 0;
-            while ( Msta_SdcNextClockName(&pList, sClock, sizeof(sClock)) != NULL )
-            {
-                MstaClock *pClock = Msta_SdcFindClock( p, sClock );
-                MstaClockSense *pSense;
-                if ( pClock == NULL )
-                {
-                    Msta_WarnOnce( "set_clock_sense: unknown clock \"%s\"", sClock );
-                    continue;
-                }
-                pSense = MstaClockSenseArrayAppend( &p->vClockSense );
-                pSense->Net = pNets[j];
-                pSense->Clock = pClock->Name;
-                pSense->Polarity = fNeg ? -1 : ( fPos ? 1 : 0 );
-                pSense->fStop = fStop;
-                fAnyClock = 1;
-            }
-            if ( !fAnyClock )               /* 没写 -clock：对所有时钟生效 */
-            {
-                MstaClockSense *pSense = MstaClockSenseArrayAppend( &p->vClockSense );
-                pSense->Net = pNets[j];
-                pSense->Clock = MSTA_NO_ID;
-                pSense->Polarity = fNeg ? -1 : ( fPos ? 1 : 0 );
-                pSense->fStop = fStop;
-            }
-        }
-    }
 }
 
 /* set_clock_groups -asynchronous|-logically_exclusive|-physically_exclusive
                     [-name 名字] -group 时钟列表 -group 时钟列表 ...
-   不同时钟组之间没有 setup/hold 关系，两两展开成例外。-allow_paths 认得但不建模。
-   这条命令按顺序模式读：-group 之后、下一个 -group 之前的时钟都归这一组。 */
+   不同时钟组之间没有 setup/hold 关系，两两展开成例外。-allow_paths 不建模。 */
 static const MstaSdcOpt s_vClockGroupsOpts[] = {
-    { "-asynchronous",         MSTA_SDC_FLAG      },
-    { "-logically_exclusive",  MSTA_SDC_FLAG      },
-    { "-physically_exclusive", MSTA_SDC_FLAG      },
-    { "-name",                 MSTA_SDC_VALUE_RAW },
-    { "-allow_paths",          MSTA_SDC_FLAG      },
-    { "-group",                MSTA_SDC_GROUP     },
-    { NULL,                    MSTA_SDC_FLAG      } };
+    { "-asynchronous",         MSTA_SDC_FLAG,  0               },
+    { "-logically_exclusive",  MSTA_SDC_FLAG,  0               },
+    { "-physically_exclusive", MSTA_SDC_FLAG,  0               },
+    { "-name",                 MSTA_SDC_VALUE, 0               },
+    { "-allow_paths",          MSTA_SDC_FLAG,  MSTA_SDC_REJECT },
+    { "-group",                MSTA_SDC_LIST,  MSTA_SDC_REPEAT },
+    { NULL,                    MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetClockGroups( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int *pGroups = (int *)calloc((size_t)(p->vClocks.nSize > 0 ? p->vClocks.nSize : 1),sizeof(int));
-    int i, j, iStop = pCmd->argc, iAllow = Msta_SdcOptAt( pCmd, "-allow_paths" );
-    int fMode = Msta_SdcHasFlag( pCmd, "-asynchronous" ) ||
-                Msta_SdcHasFlag( pCmd, "-logically_exclusive" ) ||
-                Msta_SdcHasFlag( pCmd, "-physically_exclusive" );
-    assert(pGroups);
-    /* 命令从左到右生效：碰到 -allow_paths、不认识的选项、或第一个 -group 之前的
-       对象，整条作废；在那之前组里的时钟已经查过（未知时钟已经告警）。
-       所以先求出最早的"停止位置"，只处理它前面的组成员。 */
-    if ( iAllow > 0 )
-        iStop = iAllow;
-    if ( pCmd->iBad > 0 && pCmd->iBad < iStop )
-        iStop = pCmd->iBad;
-    if ( pCmd->nPos > 0 && pCmd->pPosAt[0] < iStop )
-        iStop = pCmd->pPosAt[0];
-    for ( i = 0; i < pCmd->nMembers && pCmd->pMemberAt[i] < iStop; i++ )
+    int *pGroups = (int *)Msta_SdcArenaZeros( p->vClocks.nSize, sizeof(int) );
+    int *pClocks, nClocks, nGroups = 0, l, i, j;
+
+    if ( !Msta_SdcHasFlag( pCmd, "-asynchronous" ) && !Msta_SdcHasFlag( pCmd, "-logically_exclusive" ) &&
+         !Msta_SdcHasFlag( pCmd, "-physically_exclusive" ) )
+    { Msta_SdcReject( p, pCmd, "needs -asynchronous, -logically_exclusive or -physically_exclusive" ); return; }
+    /* 每个 -group 是一组；pGroups[时钟] 记它属于第几组（从 1 数）。 */
+    for ( l = 0; l < pCmd->nLists; l++ )
     {
-        j = Msta_SdcClockIndexOf(p,Msta_NameId(pCmd->ppMember[i]));
-        if ( j < 0 ) Msta_WarnOnce("set_clock_groups: unknown clock \"%s\"",pCmd->ppMember[i]);
-        else pGroups[j] = pCmd->pMemberGroup[i];
+        nClocks = Msta_SdcObjectClocks( p, pCmd, pCmd->pppListWords[l], pCmd->pListCount[l], &pClocks );
+        if ( nClocks < 0 )
+            return;
+        nGroups++;
+        for ( i = 0; i < nClocks; i++ )
+            pGroups[pClocks[i]] = nGroups;
     }
-    if ( iStop < pCmd->argc )
-    {
-        if ( iStop == iAllow )
-            Msta_WarnOnce("set_clock_groups -allow_paths is not modeled; constraint rejected");
-        else
-            Msta_WarnOnce("set_clock_groups: unexpected argument \"%s\"",pCmd->argv[iStop]);
-        free(pGroups);
-        return;
-    }
-    if ( !fMode || pCmd->nGroups < 2 )
-        Msta_WarnOnce("set_clock_groups needs a mode and at least two -group lists");
-    else
-    {
-        for ( i = 0; i < p->vClocks.nSize; i++ )
-            for ( j = 0; j < p->vClocks.nSize; j++ )
-            {
-                MstaException *pEx;
-                if ( pGroups[i] == 0 || pGroups[j] == 0 || pGroups[i] == pGroups[j] )
-                    continue;
-                pEx = MstaExceptionArrayAppend(&p->vExceptions);
-                pEx->FromText = Msta_SdcClockByIndex(p,i)->Name;
-                pEx->ToText = Msta_SdcClockByIndex(p,j)->Name;
-                pEx->FromKind = pEx->ToKind = 'C';
-                pEx->nSetupCycles = 1;
-                pEx->fFalseSetup = pEx->fFalseHold = 1;
-            }
-    }
-    free(pGroups);
+    if ( nGroups < 2 )
+    { Msta_SdcReject( p, pCmd, "needs at least two -group lists" ); return; }
+    for ( i = 0; i < p->vClocks.nSize; i++ )
+        for ( j = 0; j < p->vClocks.nSize; j++ )
+        {
+            MstaException *pEx;
+            if ( pGroups[i] == 0 || pGroups[j] == 0 || pGroups[i] == pGroups[j] )
+                continue;
+            pEx = MstaExceptionArrayAppend(&p->vExceptions);
+            pEx->FromText = Msta_SdcClockByIndex(p,i)->Name;
+            pEx->ToText = Msta_SdcClockByIndex(p,j)->Name;
+            pEx->FromKind = pEx->ToKind = 'C';
+            pEx->nSetupCycles = 1;
+            pEx->fFalseSetup = pEx->fFalseHold = 1;
+        }
 }
 
 /* ---------------- I/O 与网络属性 ---------------- */
 
-/* 存一条 I/O 延迟；-add_delay 时保留同一网络上的其他时钟。 */
-static void Msta_SdcStorePortDelay( MstaSdc *p, int nNet, MstaId Clock,
-                                     int fOutput, const char *pMax,
-                                     const char *pMin, int fAdd,
-                                     int fClockFall, int DataRise,
-                                     int RefNet, int fSourceLatencyIncluded,
-                                     int fNetworkLatencyIncluded )
+/* 存一条 I/O 延迟（ps）；-add_delay 时保留同一网络上的其他时钟。
+   fMax/fMin 表示这条命令约束哪个角。 */
+static void Msta_SdcStorePortDelay( MstaSdc *p, int nNet, MstaId Clock, int fOutput,
+                                    int fMax, int fMin, double Value, int fAdd,
+                                    int fClockFall, int DataRise, int RefNet,
+                                    int fSourceLatencyIncluded, int fNetworkLatencyIncluded )
 {
     MstaIoDelayArray *pArr = fOutput ? &p->vOutputDelays : &p->vInputDelays;
     MstaIoDelay *pEntry = NULL;
@@ -1492,8 +1381,8 @@ static void Msta_SdcStorePortDelay( MstaSdc *p, int nNet, MstaId Clock,
         if ( pOld->Clock == Clock && pOld->ClockFall == fClockFall && pOld->DataRise == DataRise ) pEntry = pOld;
         else if ( !fAdd )
         {
-            if ( pMax ) pOld->Max = MSTA_UNSET;
-            if ( pMin ) pOld->Min = MSTA_UNSET;
+            if ( fMax ) pOld->Max = MSTA_UNSET;
+            if ( fMin ) pOld->Min = MSTA_UNSET;
         }
     }
     if ( pEntry == NULL )
@@ -1506,18 +1395,16 @@ static void Msta_SdcStorePortDelay( MstaSdc *p, int nNet, MstaId Clock,
         pEntry->DataRise = DataRise;
         pEntry->RefNetMax = pEntry->RefNetMin = -1;
     }
-    if ( pMax )
+    if ( fMax )
     {
-        double Value = Msta_SdcToPs(p,pMax);
         if ( !fAdd || !Msta_IsSet(pEntry->Max) || Value > pEntry->Max )
             pEntry->Max = Value;
         pEntry->RefNetMax = RefNet;
         pEntry->SourceLatencyIncludedMax = fSourceLatencyIncluded;
         pEntry->NetworkLatencyIncludedMax = fNetworkLatencyIncluded;
     }
-    if ( pMin )
+    if ( fMin )
     {
-        double Value = Msta_SdcToPs(p,pMin);
         if ( !fAdd || !Msta_IsSet(pEntry->Min) || Value < pEntry->Min )
             pEntry->Min = Value;
         pEntry->RefNetMin = RefNet;
@@ -1529,97 +1416,63 @@ static void Msta_SdcStorePortDelay( MstaSdc *p, int nNet, MstaId Clock,
 /* set_input_delay / set_output_delay [-clock 时钟] [-clock_fall] [-rise|-fall]
        [-max] [-min] [-add_delay] [-reference_pin 引脚]
        [-source_latency_included] [-network_latency_included] 延迟 端口列表
-   不写 -max/-min 时一个值同时约束两个角；写了选项就只改对应角。
-   另外接受 '-max 2 -min 1' 这种方言写法：-max/-min 后紧跟的数值只给那一角。
-   -pin_load / -wire_load 认得但不起作用；-level_sensitive、-subtract_pin_load 不建模。 */
+   不写 -max/-min 时一个值同时约束两个角；写了就只改对应角。
+   -level_sensitive 不建模。 */
 static const MstaSdcOpt s_vPortDelayOpts[] = {
-    { "-clock",                    MSTA_SDC_VALUE       },
-    { "-reference_pin",            MSTA_SDC_VALUE       },
-    { "-clock_fall",               MSTA_SDC_FLAG        },
-    { "-rise",                     MSTA_SDC_FLAG        },
-    { "-fall",                     MSTA_SDC_FLAG        },
-    { "-max",                      MSTA_SDC_FLAG_NUMBER },
-    { "-min",                      MSTA_SDC_FLAG_NUMBER },
-    { "-add_delay",                MSTA_SDC_FLAG        },
-    { "-source_latency_included",  MSTA_SDC_FLAG        },
-    { "-network_latency_included", MSTA_SDC_FLAG        },
-    { "-pin_load",                 MSTA_SDC_FLAG        },
-    { "-wire_load",                MSTA_SDC_FLAG        },
-    { "-level_sensitive",          MSTA_SDC_FLAG        },
-    { "-subtract_pin_load",        MSTA_SDC_FLAG        },
-    { NULL,                        MSTA_SDC_FLAG        } };
+    { "-clock",                    MSTA_SDC_VALUE, 0               },
+    { "-reference_pin",            MSTA_SDC_VALUE, 0               },
+    { "-clock_fall",               MSTA_SDC_FLAG,  0               },
+    { "-rise",                     MSTA_SDC_FLAG,  0               },
+    { "-fall",                     MSTA_SDC_FLAG,  0               },
+    { "-max",                      MSTA_SDC_FLAG,  0               },
+    { "-min",                      MSTA_SDC_FLAG,  0               },
+    { "-add_delay",                MSTA_SDC_FLAG,  0               },
+    { "-source_latency_included",  MSTA_SDC_FLAG,  0               },
+    { "-network_latency_included", MSTA_SDC_FLAG,  0               },
+    { "-level_sensitive",          MSTA_SDC_FLAG,  MSTA_SDC_REJECT },
+    { NULL,                        MSTA_SDC_FLAG,  0               } };
 
 /* fOutput=0 是 set_input_delay，=1 是 set_output_delay。 */
 static void Msta_SdcSetPortDelay( MstaSdc *p, MstaDesign *pDes, int fOutput, MstaSdcCmd *pCmd )
 {
-    const char *pCmdName = fOutput ? "set_output_delay" : "set_input_delay";
     const char *pClockText    = Msta_SdcOptValue( pCmd, "-clock" );
     const char *pReferencePin = Msta_SdcOptValue( pCmd, "-reference_pin" );
-    int fSourceLatencyIncluded  = Msta_SdcHasFlag( pCmd, "-source_latency_included" );
-    int fNetworkLatencyIncluded = Msta_SdcHasFlag( pCmd, "-network_latency_included" );
-    int fClockFall = Msta_SdcHasFlag( pCmd, "-clock_fall" );
-    int fMax = Msta_SdcHasFlag( pCmd, "-max" );
-    int fMin = Msta_SdcHasFlag( pCmd, "-min" );
-    int fAdd = Msta_SdcHasFlag( pCmd, "-add_delay" );
-    const char *pMax, *pMin;
-    int iFirstPort, nPorts, i, DataRise = -1, RefNet = -1, *pNets, nNets;
+    int fSourceIncluded  = Msta_SdcHasFlag( pCmd, "-source_latency_included" );
+    int fNetworkIncluded = Msta_SdcHasFlag( pCmd, "-network_latency_included" );
+    int fMax = Msta_SdcHasFlag( pCmd, "-max" ) || !Msta_SdcHasFlag( pCmd, "-min" );
+    int fMin = Msta_SdcHasFlag( pCmd, "-min" ) || !Msta_SdcHasFlag( pCmd, "-max" );
+    char Edge = Msta_SdcCmdEdge( pCmd );
+    int DataRise = Edge == 'r' ? 1 : Edge == 'f' ? 0 : -1;
+    int RefNet = -1, *pNets, nNets, i;
 
-    if ( Msta_SdcHasFlag( pCmd, "-level_sensitive" ) )
-    { Msta_WarnOnce("I/O delay -level_sensitive is not modeled; constraint rejected"); return; }
-    if ( Msta_SdcHasFlag( pCmd, "-subtract_pin_load" ) )
-    { Msta_WarnOnce("set_load -subtract_pin_load is not modeled; constraint rejected"); return; }
-    /* 延迟值：-max/-min 后面紧跟的数值，或者第一个位置参数；其余位置参数是端口。 */
-    iFirstPort = Msta_SdcPairValues( pCmd, "-max", "-min", &pMax, &pMin );
-    nPorts = pCmd->nPos - iFirstPort;
-    if ( Msta_SdcHasFlag( pCmd, "-rise" ) ) DataRise = 1;
-    if ( Msta_SdcHasFlag( pCmd, "-fall" ) )
-    {
-        if ( DataRise == 1 )
-        { Msta_WarnOnce("I/O delay cannot combine -rise and -fall"); return; }
-        DataRise = 0;
-    }
+    if ( pClockText && Msta_SdcFindClock( p, pClockText ) == NULL )
+    { Msta_SdcReject( p, pCmd, "unknown clock \"%s\"", pClockText ); return; }
     if ( pReferencePin != NULL )
     {
-        int *pRefNets;
-        char RefKind = Msta_SdcKindOf(pReferencePin);
-        int nRefNets = Msta_SdcResolveNets(pDes,pReferencePin,&pRefNets);
-        if ( (RefKind != 0 && RefKind != 'G' && RefKind != 'P') || nRefNets != 1 )
-        {
-            Msta_WarnOnce("%s -reference_pin must resolve to exactly one pin or port", pCmdName);
-            p->nCommandsIgnored++;
-            return;
-        }
-        RefNet = pRefNets[0];
-        if ( fSourceLatencyIncluded || fNetworkLatencyIncluded )
-            Msta_WarnOnce("%s: latency-included flags are ignored with -reference_pin", pCmdName);
-        fSourceLatencyIncluded = fNetworkLatencyIncluded = 0;
+        char RefKind = Msta_SdcKindOf( pReferencePin );
+        if ( ( RefKind != 0 && RefKind != 'G' && RefKind != 'P' ) ||
+             Msta_SdcResolveNets( pDes, pReferencePin, &pNets ) != 1 )
+        { Msta_SdcReject( p, pCmd, "-reference_pin must resolve to exactly one pin or port" ); return; }
+        RefNet = pNets[0];
+        if ( fSourceIncluded || fNetworkIncluded )
+            Msta_SdcNote( pCmd, "latency-included flags are ignored with -reference_pin" );
+        fSourceIncluded = fNetworkIncluded = 0;
     }
-    if ( ( fMax && pMax == NULL ) || ( fMin && pMin == NULL ) ||
-         ( pMax == NULL && pMin == NULL ) || nPorts == 0 )
-    {
-        Msta_WarnOnce( "%s needs a numeric delay and a port", pCmdName );
-        return;
-    }
-    if ( ( pMax && !Msta_SdcIsNumber(pMax) ) || ( pMin && !Msta_SdcIsNumber(pMin) ) )
-    {
-        Msta_WarnOnce( "%s: delay must be numeric", pCmdName );
-        return;
-    }
-    if ( pClockText && Msta_SdcFindClock(p,pClockText) == NULL )
-    { Msta_WarnOnce("I/O delay: unknown clock \"%s\"; constraint rejected",pClockText); return; }
     /* 不写 -clock 时先记成"未指定"：SDC 允许 create_clock 写在 I/O 约束之后，
        所以真正用哪个时钟留到查询时再按当时只有一个时钟来判定。 */
     if ( pClockText == NULL && pReferencePin == NULL && Msta_SdcClockCount(p) > 1 )
-        Msta_WarnOnce("I/O delay without -clock is ambiguous with multiple clocks; "
-                      "it applies only while the design has a single clock");
-    nNets = Msta_SdcPosNets( pDes, pCmd, iFirstPort, &pNets );
+        Msta_SdcNote( pCmd, "no -clock while there are several clocks; the delay applies "
+                      "only while the design has a single clock" );
+    if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
+        return;
     for ( i = 0; i < nNets; i++ )
     {
         Msta_SdcNetConsOrCreate( p, pNets[i] );
-        Msta_SdcStorePortDelay(p,pNets[i],
-                               pClockText ? Msta_NameId(pClockText) : MSTA_NO_ID,
-                               fOutput,pMax,pMin,fAdd,fClockFall,DataRise,
-                               RefNet,fSourceLatencyIncluded,fNetworkLatencyIncluded);
+        Msta_SdcStorePortDelay( p, pNets[i], pClockText ? Msta_NameId(pClockText) : MSTA_NO_ID,
+                                fOutput, fMax, fMin, Msta_SdcToPs( p, pCmd->pValue ),
+                                Msta_SdcHasFlag( pCmd, "-add_delay" ),
+                                Msta_SdcHasFlag( pCmd, "-clock_fall" ), DataRise, RefNet,
+                                fSourceIncluded, fNetworkIncluded );
     }
 }
 
@@ -1636,55 +1489,39 @@ static void Msta_SdcSetOutputDelay( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
 /* set_load [-min|-max] [-subtract_pin_load] [-pin_load|-wire_load] 值 对象列表
    值默认按库的电容单位，set_units 可覆盖。
    -pin_load / -wire_load 是"这到底是脚负载还是线负载"的标注；msta 把它们
-   都当外加负载加在网络上，与 -subtract_pin_load 的语义不冲突。
-   -rise/-fall 不是 SDC 1.8 的写法，整条拒绝。 */
+   都当外加负载加在网络上。-subtract_pin_load 只对网络有意义（减的是网络上
+   的脚电容），不能用在端口上。 */
 static const MstaSdcOpt s_vLoadOpts[] = {
-    { "-min",               MSTA_SDC_FLAG },
-    { "-max",               MSTA_SDC_FLAG },
-    { "-subtract_pin_load", MSTA_SDC_FLAG },
-    { "-pin_load",          MSTA_SDC_FLAG },
-    { "-wire_load",         MSTA_SDC_FLAG },
-    { "-rise",              MSTA_SDC_FLAG },
-    { "-fall",              MSTA_SDC_FLAG },
-    { NULL,                 MSTA_SDC_FLAG } };
+    { "-min",               MSTA_SDC_FLAG, 0 },
+    { "-max",               MSTA_SDC_FLAG, 0 },
+    { "-subtract_pin_load", MSTA_SDC_FLAG, 0 },
+    { "-pin_load",          MSTA_SDC_FLAG, 0 },
+    { "-wire_load",         MSTA_SDC_FLAG, 0 },
+    { NULL,                 MSTA_SDC_FLAG, 0 } };
 
 static void Msta_SdcSetLoad( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     int fSubtract = Msta_SdcHasFlag( pCmd, "-subtract_pin_load" );
-    int Sel[2][2], i, j;
+    int fMax = Msta_SdcHasFlag( pCmd, "-max" ) || !Msta_SdcHasFlag( pCmd, "-min" );
+    int fMin = Msta_SdcHasFlag( pCmd, "-min" ) || !Msta_SdcHasFlag( pCmd, "-max" );
+    int *pNets, nNets, i;
+    double Load;
     if ( Msta_SdcHasFlag( pCmd, "-pin_load" ) && Msta_SdcHasFlag( pCmd, "-wire_load" ) )
-    { Msta_WarnOnce("set_load cannot combine -pin_load and -wire_load"); return; }
-    if ( Msta_SdcHasFlag( pCmd, "-rise" ) || Msta_SdcHasFlag( pCmd, "-fall" ) )
-    { Msta_WarnOnce("set_load -rise/-fall is not SDC 1.8 syntax; constraint rejected"); return; }
-    if ( pCmd->nPos < 2 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    {
-        Msta_WarnOnce( "set_load needs a value and a target" );
+    { Msta_SdcReject( p, pCmd, "-pin_load and -wire_load cannot be combined" ); return; }
+    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Load ) )
         return;
-    }
-    /* 负载不分边沿：只看 Sel[角][1]（rise 那一格）决定写 max 还是 min。 */
-    Msta_SdcMinMaxRiseFall( Msta_SdcHasFlag( pCmd, "-min" ), Msta_SdcHasFlag( pCmd, "-max" ), 0, 0, Sel );
-    /* 逐个对象处理：端口对象配 -subtract_pin_load 时跳过并告警，告警夹在
-       各对象的解析告警之间。 */
-    for ( i = 1; i < pCmd->nPos; i++ )
+    for ( i = 0; fSubtract && i < pCmd->nObjs; i++ )
+        if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'P' )
+        { Msta_SdcReject( p, pCmd, "-subtract_pin_load cannot be used on port \"%s\"", pCmd->ppObjs[i] ); return; }
+    Load *= p->CapScaleFf > 0.0 ? p->CapScaleFf : pLib->CapScale;
+    if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
+        return;
+    for ( i = 0; i < nNets; i++ )
     {
-        const char *pObj = pCmd->ppPos[i];
-        int *pNets, nFound;
-        double Load = atof( pCmd->ppPos[0] ) * ( p->CapScaleFf > 0.0 ? p->CapScaleFf : pLib->CapScale );
-        /* -subtract_pin_load 只对网络有意义（减的是网络上的脚电容），端口不接受。 */
-        if ( fSubtract && Msta_SdcKindOf(pObj) == 'P' )
-        {
-            Msta_WarnOnce( "set_load -subtract_pin_load is not allowed for port objects; "
-                           "\"%s\" skipped", pObj );
-            continue;
-        }
-        nFound = Msta_SdcResolveNets( pDes, pObj, &pNets );
-        for ( j = 0; j < nFound; j++ )
-        {
-            MstaNetCons *pCons = Msta_SdcNetConsOrCreate(p,pNets[j]);
-            if ( Sel[1][1] ) pCons->LoadMax = Load;
-            if ( Sel[0][1] ) pCons->LoadMin = Load;
-            if ( fSubtract ) pCons->fSubtractPinLoad = 1;
-        }
+        MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, pNets[i] );
+        if ( fMax ) pCons->LoadMax = Load;
+        if ( fMin ) pCons->LoadMin = Load;
+        if ( fSubtract ) pCons->fSubtractPinLoad = 1;
     }
 }
 
@@ -1692,35 +1529,27 @@ static void Msta_SdcSetLoad( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSd
    可以按 -rise/-fall、-max/-min 分别给值，时序引擎用逐边沿字段起步。
    -clock / -clock_fall 只是标注，认下来不起作用。 */
 static const MstaSdcOpt s_vInputTransitionOpts[] = {
-    { "-min",        MSTA_SDC_FLAG  },
-    { "-max",        MSTA_SDC_FLAG  },
-    { "-rise",       MSTA_SDC_FLAG  },
-    { "-fall",       MSTA_SDC_FLAG  },
-    { "-clock",      MSTA_SDC_VALUE },
-    { "-clock_fall", MSTA_SDC_FLAG  },
-    { NULL,          MSTA_SDC_FLAG  } };
+    { "-min",        MSTA_SDC_FLAG,  0 },
+    { "-max",        MSTA_SDC_FLAG,  0 },
+    { "-rise",       MSTA_SDC_FLAG,  0 },
+    { "-fall",       MSTA_SDC_FLAG,  0 },
+    { "-clock",      MSTA_SDC_VALUE, 0 },
+    { "-clock_fall", MSTA_SDC_FLAG,  0 },
+    { NULL,          MSTA_SDC_FLAG,  0 } };
 
 static void Msta_SdcSetInputTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int fRise = Msta_SdcHasFlag( pCmd, "-rise" );
-    int fFall = Msta_SdcHasFlag( pCmd, "-fall" );
     int Sel[2][2], *pNets, nNets, i;
     double Slew;
-    if ( fRise && fFall )
-    { Msta_WarnOnce("set_input_transition cannot combine -rise and -fall"); return; }
-    if ( pCmd->nPos < 2 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    {
-        Msta_WarnOnce( "set_input_transition needs a value and a target" );
+    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
         return;
-    }
-    Slew = Msta_SdcToPs( p, pCmd->ppPos[0] );
-    Msta_SdcMinMaxRiseFall( Msta_SdcHasFlag( pCmd, "-min" ), Msta_SdcHasFlag( pCmd, "-max" ),
-                            fRise, fFall, Sel );
-    nNets = Msta_SdcPosNets( pDes, pCmd, 1, &pNets );
+    if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
+        return;
+    Msta_SdcCmdMinMaxRiseFall( pCmd, Sel );
     for ( i = 0; i < nNets; i++ )
     {
         MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, pNets[i] );
-        Msta_SdcStoreMinMaxRiseFall4( Sel, Slew,
+        Msta_SdcStoreMinMaxRiseFall4( Sel, Slew * p->TimeScalePs,
                                       &pCons->InputSlewMaxRise, &pCons->InputSlewMaxFall,
                                       &pCons->InputSlewMinRise, &pCons->InputSlewMinFall );
     }
@@ -1730,31 +1559,27 @@ static void Msta_SdcSetInputTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *p
        [-multiply_by 倍数] [-input_transition_rise 值] [-input_transition_fall 值]
        [-min|-max] 端口列表
    根据驱动单元的输出转换表设置输入端口摆率，并记下驱动单元供分析时算延迟。
-   -min/-max 只影响哪一角的摆率，msta 两个角都记同一份驱动单元；
-   -clock、-rise、-fall、-dont_scale、-no_design_rule、-clock_fall 不建模，告警后忽略。 */
+   -min/-max 只影响哪一角的摆率，msta 两个角都记同一份驱动单元。 */
 static const MstaSdcOpt s_vDrivingCellOpts[] = {
-    { "-lib_cell",              MSTA_SDC_VALUE },
-    { "-library",               MSTA_SDC_VALUE },
-    { "-pin",                   MSTA_SDC_VALUE },
-    { "-from_pin",              MSTA_SDC_VALUE },
-    { "-multiply_by",           MSTA_SDC_VALUE },
-    { "-input_transition_rise", MSTA_SDC_VALUE },
-    { "-input_transition_fall", MSTA_SDC_VALUE },
-    { "-min",                   MSTA_SDC_FLAG  },
-    { "-max",                   MSTA_SDC_FLAG  },
-    { "-clock",                 MSTA_SDC_VALUE },
-    { "-rise",                  MSTA_SDC_FLAG  },
-    { "-fall",                  MSTA_SDC_FLAG  },
-    { "-dont_scale",            MSTA_SDC_FLAG  },
-    { "-no_design_rule",        MSTA_SDC_FLAG  },
-    { "-clock_fall",            MSTA_SDC_FLAG  },
-    { NULL,                     MSTA_SDC_FLAG  } };
+    { "-lib_cell",              MSTA_SDC_VALUE, 0               },
+    { "-library",               MSTA_SDC_VALUE, 0               },
+    { "-pin",                   MSTA_SDC_VALUE, 0               },
+    { "-from_pin",              MSTA_SDC_VALUE, 0               },
+    { "-multiply_by",           MSTA_SDC_VALUE, 0               },
+    { "-input_transition_rise", MSTA_SDC_VALUE, 0               },
+    { "-input_transition_fall", MSTA_SDC_VALUE, 0               },
+    { "-min",                   MSTA_SDC_FLAG,  0               },
+    { "-max",                   MSTA_SDC_FLAG,  0               },
+    { "-clock",                 MSTA_SDC_VALUE, MSTA_SDC_IGNORE },
+    { "-rise",                  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-fall",                  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-dont_scale",            MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-no_design_rule",        MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-clock_fall",            MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { NULL,                     MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    /* 不建模的选项，按这个顺序告警。 */
-    static const char *pIgnored[] = { "-clock", "-rise", "-fall", "-dont_scale",
-                                      "-no_design_rule", "-clock_fall", NULL };
     const char *pCellName = Msta_SdcOptValue( pCmd, "-lib_cell" );
     const char *pLibName  = Msta_SdcOptValue( pCmd, "-library" );
     const char *pPinName  = Msta_SdcOptValue( pCmd, "-pin" );
@@ -1762,32 +1587,26 @@ static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     const char *pMult     = Msta_SdcOptValue( pCmd, "-multiply_by" );
     const char *pInRise   = Msta_SdcOptValue( pCmd, "-input_transition_rise" );
     const char *pInFall   = Msta_SdcOptValue( pCmd, "-input_transition_fall" );
+    double Mult = 1.0, InRise = 0.0, InFall = 0.0, Slew = 0.0;
     char sCellQual[512];
     MstaCell *pCell;
     int *pNets, nNets, i, k;
-    double Slew = 0.0;
 
-    for ( i = 0; pIgnored[i]; i++ )
-        if ( Msta_SdcHasFlag( pCmd, pIgnored[i] ) )
-            Msta_WarnOnce( "set_driving_cell option %s is not modeled; ignored", pIgnored[i] );
+    if ( !Msta_SdcRequire( p, pCmd, "-lib_cell" ) )
+        return;
+    if ( ( pMult   && !Msta_SdcGetNumber( p, pCmd, "-multiply_by", pMult, MSTA_SDC_POSITIVE, &Mult ) ) ||
+         ( pInRise && !Msta_SdcGetNumber( p, pCmd, "-input_transition_rise", pInRise, MSTA_SDC_NONNEG, &InRise ) ) ||
+         ( pInFall && !Msta_SdcGetNumber( p, pCmd, "-input_transition_fall", pInFall, MSTA_SDC_NONNEG, &InFall ) ) )
+        return;
     /* 多库时用 "库名/cell 名" 限定（SDC 手册的 -library + -lib_cell 组合）。 */
-    if ( pLibName != NULL && pCellName != NULL && strchr(pCellName,'/') == NULL )
+    if ( pLibName != NULL && strchr( pCellName, '/' ) == NULL )
     {
         snprintf( sCellQual, sizeof(sCellQual), "%s/%s", pLibName, pCellName );
         pCellName = sCellQual;
     }
-    if ( pCellName == NULL || pCmd->nPos == 0 )
-    {
-        Msta_WarnOnce( "set_driving_cell needs -lib_cell and a target" );
-        return;
-    }
     pCell = Msta_LibFindCell( pLib, pCellName );
     if ( pCell == NULL )
-    {
-        Msta_WarnOnce( "set_driving_cell: cell \"%s\" is not in the requested library", pCellName );
-        p->nCommandsIgnored++;
-        return;
-    }
+    { Msta_SdcReject( p, pCmd, "cell \"%s\" is not in the requested library", pCellName ); return; }
     for ( k = 0; k < pCell->vArcs.nSize && Slew <= 0.0; k++ )
     {
         MstaArc *pArc = MstaArcArrayAt( &pCell->vArcs, k );
@@ -1797,17 +1616,17 @@ static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
         else if ( Msta_TableExists( &pArc->TransFall ) )
             Slew = pArc->TransFall.pValues[0] * pLib->TimeScale;
     }
-    nNets = Msta_SdcPosNets( pDes, pCmd, 0, &pNets );
+    if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
+        return;
     for ( i = 0; i < nNets; i++ )
     {
         MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, pNets[i] );
-        pCons->DrivingCell   = Msta_NameId( pCellName );
-        pCons->DrivingPin    = pPinName ? Msta_NameId( pPinName ) : MSTA_NO_ID;
-        pCons->DrivingFromPin= pFromPin ? Msta_NameId( pFromPin ) : MSTA_NO_ID;
-        pCons->DriveMultiply = pMult ? atof(pMult) : 1.0;
-        if ( pCons->DriveMultiply <= 0.0 ) pCons->DriveMultiply = 1.0;
-        if ( pInRise ) pCons->DriveInSlewRise = Msta_SdcToPs( p, pInRise );
-        if ( pInFall ) pCons->DriveInSlewFall = Msta_SdcToPs( p, pInFall );
+        pCons->DrivingCell    = Msta_NameId( pCellName );
+        pCons->DrivingPin     = pPinName ? Msta_NameId( pPinName ) : MSTA_NO_ID;
+        pCons->DrivingFromPin = pFromPin ? Msta_NameId( pFromPin ) : MSTA_NO_ID;
+        pCons->DriveMultiply  = Mult;
+        if ( pInRise ) pCons->DriveInSlewRise = InRise * p->TimeScalePs;
+        if ( pInFall ) pCons->DriveInSlewFall = InFall * p->TimeScalePs;
         if ( !Msta_IsSet( pCons->InputSlewMaxRise ) ) pCons->InputSlewMaxRise = Slew;
         if ( !Msta_IsSet( pCons->InputSlewMaxFall ) ) pCons->InputSlewMaxFall = Slew;
         if ( !Msta_IsSet( pCons->InputSlewMinRise ) ) pCons->InputSlewMinRise = Slew;
@@ -1815,120 +1634,52 @@ static void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     }
 }
 
+/* 理想网络类命令的对象都是网络；时钟对象没建模。 */
+static int Msta_SdcIdealNets( MstaSdc *p, MstaDesign *pDes, const MstaSdcCmd *pCmd, int **ppNets )
+{
+    int i;
+    for ( i = 0; i < pCmd->nObjs; i++ )
+        if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'C' )
+        { Msta_SdcReject( p, pCmd, "clock objects are not modeled" ); return -1; }
+    return Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, ppNets );
+}
+
 /* set_ideal_network [-no_propagate] 对象列表
    把对象标成理想网络；不带 -no_propagate 时理想属性沿组合扇出继续往下传。
-   -no_propagation 是方言拼写，按 -no_propagate 处理；-force 认得但不建模。 */
+   -no_propagation 是方言拼写，按 -no_propagate 处理；-force 不建模。 */
 static const MstaSdcOpt s_vIdealNetworkOpts[] = {
-    { "-no_propagate",   MSTA_SDC_FLAG },
-    { "-no_propagation", MSTA_SDC_FLAG },
-    { "-force",          MSTA_SDC_FLAG },
-    { NULL,              MSTA_SDC_FLAG } };
+    { "-no_propagate",   MSTA_SDC_FLAG, 0               },
+    { "-no_propagation", MSTA_SDC_FLAG, 0               },
+    { "-force",          MSTA_SDC_FLAG, MSTA_SDC_IGNORE },
+    { NULL,              MSTA_SDC_FLAG, 0               } };
 
 static void Msta_SdcSetIdealNetwork( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int fNoProp = Msta_SdcHasFlag( pCmd, "-no_propagate" );
-    int i, j;
+    int fNoProp = Msta_SdcHasFlag( pCmd, "-no_propagate" ) || Msta_SdcHasFlag( pCmd, "-no_propagation" );
+    int *pNets, nNets, i;
     if ( Msta_SdcHasFlag( pCmd, "-no_propagation" ) )
-    {
-        Msta_WarnOnce( "set_ideal_network -no_propagation is not SDC 1.8 syntax; "
-                       "honored as -no_propagate" );
-        fNoProp = 1;
-    }
-    if ( Msta_SdcHasFlag( pCmd, "-force" ) )
-        Msta_WarnOnce( "set_ideal_network -force is not modeled; ignored" );
-    if ( pCmd->nPos < 1 )
-    {
-        Msta_WarnOnce( "set_ideal_network needs a target" );
+        Msta_SdcNote( pCmd, "-no_propagation is not SDC 1.8 syntax; honored as -no_propagate" );
+    if ( ( nNets = Msta_SdcIdealNets( p, pDes, pCmd, &pNets ) ) < 0 )
         return;
-    }
-    /* 逐个对象处理：碰到时钟对象时整条作废，但它之前的对象已经生效了。 */
-    for ( i = 0; i < pCmd->nPos; i++ )
+    for ( i = 0; i < nNets; i++ )
     {
-        int *pNets, nFound;
-        if ( Msta_SdcKindOf( pCmd->ppPos[i] ) == 'C' )
-        {
-            Msta_WarnOnce( "set_ideal_network: clock objects are not modeled; "
-                           "constraint rejected" );
-            p->nCommandsIgnored++;
-            return;
-        }
-        nFound = Msta_SdcResolveNets( pDes, pCmd->ppPos[i], &pNets );
-        for ( j = 0; j < nFound; j++ )
-        {
-            MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, pNets[j] );
-            pCons->fIdeal = 1;
-            if ( fNoProp ) pCons->fIdealNoPropagate = 1;
-        }
+        MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, pNets[i] );
+        pCons->fIdeal = 1;
+        if ( fNoProp ) pCons->fIdealNoPropagate = 1;
     }
-}
-
-/* set_ideal_latency / set_ideal_transition 共用的语法：
-   [-rise|-fall] [-min|-max] 值 对象列表 */
-static const MstaSdcOpt s_vIdealValueOpts[] = {
-    { "-min",  MSTA_SDC_FLAG },
-    { "-max",  MSTA_SDC_FLAG },
-    { "-rise", MSTA_SDC_FLAG },
-    { "-fall", MSTA_SDC_FLAG },
-    { NULL,    MSTA_SDC_FLAG } };
-
-/* set_ideal_latency / set_ideal_transition 的值和对象：第一个位置参数是值，
-   其余对象都解析成网络；时钟对象没建模，单独告警。返回网络个数；缺值或对象时
-   返回 0，-1 表示整条命令作废（调用方计入 ignored）。 */
-static int Msta_SdcIdealTargets( MstaSdc *p, MstaDesign *pDes, const char *pName,
-                                 MstaSdcCmd *pCmd, double *pdValue, int **ppNets )
-{
-    MstaSdcIntArray vNets;
-    int i;
-    *ppNets = NULL;
-    if ( pCmd->nPos < 2 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    {
-        Msta_WarnOnce( "%s needs a value and a target", pName );
-        return 0;
-    }
-    *pdValue = Msta_SdcToPs( p, pCmd->ppPos[0] );
-    MstaSdcIntArrayInit( &vNets );
-    /* 每个对象先检查再解析：碰到不合法的对象就作废整条，它之前的对象已经解析过
-       （解析不到时已经告警），所以这里不能用 Msta_SdcPosNets 一次解析完。 */
-    for ( i = 1; i < pCmd->nPos; i++ )
-    {
-        /* 手册里 -min/-max 是开关，值只有一个；"-max 0.5 -min 0.2" 这种
-           连着写两个数的方言没建模，整条命令作废，免得按错的含义约束。 */
-        if ( Msta_SdcIsNumber( pCmd->ppPos[i] ) )
-        {
-            Msta_WarnOnce( "%s: \"-min/-max value\" is not SDC 1.8 syntax; "
-                           "constraint rejected", pName );
-            MstaSdcIntArrayFree( &vNets );
-            return -1;
-        }
-        if ( Msta_SdcKindOf( pCmd->ppPos[i] ) == 'C' )
-        {
-            Msta_WarnOnce( "%s: clock objects are not modeled; constraint rejected", pName );
-            MstaSdcIntArrayFree( &vNets );
-            return -1;
-        }
-        Msta_SdcResolveNetsInto( pDes, pCmd->ppPos[i], &vNets );
-    }
-    *ppNets = (int *)Msta_SdcArenaKeep( vNets.pData );
-    return vNets.nSize;
 }
 
 /* set_ideal_latency [-rise|-fall] [-min|-max] 延迟 对象列表 */
 static void Msta_SdcSetIdealLatency( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int *pNets, nFound, i, Sel[2][2];
-    double Delay = 0.0;
-
-    nFound = Msta_SdcIdealTargets( p, pDes, "set_ideal_latency", pCmd, &Delay, &pNets );
-    if ( nFound < 0 )
-    { p->nCommandsIgnored++; return; }
-    if ( Msta_SdcHasFlag( pCmd, "-rise" ) && Msta_SdcHasFlag( pCmd, "-fall" ) )
-        Msta_WarnOnce( "set_ideal_latency: rise/fall values are merged" );
-    Msta_SdcMinMaxRiseFall( Msta_SdcHasFlag( pCmd, "-min" ), Msta_SdcHasFlag( pCmd, "-max" ),
-                            Msta_SdcHasFlag( pCmd, "-rise" ), Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
-    for ( i = 0; i < nFound; i++ )
+    int *pNets, nNets, i, Sel[2][2];
+    if ( ( nNets = Msta_SdcIdealNets( p, pDes, pCmd, &pNets ) ) < 0 )
+        return;
+    Msta_SdcCmdMinMaxRiseFall( pCmd, Sel );
+    for ( i = 0; i < nNets; i++ )
     {
         MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, pNets[i] );
-        Msta_SdcStoreMinMaxRiseFall4( Sel, Delay,
+        Msta_SdcStoreMinMaxRiseFall4( Sel, Msta_SdcToPs( p, pCmd->pValue ),
                                       &pCons->IdealLatencyMaxRise, &pCons->IdealLatencyMaxFall,
                                       &pCons->IdealLatencyMinRise, &pCons->IdealLatencyMinFall );
     }
@@ -1937,126 +1688,96 @@ static void Msta_SdcSetIdealLatency( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
 /* set_ideal_transition [-rise|-fall] [-min|-max] 摆率 对象列表 */
 static void Msta_SdcSetIdealTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int *pNets, nFound, i, Sel[2][2];
-    double Slew = 0.0;
-
-    nFound = Msta_SdcIdealTargets( p, pDes, "set_ideal_transition", pCmd, &Slew, &pNets );
-    if ( nFound < 0 )
-    { p->nCommandsIgnored++; return; }
-    if ( Msta_SdcHasFlag( pCmd, "-rise" ) && Msta_SdcHasFlag( pCmd, "-fall" ) )
-        Msta_WarnOnce( "set_ideal_transition: rise/fall values are merged" );
-    Msta_SdcMinMaxRiseFall( Msta_SdcHasFlag( pCmd, "-min" ), Msta_SdcHasFlag( pCmd, "-max" ),
-                            Msta_SdcHasFlag( pCmd, "-rise" ), Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
-    for ( i = 0; i < nFound; i++ )
+    int *pNets, nNets, i, Sel[2][2];
+    double Slew;
+    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
+        return;
+    if ( ( nNets = Msta_SdcIdealNets( p, pDes, pCmd, &pNets ) ) < 0 )
+        return;
+    Msta_SdcCmdMinMaxRiseFall( pCmd, Sel );
+    for ( i = 0; i < nNets; i++ )
     {
         MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, pNets[i] );
-        Msta_SdcStoreMinMaxRiseFall4( Sel, Slew,
+        Msta_SdcStoreMinMaxRiseFall4( Sel, Slew * p->TimeScalePs,
                                       &pCons->IdealTranMaxRise, &pCons->IdealTranMaxFall,
                                       &pCons->IdealTranMinRise, &pCons->IdealTranMinFall );
     }
 }
 
-/* set_case_analysis 0|1 对象列表
-   把选中的网络钉成常量。这条命令没有选项。 */
-static const MstaSdcOpt s_vCaseAnalysisOpts[] = {
-    { NULL, MSTA_SDC_FLAG } };
-
-static void Msta_SdcSetCaseAnalysis( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+/* 把网络钉成常量。nCase 是 fCaseValue 编码：1 = 逻辑 0，2 = 逻辑 1，
+   3 = dc（无关值，按"不传播"处理，路径到这里断开；见 msta_net.h）。 */
+static void Msta_SdcSetConstNets( MstaSdc *p, MstaDesign *pDes, MstaSdcCmd *pCmd, int nCase )
 {
-    int *pNets, nNets, i, Value;
-    if ( pCmd->nPos < 2 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    {
-        /* 手册还允许 rising / falling（只能沿该边沿翻转），msta 不建模。 */
-        if ( pCmd->nPos >= 2 )
-            Msta_WarnOnce("set_case_analysis value \"%s\" is not modeled; only 0 and 1 are supported",
-                          pCmd->ppPos[0]);
-        else
-            Msta_WarnOnce("set_case_analysis needs 0 or 1 and objects");
+    int *pNets, nNets, i;
+    if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
         return;
-    }
-    Value = atoi(pCmd->ppPos[0]) ? 2 : 1;   /* fCaseValue 编码：1 = 逻辑 0，2 = 逻辑 1（见 msta_net.h） */
-    nNets = Msta_SdcPosNets( pDes, pCmd, 1, &pNets );
     for ( i = 0; i < nNets; i++ )
     {
-        MstaNet *pNet = MstaNetArrayAt(&pDes->vNets,pNets[i]);
-        pNet->fCaseValue = Value;
-        pNet->fConst = Value;
+        MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, pNets[i] );
+        pNet->fCaseValue = nCase;
+        pNet->fConst = nCase == 3 ? 0 : nCase;
     }
 }
 
-/* set_logic_zero / set_logic_one / set_logic_dc 端口列表
-   把端口固定成常量。dc 是 don't care：按"不传播"处理（路径到这里断开）。
-   这几条命令没有选项：按 WORDS 模式取全部词，以 - 开头的词（包括负数）直接
-   跳过、不告警，其余的词（包括空串）都当对象解析。 */
-static const MstaSdcOpt s_vLogicOpts[] = {
-    { NULL, MSTA_SDC_FLAG } };
-
-/* nKind：0 = 逻辑 0，1 = 逻辑 1，2 = 无关值。
-   fCaseValue 编码：1 = 逻辑 0，2 = 逻辑 1，3 = dc（见 msta_net.h）。 */
-static void Msta_SdcSetLogic( MstaDesign *pDes, int nKind, MstaSdcCmd *pCmd )
+/* set_case_analysis 0|1|zero|one 对象列表
+   把选中的网络钉成常量。rise/fall 这类"只能沿某个边沿翻转"的值不建模。 */
+static void Msta_SdcSetCaseAnalysis( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int i, j;
-    for ( i = 0; i < pCmd->nPos; i++ )
-    {
-        int *pNets, nFound;
-        if ( pCmd->ppPos[i][0] == '-' ) continue;
-        nFound = Msta_SdcResolveNets( pDes, pCmd->ppPos[i], &pNets );
-        for ( j = 0; j < nFound; j++ )
-        {
-            MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, pNets[j] );
-            if ( nKind == 0 )      { pNet->fCaseValue = 1; pNet->fConst = 1; }   /* 逻辑 0 */
-            else if ( nKind == 1 ) { pNet->fCaseValue = 2; pNet->fConst = 2; }   /* 逻辑 1 */
-            else                   { pNet->fCaseValue = 3; pNet->fConst = 0; }   /* 无关值 */
-        }
-    }
+    const char *pValue = pCmd->pValue;
+    if ( !strcmp( pValue, "0" ) || !strcmp( pValue, "zero" ) )
+        Msta_SdcSetConstNets( p, pDes, pCmd, 1 );
+    else if ( !strcmp( pValue, "1" ) || !strcmp( pValue, "one" ) )
+        Msta_SdcSetConstNets( p, pDes, pCmd, 2 );
+    else if ( !strcmp( pValue, "rise" ) || !strcmp( pValue, "rising" ) ||
+              !strcmp( pValue, "fall" ) || !strcmp( pValue, "falling" ) )
+        Msta_SdcReject( p, pCmd, "value \"%s\" is not modeled (only 0, 1, zero and one)", pValue );
+    else
+        Msta_SdcReject( p, pCmd, "value \"%s\" must be 0, 1, zero or one", pValue );
 }
 
+/* set_logic_zero / set_logic_one / set_logic_dc 端口列表 */
 static void Msta_SdcSetLogicZero( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    Msta_SdcSetLogic( pDes, 0, pCmd );
+    Msta_SdcSetConstNets( p, pDes, pCmd, 1 );
 }
 
 static void Msta_SdcSetLogicOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    Msta_SdcSetLogic( pDes, 1, pCmd );
+    Msta_SdcSetConstNets( p, pDes, pCmd, 2 );
 }
 
 static void Msta_SdcSetLogicDc( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    Msta_SdcSetLogic( pDes, 2, pCmd );
+    Msta_SdcSetConstNets( p, pDes, pCmd, 3 );
 }
 
 /* set_disable_timing [-from 引脚名] [-to 引脚名] 实例列表
    屏蔽指定实例上从 -from 到 -to 的时序弧。两个端点可以只写一个，
-   缺的那个按通配处理（与 SDC 一致）。-from/-to 各取一个库引脚名。 */
+   缺的那个按通配处理（与 SDC 一致）。-from/-to 各是一个库引脚名。 */
 static const MstaSdcOpt s_vDisableTimingOpts[] = {
-    { "-from", MSTA_SDC_VALUE },
-    { "-to",   MSTA_SDC_VALUE },
-    { NULL,    MSTA_SDC_FLAG  } };
+    { "-from", MSTA_SDC_VALUE, 0 },
+    { "-to",   MSTA_SDC_VALUE, 0 },
+    { NULL,    MSTA_SDC_FLAG,  0 } };
 
 static void Msta_SdcSetDisableTiming( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     const char *pFrom = Msta_SdcOptValue( pCmd, "-from" );
     const char *pTo   = Msta_SdcOptValue( pCmd, "-to" );
-    int i;
-    if ( ( pFrom == NULL && pTo == NULL ) || pCmd->nPos == 0 )
-    { Msta_WarnOnce("set_disable_timing needs -from and/or -to plus cell objects"); return; }
-    for ( i = 0; i < pCmd->nPos; i++ )
+    int *pInsts, nInsts, i;
+    if ( pFrom == NULL && pTo == NULL )
+    { Msta_SdcReject( p, pCmd, "needs -from and/or -to" ); return; }
+    if ( ( nInsts = Msta_SdcObjectInsts( p, pDes, pLib, pCmd, pCmd->ppObjs, pCmd->nObjs, 0, &pInsts ) ) < 0 )
+        return;
+    for ( i = 0; i < nInsts; i++ )
     {
-        const char *pName = pCmd->ppPos[i];
-        int nInst = Msta_DesignFindInstByName( pDes, pName );
-        MstaInst *pInst;
-        MstaDisabledArc *pArc;
-        if ( nInst < 0 )
-        { Msta_WarnOnce("set_disable_timing: unknown instance \"%s\"",pName); continue; }
-        pInst = MstaInstArrayAt(&pDes->vInsts,nInst);
-        pArc = MstaDisabledArcArrayAppend(&p->vDisabledArcs);
-        pArc->Inst = nInst;
+        MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, pInsts[i] );
+        MstaDisabledArc *pArc = MstaDisabledArcArrayAppend( &p->vDisabledArcs );
+        pArc->Inst = pInsts[i];
         pArc->FromPin = pFrom ? Msta_NameId(pFrom) : MSTA_NO_ID;
         pArc->ToPin = pTo ? Msta_NameId(pTo) : MSTA_NO_ID;
         if ( ( pFrom && Msta_CellPinIndexOf(pInst->pCell,pArc->FromPin) < 0 ) ||
              ( pTo && Msta_CellPinIndexOf(pInst->pCell,pArc->ToPin) < 0 ) )
-            Msta_WarnOnce("set_disable_timing: instance \"%s\" has no matching pins",pName);
+            Msta_SdcNote( pCmd, "instance \"%s\" has no matching pins", Msta_InstName(pDes,pInsts[i]) );
     }
 }
 
@@ -2098,52 +1819,37 @@ static void Msta_SdcAddPathExceptions( MstaSdc *p, const MstaSdcPath *pPath, int
         }
 }
 
-/* set_false_path / set_multicycle_path [-setup] [-hold] [-rise|-fall]
-       [-from|-rise_from|-fall_from 对象...] [-through|-rise_through|-fall_through 对象...]...
-       [-to|-rise_to|-fall_to 对象...] [周期数]
-   顺序模式：路径选项后面的对象一直取到下一个以 - 开头的词；不认识的选项
-   （包括 -1 这样的负数）让整条作废。set_multicycle_path 取第一个数值位置参数
-   当周期数，其余不是对象的词忽略。 */
+/* set_false_path [-setup] [-hold] [-rise|-fall] [路径选项...]
+   set_multicycle_path [-setup] [-hold] [-rise|-fall] [路径选项...] 周期数
+   路径选项是 -from/-through/-to 及其 -rise_/-fall_ 写法；只写 -rise 或 -fall 时
+   它限定 -to 一端的边沿。周期数必须是正整数。 */
 static const MstaSdcOpt s_vPathExceptionOpts[] = {
-    { "-setup",   MSTA_SDC_FLAG    },
-    { "-hold",    MSTA_SDC_FLAG    },
-    { "-rise",    MSTA_SDC_FLAG    },
-    { "-fall",    MSTA_SDC_FLAG    },
-    { "-from",    MSTA_SDC_RF_LIST },
-    { "-through", MSTA_SDC_RF_LIST },
-    { "-to",      MSTA_SDC_RF_LIST },
-    { NULL,       MSTA_SDC_FLAG    } };
+    { "-setup",   MSTA_SDC_FLAG, 0                             },
+    { "-hold",    MSTA_SDC_FLAG, 0                             },
+    { "-rise",    MSTA_SDC_FLAG, 0                             },
+    { "-fall",    MSTA_SDC_FLAG, 0                             },
+    { "-from",    MSTA_SDC_LIST, MSTA_SDC_RF                   },
+    { "-through", MSTA_SDC_LIST, MSTA_SDC_RF | MSTA_SDC_REPEAT },
+    { "-to",      MSTA_SDC_LIST, MSTA_SDC_RF                   },
+    { NULL,       MSTA_SDC_FLAG, 0                             } };
 
 static void Msta_SdcSetPathException( MstaSdc *p, int fFalse, MstaSdcCmd *pCmd )
 {
-    int fRise = Msta_SdcHasFlag( pCmd, "-rise" );
-    int fFall = Msta_SdcHasFlag( pCmd, "-fall" );
-    int nCycles = 1, nErr, i;
+    double Cycles = 1.0;
     MstaSdcPath Path;
-
-    nErr = Msta_SdcPathSyntaxError( pCmd, Msta_SdcGetPath( pCmd, &Path ) );
-    if ( nErr == 2 )
+    if ( !fFalse )
     {
-        Msta_WarnOnce("path exception option \"%s\" is not modeled; constraint rejected",
-                      pCmd->argv[pCmd->iBad]);
-        p->nCommandsIgnored++;
+        if ( !Msta_SdcGetNumber( p, pCmd, "cycle count", pCmd->pValue, MSTA_SDC_POSITIVE, &Cycles ) )
+            return;
+        if ( Cycles != (double)(int)Cycles )
+        { Msta_SdcReject( p, pCmd, "cycle count must be a positive integer (got %s)", pCmd->pValue ); return; }
     }
-    if ( nErr != 0 )
+    if ( !Msta_SdcGetPath( p, pCmd, &Path ) )
         return;
-    for ( i = 0; !fFalse && i < pCmd->nPos; i++ )
-        if ( Msta_SdcIsNumber( pCmd->ppPos[i] ) )
-        {
-            nCycles = atoi( pCmd->ppPos[i] );
-            break;
-        }
-    if ( fRise && fFall )
-    { Msta_WarnOnce("path exception cannot combine -rise and -fall; constraint rejected"); return; }
-    /* 裸 -rise/-fall 是 -to 点的边沿限定。 */
-    if ( ( fRise || fFall ) && Path.ToRF == 0 ) Path.ToRF = fRise ? 'r' : 'f';
-    if ( !fFalse && nCycles < 1 )
-    { Msta_WarnOnce("set_multicycle_path needs a positive cycle count"); return; }
+    if ( Path.ToRF == 0 )
+        Path.ToRF = Msta_SdcCmdEdge( pCmd );
     Msta_SdcAddPathExceptions( p, &Path, fFalse, Msta_SdcHasFlag( pCmd, "-setup" ),
-                               Msta_SdcHasFlag( pCmd, "-hold" ), nCycles, 0, 0, 0.0 );
+                               Msta_SdcHasFlag( pCmd, "-hold" ), (int)Cycles, 0, 0, 0.0 );
 }
 
 static void Msta_SdcSetFalsePath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
@@ -2157,35 +1863,19 @@ static void Msta_SdcSetMulticyclePath( MstaSdc *p, MstaDesign *pDes, MstaLib *pL
 }
 
 /* set_max_delay / set_min_delay [路径选项...] 延迟
-   路径选项同 set_false_path；延迟取最后一个数值位置参数。-setup/-hold/-rise/-fall
-   这些选项不认，整条作废。 */
+   路径选项同 set_false_path。 */
 static const MstaSdcOpt s_vPathDelayOpts[] = {
-    { "-from",    MSTA_SDC_RF_LIST },
-    { "-through", MSTA_SDC_RF_LIST },
-    { "-to",      MSTA_SDC_RF_LIST },
-    { NULL,       MSTA_SDC_FLAG    } };
+    { "-from",    MSTA_SDC_LIST, MSTA_SDC_RF                   },
+    { "-through", MSTA_SDC_LIST, MSTA_SDC_RF | MSTA_SDC_REPEAT },
+    { "-to",      MSTA_SDC_LIST, MSTA_SDC_RF                   },
+    { NULL,       MSTA_SDC_FLAG, 0                             } };
 
 static void Msta_SdcSetPathDelay( MstaSdc *p, int fMax, MstaSdcCmd *pCmd )
 {
-    double Delay = MSTA_UNSET;
-    int nErr, i;
     MstaSdcPath Path;
-
-    nErr = Msta_SdcPathSyntaxError( pCmd, Msta_SdcGetPath( pCmd, &Path ) );
-    if ( nErr == 2 )
-    {
-        Msta_WarnOnce("set_%s_delay option \"%s\" is not modeled; constraint rejected",
-                      fMax ? "max" : "min", pCmd->argv[pCmd->iBad]);
-        p->nCommandsIgnored++;
-    }
-    if ( nErr != 0 )
+    if ( !Msta_SdcGetPath( p, pCmd, &Path ) )
         return;
-    for ( i = 0; i < pCmd->nPos; i++ )
-        if ( Msta_SdcIsNumber( pCmd->ppPos[i] ) )
-            Delay = Msta_SdcToPs( p, pCmd->ppPos[i] );
-    if ( !Msta_IsSet(Delay) )
-    { Msta_WarnOnce("set_%s_delay needs a numeric delay",fMax ? "max" : "min"); return; }
-    Msta_SdcAddPathExceptions( p, &Path, 0, 0, 0, 1, fMax, !fMax, Delay );
+    Msta_SdcAddPathExceptions( p, &Path, 0, 0, 0, 1, fMax, !fMax, Msta_SdcToPs( p, pCmd->pValue ) );
 }
 
 static void Msta_SdcSetMaxDelay( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
@@ -2201,402 +1891,229 @@ static void Msta_SdcSetMinDelay( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Ms
 /* group_path -name 组名 | -default [-weight 权重] [-critical_range 值] [路径选项...]
    把命中的路径归到一个分组里，报告按组统计 WNS/TNS。
    分组不影响 slack；-weight 只记录并在报告里显示，不参与 WNS/TNS 等数字的计算。
-   -name 与 -default 互斥；两个都没写的分组没有意义。-critical_range 不建模，
-   它的值照样吃掉；不是对象的词忽略。 */
+   -name 与 -default 必须二选一。不写路径选项就是"所有路径"（-default 常这么用）。
+   -critical_range 不建模，分组收下所有命中的路径。 */
 static const MstaSdcOpt s_vGroupPathOpts[] = {
-    { "-default",        MSTA_SDC_FLAG      },
-    { "-name",           MSTA_SDC_VALUE_RAW },
-    { "-weight",         MSTA_SDC_VALUE_RAW },
-    { "-critical_range", MSTA_SDC_VALUE_RAW },
-    { "-from",           MSTA_SDC_RF_LIST   },
-    { "-through",        MSTA_SDC_RF_LIST   },
-    { "-to",             MSTA_SDC_RF_LIST   },
-    { NULL,              MSTA_SDC_FLAG      } };
+    { "-default",        MSTA_SDC_FLAG,  0                             },
+    { "-name",           MSTA_SDC_VALUE, 0                             },
+    { "-weight",         MSTA_SDC_VALUE, 0                             },
+    { "-critical_range", MSTA_SDC_VALUE, MSTA_SDC_IGNORE               },
+    { "-from",           MSTA_SDC_LIST,  MSTA_SDC_RF                   },
+    { "-through",        MSTA_SDC_LIST,  MSTA_SDC_RF | MSTA_SDC_REPEAT },
+    { "-to",             MSTA_SDC_LIST,  MSTA_SDC_RF                   },
+    { NULL,              MSTA_SDC_FLAG,  0                             } };
 
 static void Msta_SdcSetGroupPath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     const char *pName   = Msta_SdcOptValue( pCmd, "-name" );
     const char *pWeight = Msta_SdcOptValue( pCmd, "-weight" );
     int fDefault = Msta_SdcHasFlag( pCmd, "-default" );
-    int iThruOver, iErr, iCrit, nErr;
-    MstaPathGroup *pGroup;
+    double Weight = 1.0;
     MstaSdcPath Path;
+    int j, k;
 
-    iThruOver = Msta_SdcGetPath( pCmd, &Path );
-    /* 这条命令按从左到右的顺序生效：-critical_range 的告警只在它出现于第一个
-       语法错误之前时才给。写在末尾、后面没有值的 -critical_range 不算错，
-       照样只告警。 */
-    iErr  = iThruOver > 0 ? iThruOver : pCmd->iBad;
-    iCrit = Msta_SdcOptAt( pCmd, "-critical_range" );
-    if ( iCrit == 0 && iErr > 0 && !strcmp( pCmd->argv[iErr], "-critical_range" ) )
-        iCrit = iErr;
-    if ( iCrit > 0 && ( iErr == 0 || iCrit <= iErr ) )
-        Msta_WarnOnce("group_path -critical_range is not modeled; the group takes every matching path");
-    nErr = Msta_SdcPathSyntaxError( pCmd, iThruOver );
-    if ( nErr == 1 )
+    if ( fDefault == ( pName != NULL ) )
+    { Msta_SdcReject( p, pCmd, "needs exactly one of -name and -default" ); return; }
+    if ( pWeight && !Msta_SdcGetNumber( p, pCmd, "-weight", pWeight, MSTA_SDC_POSITIVE, &Weight ) )
         return;
-    if ( nErr == 2 )
-    {
-        Msta_WarnOnce("group_path option \"%s\" is not modeled; group rejected", pCmd->argv[pCmd->iBad]);
-        p->nCommandsIgnored++;
+    if ( !Msta_SdcGetPath( p, pCmd, &Path ) )
         return;
-    }
-    if ( nErr == 3 && !strcmp( pCmd->argv[pCmd->iBad], "-name" ) )
-    { Msta_WarnOnce("group_path -name needs a group name"); return; }
-    if ( nErr == 3 && !strcmp( pCmd->argv[pCmd->iBad], "-weight" ) )
-    { Msta_WarnOnce("group_path -weight needs a number"); return; }
-    if ( fDefault && pName != NULL )
-    {
-        Msta_WarnOnce("group_path -name and -default are mutually exclusive; group rejected");
-        return;
-    }
-    if ( !fDefault && pName == NULL )
-    {
-        Msta_WarnOnce("group_path needs -name or -default; group rejected");
-        return;
-    }
-    /* 不写 -from/-to/-through 就是"所有路径"（-default 常这么用）。
-       -from/-to 的多个对象按笛卡尔积摊成多条记录，名字与权重相同（与例外一致）。 */
-    {
-        int nFrom = Path.nFrom > 0 ? Path.nFrom : 1;
-        int nTo   = Path.nTo   > 0 ? Path.nTo   : 1;
-        int j, k;
-        for ( j = 0; j < nFrom; j++ )
-            for ( k = 0; k < nTo; k++ )
-            {
-                const char *pFrom = Path.nFrom > 0 ? Path.ppFrom[j] : NULL;
-                const char *pTo   = Path.nTo   > 0 ? Path.ppTo[k]   : NULL;
-                if ( pWeight != NULL && !Msta_SdcIsNumber(pWeight) )
-                {
-                    Msta_WarnOnce( "group_path -weight \"%s\" is not a number; using 1.0", pWeight );
-                    pWeight = NULL;
-                }
-                pGroup = MstaPathGroupArrayAppend( &p->vPathGroups );
-                pGroup->Name    = fDefault ? MSTA_NO_ID : Msta_NameId( pName );
-                pGroup->fDefault= fDefault;
-                pGroup->Weight  = ( pWeight != NULL && atof(pWeight) > 0.0 ) ? atof(pWeight) : 1.0;
-                pGroup->FromText= pFrom ? Msta_NameId(pFrom) : MSTA_NO_ID;
-                pGroup->ToText  = pTo   ? Msta_NameId(pTo)   : MSTA_NO_ID;
-                pGroup->FromKind= pFrom ? Msta_SdcKindOf(pFrom) : 0;
-                pGroup->ToKind  = pTo   ? Msta_SdcKindOf(pTo)   : 0;
-                pGroup->FromRF  = Path.FromRF;
-                pGroup->ToRF    = Path.ToRF;
-                memcpy( pGroup->Thru, Path.Thru, sizeof(Path.Thru) );
-                pGroup->nThru   = Path.nThru;
-            }
-    }
+    /* -from/-to 的多个对象按笛卡尔积摊成多条记录，名字与权重相同（与例外一致）。 */
+    for ( j = 0; j < ( Path.nFrom > 0 ? Path.nFrom : 1 ); j++ )
+        for ( k = 0; k < ( Path.nTo > 0 ? Path.nTo : 1 ); k++ )
+        {
+            const char *pFrom = Path.nFrom > 0 ? Path.ppFrom[j] : NULL;
+            const char *pTo   = Path.nTo   > 0 ? Path.ppTo[k]   : NULL;
+            MstaPathGroup *pGroup = MstaPathGroupArrayAppend( &p->vPathGroups );
+            pGroup->Name    = fDefault ? MSTA_NO_ID : Msta_NameId( pName );
+            pGroup->fDefault= fDefault;
+            pGroup->Weight  = Weight;
+            pGroup->FromText= pFrom ? Msta_NameId(pFrom) : MSTA_NO_ID;
+            pGroup->ToText  = pTo   ? Msta_NameId(pTo)   : MSTA_NO_ID;
+            pGroup->FromKind= pFrom ? Msta_SdcKindOf(pFrom) : 0;
+            pGroup->ToKind  = pTo   ? Msta_SdcKindOf(pTo)   : 0;
+            pGroup->FromRF  = Path.FromRF;
+            pGroup->ToRF    = Path.ToRF;
+            memcpy( pGroup->Thru, Path.Thru, sizeof(Path.Thru) );
+            pGroup->nThru   = Path.nThru;
+        }
 }
 
 /* set_data_check -from|-rise_from|-fall_from A -to|-rise_to|-fall_to B
-       [-setup|-hold] [-clock C] margin
-   两条数据路径之间的检查，-from 是参照。两个对象都解析成网络。
-   -clock 读入但不使用；-rise/-fall 不建模。 */
+       [-setup|-hold] [-clock C] 余量
+   两条数据路径之间的检查，-from 是参照；-from/-to 各是一个对象，解析成一个网络。
+   -clock 读入但不使用；-rise/-fall 不建模。不写 -setup/-hold 时两个都查。 */
 static const MstaSdcOpt s_vDataCheckOpts[] = {
-    { "-from",      MSTA_SDC_VALUE },
-    { "-rise_from", MSTA_SDC_VALUE },
-    { "-fall_from", MSTA_SDC_VALUE },
-    { "-to",        MSTA_SDC_VALUE },
-    { "-rise_to",   MSTA_SDC_VALUE },
-    { "-fall_to",   MSTA_SDC_VALUE },
-    { "-clock",     MSTA_SDC_VALUE },
-    { "-setup",     MSTA_SDC_FLAG  },
-    { "-hold",      MSTA_SDC_FLAG  },
-    { "-rise",      MSTA_SDC_FLAG  },
-    { "-fall",      MSTA_SDC_FLAG  },
-    { NULL,         MSTA_SDC_FLAG  } };
-
-/* -from 的三种写法只采用一个：-from 优先，其次 -rise_from，再次 -fall_from（-to 同理）。
-   采用的写法和边沿写进 *ppValue / *pEdge。没被采用、但写了值的写法，它的值不算
-   选项值，要和位置参数一起参与"第一个位置参数是余量"的判断：这里把这些值在 argv
-   里的下标记进 pLeftAt[]，返回个数。 */
-static int Msta_SdcDataCheckEnd( const MstaSdcCmd *pCmd, const char *pPlain, const char *pRise,
-                                 const char *pFall, const char **ppValue, char *pEdge, int *pLeftAt )
-{
-    const char *pNames[3];
-    char Edges[3] = { 0, 'r', 'f' };
-    int i, nLeft = 0;
-    pNames[0] = pPlain; pNames[1] = pRise; pNames[2] = pFall;
-    *ppValue = NULL;
-    *pEdge = 0;
-    for ( i = 0; i < 3; i++ )
-    {
-        const char *pValue = Msta_SdcOptValue( pCmd, pNames[i] );
-        if ( pValue == NULL )
-            continue;
-        if ( *ppValue == NULL )
-        {
-            *ppValue = pValue;
-            *pEdge = Edges[i];
-        }
-        else if ( pValue[0] != 0 )          /* 空串不算位置参数 */
-            pLeftAt[nLeft++] = Msta_SdcOptAt( pCmd, pNames[i] ) + 1;
-    }
-    return nLeft;
-}
+    { "-from",  MSTA_SDC_LIST,  MSTA_SDC_RF     },
+    { "-to",    MSTA_SDC_LIST,  MSTA_SDC_RF     },
+    { "-clock", MSTA_SDC_VALUE, 0               },
+    { "-setup", MSTA_SDC_FLAG,  0               },
+    { "-hold",  MSTA_SDC_FLAG,  0               },
+    { "-rise",  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-fall",  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { NULL,     MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    const char *pFrom, *pTo, *pMargin = NULL;
-    char FromRF, ToRF;
-    int vLeftAt[4], nLeft, i, iMargin;
-    int *pFromNets, *pToNets, nFromCount, nToCount;
+    char **ppFrom, **ppTo;
+    int nFrom = Msta_SdcOptList( pCmd, "-from", &ppFrom );
+    int nTo   = Msta_SdcOptList( pCmd, "-to", &ppTo );
+    int *pFromNets, *pToNets;
     MstaDataCheck *pCheck;
 
-    nLeft  = Msta_SdcDataCheckEnd( pCmd, "-from", "-rise_from", "-fall_from", &pFrom, &FromRF, vLeftAt );
-    nLeft += Msta_SdcDataCheckEnd( pCmd, "-to", "-rise_to", "-fall_to", &pTo, &ToRF, vLeftAt + nLeft );
-    if ( pFrom == NULL || pTo == NULL )
-    { Msta_WarnOnce("set_data_check needs -from and -to"); return; }
-    /* 余量是 argv 里最靠前的那个位置参数（含上面退回来的值）。 */
-    iMargin = pCmd->nPos > 0 ? pCmd->pPosAt[0] : 0;
-    for ( i = 0; i < nLeft; i++ )
-        if ( iMargin == 0 || vLeftAt[i] < iMargin )
-            iMargin = vLeftAt[i];
-    if ( iMargin > 0 )
-        pMargin = pCmd->argv[iMargin];
-    if ( pMargin == NULL || !Msta_SdcIsNumber(pMargin) )
-    { Msta_WarnOnce("set_data_check needs a numeric margin"); return; }
-    nFromCount = Msta_SdcResolveNets( pDes, pFrom, &pFromNets );
-    nToCount   = Msta_SdcResolveNets( pDes, pTo,   &pToNets );
-    if ( nFromCount != 1 || nToCount != 1 )
-    { Msta_WarnOnce("set_data_check: -from/-to must each resolve to one net"); return; }
+    if ( nFrom == 0 || nTo == 0 )
+    { Msta_SdcReject( p, pCmd, "needs -from and -to" ); return; }
+    if ( nFrom != 1 || nTo != 1 ||
+         Msta_SdcResolveNets( pDes, ppFrom[0], &pFromNets ) != 1 ||
+         Msta_SdcResolveNets( pDes, ppTo[0], &pToNets ) != 1 )
+    { Msta_SdcReject( p, pCmd, "-from/-to must each resolve to one net" ); return; }
     pCheck = MstaDataCheckArrayAppend( &p->vDataChecks );
-    pCheck->FromNet = pFromNets[0];
-    pCheck->ToNet   = pToNets[0];
-    pCheck->FromText = Msta_NameId( pFrom );
-    pCheck->ToText   = Msta_NameId( pTo );
-    pCheck->FromRF = FromRF;
-    pCheck->ToRF   = ToRF;
-    pCheck->fSetup = Msta_SdcHasFlag( pCmd, "-setup" );
-    pCheck->fHold  = Msta_SdcHasFlag( pCmd, "-hold" );
-    if ( Msta_SdcHasFlag( pCmd, "-rise" ) || Msta_SdcHasFlag( pCmd, "-fall" ) )
-        Msta_WarnOnce("set_data_check: -rise/-fall are not modeled" );
-    if ( !pCheck->fSetup && !pCheck->fHold )
-        pCheck->fSetup = pCheck->fHold = 1;         /* 不写 -setup/-hold 时两个角都查 */
-    pCheck->Value = Msta_SdcToPs( p, pMargin );
-}
-
-/* 把一个对象名展开成实例：先当实例名找，找不到再当库单元名，取用到这个单元的
-   所有实例。找不到时返回 0 个（调用方告警）。实例号写进 *pvInsts。 */
-static int Msta_SdcInstsOfName( MstaDesign *pDes, MstaLib *pLib, const char *pName,
-                                MstaSdcIntArray *pvInsts )
-{
-    int nInst = Msta_DesignFindInstByName( pDes, pName ), k;
-    MstaCell *pCell;
-    pvInsts->nSize = 0;
-    if ( nInst >= 0 )
-    {
-        *MstaSdcIntArrayAppend( pvInsts ) = nInst;
-        return 1;
-    }
-    pCell = Msta_LibFindCell( pLib, pName );
-    if ( pCell == NULL )
-        return -1;
-    for ( k = 0; k < pDes->vInsts.nSize; k++ )
-        if ( MstaInstArrayAt(&pDes->vInsts,k)->pCell == pCell )
-            *MstaSdcIntArrayAppend( pvInsts ) = k;
-    return pvInsts->nSize;
+    pCheck->FromNet  = pFromNets[0];
+    pCheck->ToNet    = pToNets[0];
+    pCheck->FromText = Msta_NameId( ppFrom[0] );
+    pCheck->ToText   = Msta_NameId( ppTo[0] );
+    pCheck->FromRF   = Msta_SdcOptEdge( pCmd, "-from" );
+    pCheck->ToRF     = Msta_SdcOptEdge( pCmd, "-to" );
+    pCheck->fSetup   = Msta_SdcHasFlag( pCmd, "-setup" ) || !Msta_SdcHasFlag( pCmd, "-hold" );
+    pCheck->fHold    = Msta_SdcHasFlag( pCmd, "-hold" ) || !Msta_SdcHasFlag( pCmd, "-setup" );
+    pCheck->Value    = Msta_SdcToPs( p, pCmd->pValue );
 }
 
 /* set_max_time_borrow 延迟 [锁存器实例或库单元...]
    锁存器 D 脚允许比使能脚关闭沿晚到多久。不写对象列表就是所有锁存器的默认值
    （手册里对象列表是必写的，这里放宽）。 */
-static const MstaSdcOpt s_vMaxTimeBorrowOpts[] = {
-    { NULL, MSTA_SDC_FLAG } };
-
 static void Msta_SdcSetMaxTimeBorrow( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    MstaSdcIntArray vInsts;
     MstaBorrowSdc *pRec;
     double Value;
-    int i, k;
-    if ( pCmd->nPos == 0 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    { Msta_WarnOnce("set_max_time_borrow needs a numeric delay and latch objects"); return; }
-    Value = Msta_SdcToPs( p, pCmd->ppPos[0] );
-    if ( Value < 0.0 )
-    { Msta_WarnOnce("set_max_time_borrow needs a non-negative delay"); return; }
-    if ( pCmd->nPos == 1 )
+    int *pInsts, nInsts = 1, i;
+    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Value ) )
+        return;
+    if ( pCmd->nObjs > 0 &&
+         ( nInsts = Msta_SdcObjectInsts( p, pDes, pLib, pCmd, pCmd->ppObjs, pCmd->nObjs, 1, &pInsts ) ) < 0 )
+        return;
+    for ( i = 0; i < nInsts; i++ )
     {
         pRec = MstaBorrowSdcArrayAppend( &p->vBorrow );
-        pRec->Inst = -1;
-        pRec->Value = Value;
-        return;
+        pRec->Inst  = pCmd->nObjs > 0 ? pInsts[i] : -1;
+        pRec->Value = Value * p->TimeScalePs;
     }
-    MstaSdcIntArrayInit( &vInsts );
-    for ( i = 1; i < pCmd->nPos; i++ )
-    {
-        if ( Msta_SdcInstsOfName( pDes, pLib, pCmd->ppPos[i], &vInsts ) < 0 )
-        { Msta_WarnOnce("set_max_time_borrow: unknown cell \"%s\"", pCmd->ppPos[i]); continue; }
-        for ( k = 0; k < vInsts.nSize; k++ )
-        {
-            pRec = MstaBorrowSdcArrayAppend( &p->vBorrow );
-            pRec->Inst = vInsts.pData[k];
-            pRec->Value = Value;
-        }
-    }
-    MstaSdcIntArrayFree( &vInsts );
 }
 
 /* set_clock_gating_check [-setup 值] [-hold 值] [-rise|-fall|-high|-low] [门控实例或库单元...]
    门控单元使能脚相对时钟脚的 setup/hold 值。
    没有对象列表时作为全局默认；带对象列表时按实例（或库单元名）覆盖。
-   -rise/-fall/-high/-low 认下来，但检查对象仍按库里声明的有效沿（不一致时告警）。 */
+   -rise/-fall/-high/-low 不建模：检查对象总按库里声明的有效沿。 */
 static const MstaSdcOpt s_vClockGatingCheckOpts[] = {
-    { "-setup", MSTA_SDC_VALUE },
-    { "-hold",  MSTA_SDC_VALUE },
-    { "-rise",  MSTA_SDC_FLAG  },
-    { "-fall",  MSTA_SDC_FLAG  },
-    { "-high",  MSTA_SDC_FLAG  },
-    { "-low",   MSTA_SDC_FLAG  },
-    { NULL,     MSTA_SDC_FLAG  } };
-
-/* 新建一条门控检查记录。 */
-static void Msta_SdcAddClockGating( MstaSdc *p, int nInst, double Setup, double Hold )
-{
-    MstaClockGatingSdc *pRec = MstaClockGatingSdcArrayAppend( &p->vClockGating );
-    pRec->Inst  = nInst;
-    pRec->Setup = Setup;
-    pRec->Hold  = Hold;
-    pRec->fRise = pRec->fFall = pRec->fHigh = pRec->fLow = 0;
-}
+    { "-setup", MSTA_SDC_VALUE, 0               },
+    { "-hold",  MSTA_SDC_VALUE, 0               },
+    { "-rise",  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-fall",  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-high",  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { "-low",   MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
+    { NULL,     MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetClockGatingCheck( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    static const char *pEdgeFlags[] = { "-rise", "-fall", "-high", "-low", NULL };
     const char *pSetup = Msta_SdcOptValue( pCmd, "-setup" );
     const char *pHold  = Msta_SdcOptValue( pCmd, "-hold" );
     double Setup = MSTA_UNSET, Hold = MSTA_UNSET;
-    MstaSdcIntArray vInsts;
-    int i, k;
-    /* 这几个开关按在命令里第一次出现的先后告警。 */
-    for ( i = 1; i < pCmd->argc; i++ )
-        for ( k = 0; pEdgeFlags[k]; k++ )
-            if ( Msta_SdcOptAt( pCmd, pEdgeFlags[k] ) == i )
-                Msta_WarnOnce( "set_clock_gating_check %s is not modeled; the check "
-                               "always uses the edge the library declares", pEdgeFlags[k] );
-    if ( pSetup != NULL )
-    {
-        if ( !Msta_SdcIsNumber(pSetup) )
-        { Msta_WarnOnce("set_clock_gating_check -setup needs a number"); return; }
-        Setup = Msta_SdcToPs( p, pSetup );
-    }
-    if ( pHold != NULL )
-    {
-        if ( !Msta_SdcIsNumber(pHold) )
-        { Msta_WarnOnce("set_clock_gating_check -hold needs a number"); return; }
-        Hold = Msta_SdcToPs( p, pHold );
-    }
-    if ( !Msta_IsSet(Setup) && !Msta_IsSet(Hold) )
-    { Msta_WarnOnce("set_clock_gating_check needs -setup and/or -hold"); return; }
-    /* 没写对象列表 = 全局默认（手册里的 object_list 可以省略）。 */
-    if ( pCmd->nPos == 0 )
-    {
-        Msta_SdcAddClockGating( p, -1, Setup, Hold );
+    int *pInsts, nInsts = 1, i;
+    if ( pSetup == NULL && pHold == NULL )
+    { Msta_SdcReject( p, pCmd, "needs -setup and/or -hold" ); return; }
+    if ( ( pSetup && !Msta_SdcGetNumber( p, pCmd, "-setup", pSetup, MSTA_SDC_ANY, &Setup ) ) ||
+         ( pHold  && !Msta_SdcGetNumber( p, pCmd, "-hold",  pHold,  MSTA_SDC_ANY, &Hold ) ) )
         return;
-    }
-    MstaSdcIntArrayInit( &vInsts );
-    for ( i = 0; i < pCmd->nPos; i++ )
+    if ( pSetup ) Setup *= p->TimeScalePs;
+    if ( pHold )  Hold  *= p->TimeScalePs;
+    if ( pCmd->nObjs > 0 &&
+         ( nInsts = Msta_SdcObjectInsts( p, pDes, pLib, pCmd, pCmd->ppObjs, pCmd->nObjs, 1, &pInsts ) ) < 0 )
+        return;
+    for ( i = 0; i < nInsts; i++ )
     {
-        if ( Msta_SdcInstsOfName( pDes, pLib, pCmd->ppPos[i], &vInsts ) < 0 )
-        {
-            Msta_WarnOnce( "set_clock_gating_check: unknown cell \"%s\"", pCmd->ppPos[i] );
-            continue;
-        }
-        for ( k = 0; k < vInsts.nSize; k++ )
-            Msta_SdcAddClockGating( p, vInsts.pData[k], Setup, Hold );
+        MstaClockGatingSdc *pRec = MstaClockGatingSdcArrayAppend( &p->vClockGating );
+        pRec->Inst  = pCmd->nObjs > 0 ? pInsts[i] : -1;
+        pRec->Setup = Setup;
+        pRec->Hold  = Hold;
+        pRec->fRise = pRec->fFall = pRec->fHigh = pRec->fLow = 0;
     }
-    MstaSdcIntArrayFree( &vInsts );
 }
 
 /* ---------------- 设计规则、derate、工作条件与单位 ---------------- */
 
 /* set_max_transition / set_max_fanout / set_max_capacitance / set_min_capacitance
        [-clock_path] [-data_path] [-rise] [-fall] 限制值 对象列表
-   [current_design] 是全局限制；给端口/网络/引脚/单元时记在对应的网络上，
-   检查在时序分析之后统一做（按对象优先，没写对象的用全局值）。
-   -clock_path/-data_path/-rise/-fall 只改变检查范围，msta 一律按最坏角检查。 */
+   [current_design] 是全局限制；给端口/网络/引脚/单元时记在对应的网络上
+   （单元记在它驱动的网络上），检查在时序分析之后统一做（按对象优先，没写对象
+   的用全局值）。时钟对象（时钟域限制）不建模。-clock_path/-data_path/-rise/-fall
+   不建模，msta 一律按最坏角检查。 */
 static const MstaSdcOpt s_vDrcLimitOpts[] = {
-    { "-clock_path", MSTA_SDC_FLAG },
-    { "-data_path",  MSTA_SDC_FLAG },
-    { "-rise",       MSTA_SDC_FLAG },
-    { "-fall",       MSTA_SDC_FLAG },
-    { NULL,          MSTA_SDC_FLAG } };
+    { "-clock_path", MSTA_SDC_FLAG, MSTA_SDC_IGNORE },
+    { "-data_path",  MSTA_SDC_FLAG, MSTA_SDC_IGNORE },
+    { "-rise",       MSTA_SDC_FLAG, MSTA_SDC_IGNORE },
+    { "-fall",       MSTA_SDC_FLAG, MSTA_SDC_IGNORE },
+    { NULL,          MSTA_SDC_FLAG, 0               } };
 
 /* nWhich：0 = max_transition，1 = max_fanout，2 = max_capacitance，3 = min_capacitance。
-   把限制值记到一个网络上。 */
-static void Msta_SdcStoreNetDrcLimit( MstaSdc *p, int nNet, int nWhich, double Value )
+   pTarget 是 MstaSdc 的全局字段或 MstaNetCons 的分对象字段（四个按 nWhich 排）。 */
+static void Msta_SdcStoreDrcLimit( double *pMaxTran, double *pMaxFanout, double *pMaxCap,
+                                   double *pMinCap, int nWhich, double Value )
 {
-    MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, nNet );
-    if      ( nWhich == 0 ) pCons->DrcMaxTransition   = Value;
-    else if ( nWhich == 1 ) pCons->DrcMaxFanout       = Value;
-    else if ( nWhich == 2 ) pCons->DrcMaxCapacitance  = Value;
-    else                    pCons->DrcMinCapacitance  = Value;
+    if      ( nWhich == 0 ) *pMaxTran   = Value;
+    else if ( nWhich == 1 ) *pMaxFanout = Value;
+    else if ( nWhich == 2 ) *pMaxCap    = Value;
+    else                    *pMinCap    = Value;
 }
 
 static void Msta_SdcSetDrcLimit( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
                                  int nWhich, MstaSdcCmd *pCmd )
 {
-    char **pRest = pCmd->ppPos;
-    int nRest = pCmd->nPos, i, j, fDesignObject = 0, fPerObject = 0;
+    MstaSdcIntArray vNets;
     double Value;
-    const char *pName = pCmd->argv[0];
+    int i, j, fDesign = 0;
 
-    if ( Msta_SdcHasFlag( pCmd, "-clock_path" ) || Msta_SdcHasFlag( pCmd, "-data_path" ) ||
-         Msta_SdcHasFlag( pCmd, "-rise" ) || Msta_SdcHasFlag( pCmd, "-fall" ) )
-        Msta_WarnOnce("%s: -clock_path/-data_path/-rise/-fall are not modeled; "
-                      "the limit is checked on both", pName);
-    if ( nRest < 1 || !Msta_SdcIsNumber(pRest[0]) )
-    { Msta_WarnOnce("%s needs a numeric limit", pName); return; }
-    for ( i = 1; i < nRest; i++ )
-    {
-        if ( Msta_SdcKindOf(pRest[i]) == 'D' ) fDesignObject = 1;
-        else fPerObject = 1;      /* 端口、网络、引脚、单元，以及时钟（时钟域限制） */
-    }
-    if ( !fDesignObject && !fPerObject )
-    { Msta_WarnOnce("%s needs a limit value and objects", pName); return; }
+    if ( !Msta_SdcGetNumber( p, pCmd, "limit", pCmd->pValue, MSTA_SDC_POSITIVE, &Value ) )
+        return;
     if ( nWhich == 0 )
-        Value = Msta_SdcToPs(p,pRest[0]);
+        Value *= p->TimeScalePs;
     else if ( nWhich >= 2 )
-        Value = atof(pRest[0]) * ( p->CapScaleFf > 0.0 ? p->CapScaleFf : pLib->CapScale );
-    else
-        Value = atof(pRest[0]);
-    if ( Value <= 0.0 )
-    { Msta_WarnOnce("%s needs a positive limit", pName); return; }
-    if ( fDesignObject )
+        Value *= p->CapScaleFf > 0.0 ? p->CapScaleFf : pLib->CapScale;
+    for ( i = 0; i < pCmd->nObjs; i++ )
+        if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'C' )
+        { Msta_SdcReject( p, pCmd, "clock objects (clock-domain limits) are not modeled" ); return; }
+    /* 先把所有对象都解析成网络，一个都没有时整条作废。 */
+    MstaSdcIntArrayInit( &vNets );
+    for ( i = 0; i < pCmd->nObjs; i++ )
     {
-        if      ( nWhich == 0 ) p->MaxTransition  = Value;
-        else if ( nWhich == 1 ) p->MaxFanout      = Value;
-        else if ( nWhich == 2 ) p->MaxCapacitance = Value;
-        else                    p->MinCapacitance = Value;
-    }
-    for ( i = 1; i < nRest; i++ )
-    {
-        int *pNets, nFound;
-        if ( Msta_SdcKindOf(pRest[i]) == 'D' )
-            continue;
-        if ( Msta_SdcKindOf(pRest[i]) == 'C' )
+        const char *pObj = pCmd->ppObjs[i];
+        char Kind = Msta_SdcKindOf( pObj );
+        if ( Kind == 'D' )
+            fDesign = 1;
+        else if ( Kind == 'I' )
         {
-            /* 时钟域限制：时钟树要等传播完才知道，先告警跳过这一项。 */
-            Msta_WarnOnce("%s on a clock (clock-domain limit) is not modeled; "
-                          "use ports or cells instead", pName);
-            continue;
-        }
-        if ( Msta_SdcKindOf(pRest[i]) == 'I' )
-        {
-            /* 单元形式的限制：记到它驱动的那些网络上。 */
-            int nInst = Msta_DesignFindInstByName( pDes, pRest[i] );
+            int nInst = Msta_DesignFindInstByName( pDes, pObj );
             MstaInst *pInst;
             if ( nInst < 0 )
-            { Msta_WarnOnce("%s: unknown instance \"%s\"", pName, pRest[i]); continue; }
+            { Msta_SdcNote( pCmd, "unknown instance \"%s\"", pObj ); continue; }
             pInst = MstaInstArrayAt( &pDes->vInsts, nInst );
             for ( j = 0; j < pInst->nPins && j < pInst->pCell->vPins.nSize; j++ )
-                if ( pInst->pNets[j] >= 0 &&
-                     pInst->pCell->vPins.pData[j].Dir == MSTA_DIR_OUTPUT )
-                    Msta_SdcStoreNetDrcLimit( p, pInst->pNets[j], nWhich, Value );
-            continue;
+                if ( pInst->pNets[j] >= 0 && pInst->pCell->vPins.pData[j].Dir == MSTA_DIR_OUTPUT )
+                    *MstaSdcIntArrayAppend( &vNets ) = pInst->pNets[j];
         }
-        nFound = Msta_SdcResolveNets( pDes, pRest[i], &pNets );
-        for ( j = 0; j < nFound; j++ )
-            Msta_SdcStoreNetDrcLimit( p, pNets[j], nWhich, Value );
+        else
+            Msta_SdcResolveNetsInto( pDes, pObj, &vNets );
+    }
+    Msta_SdcArenaKeep( vNets.pData );
+    if ( !fDesign && vNets.nSize == 0 )
+    { Msta_SdcReject( p, pCmd, "none of the objects was found" ); return; }
+    if ( fDesign )
+        Msta_SdcStoreDrcLimit( &p->MaxTransition, &p->MaxFanout, &p->MaxCapacitance,
+                               &p->MinCapacitance, nWhich, Value );
+    for ( i = 0; i < vNets.nSize; i++ )
+    {
+        MstaNetCons *pCons = Msta_SdcNetConsOrCreate( p, vNets.pData[i] );
+        Msta_SdcStoreDrcLimit( &pCons->DrcMaxTransition, &pCons->DrcMaxFanout,
+                               &pCons->DrcMaxCapacitance, &pCons->DrcMinCapacitance, nWhich, Value );
     }
 }
 
@@ -2621,128 +2138,98 @@ static void Msta_SdcSetMinCapacitance( MstaSdc *p, MstaDesign *pDes, MstaLib *pL
 }
 
 /* set_max_area 面积
-   整个设计的面积目标，单位跟随库。这条命令没有建模的选项：按 WORDS 模式取全部词，
-   每个以 - 开头的词（包括负数）都告警；面积取最后一个词。 */
-static const MstaSdcOpt s_vMaxAreaOpts[] = {
-    { NULL, MSTA_SDC_FLAG } };
-
+   整个设计的面积目标，单位跟随库。 */
 static void Msta_SdcSetMaxArea( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int i;
-    for ( i = 0; i < pCmd->nPos; i++ )
-        if ( pCmd->ppPos[i][0] == '-' )
-            Msta_WarnOnce( "set_max_area option \"%s\" is not modeled; ignored", pCmd->ppPos[i] );
-    if ( pCmd->nPos == 0 || !Msta_SdcIsNumber(pCmd->ppPos[pCmd->nPos-1]) )
-    { Msta_WarnOnce("set_max_area needs a numeric area"); return; }
-    p->MaxArea = atof( pCmd->ppPos[pCmd->nPos-1] );
+    double Area;
+    if ( Msta_SdcGetNumber( p, pCmd, "area", pCmd->pValue, MSTA_SDC_NONNEG, &Area ) )
+        p->MaxArea = Area;
 }
 
 /* set_timing_derate [-early|-late] [-cell_delay|-net_delay|-cell_check]
                      [-clock|-data] [-rise|-fall] 系数 [实例或时钟列表]
    不带对象时是全局系数；带对象时只对那个实例/时钟生效（分对象的值覆盖全局值，
    不是相乘）。-clock 管时钟树上的弧，-data 管数据路径上的单元延迟
-   （含 FF 的 clk-to-Q），不写这两个开关时两者都算。 */
+   （含 FF 的 clk-to-Q），不写这两个开关时两者都算。msta 没有线延迟，
+   只写 -net_delay 的约束作废。 */
 static const MstaSdcOpt s_vTimingDerateOpts[] = {
-    { "-early",      MSTA_SDC_FLAG },
-    { "-late",       MSTA_SDC_FLAG },
-    { "-cell_delay", MSTA_SDC_FLAG },
-    { "-cell_check", MSTA_SDC_FLAG },
-    { "-net_delay",  MSTA_SDC_FLAG },
-    { "-clock",      MSTA_SDC_FLAG },
-    { "-data",       MSTA_SDC_FLAG },
-    { "-rise",       MSTA_SDC_FLAG },
-    { "-fall",       MSTA_SDC_FLAG },
-    { NULL,          MSTA_SDC_FLAG } };
+    { "-early",      MSTA_SDC_FLAG, 0 },
+    { "-late",       MSTA_SDC_FLAG, 0 },
+    { "-cell_delay", MSTA_SDC_FLAG, 0 },
+    { "-cell_check", MSTA_SDC_FLAG, 0 },
+    { "-net_delay",  MSTA_SDC_FLAG, 0 },
+    { "-clock",      MSTA_SDC_FLAG, 0 },
+    { "-data",       MSTA_SDC_FLAG, 0 },
+    { "-rise",       MSTA_SDC_FLAG, 0 },
+    { "-fall",       MSTA_SDC_FLAG, 0 },
+    { NULL,          MSTA_SDC_FLAG, 0 } };
 
 static void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    int fEarly     = Msta_SdcHasFlag( pCmd, "-early" );
-    int fLate      = Msta_SdcHasFlag( pCmd, "-late" );
-    int fCellDelay = Msta_SdcHasFlag( pCmd, "-cell_delay" );
+    int fEarly     = Msta_SdcHasFlag( pCmd, "-early" ) || !Msta_SdcHasFlag( pCmd, "-late" );
+    int fLate      = Msta_SdcHasFlag( pCmd, "-late" ) || !Msta_SdcHasFlag( pCmd, "-early" );
     int fCellCheck = Msta_SdcHasFlag( pCmd, "-cell_check" );
-    int fNetDelay  = Msta_SdcHasFlag( pCmd, "-net_delay" );
-    int fClock     = Msta_SdcHasFlag( pCmd, "-clock" );
-    int fData      = Msta_SdcHasFlag( pCmd, "-data" );
-    int fRise      = Msta_SdcHasFlag( pCmd, "-rise" );
-    int fFall      = Msta_SdcHasFlag( pCmd, "-fall" );
-    char **pRest = pCmd->ppPos;
-    int nRest = pCmd->nPos, i;
+    int fCellDelay = Msta_SdcHasFlag( pCmd, "-cell_delay" ) ||
+                     ( !fCellCheck && !Msta_SdcHasFlag( pCmd, "-net_delay" ) );
+    int fClock     = Msta_SdcHasFlag( pCmd, "-clock" ) || !Msta_SdcHasFlag( pCmd, "-data" );
+    int fData      = Msta_SdcHasFlag( pCmd, "-data" ) || !Msta_SdcHasFlag( pCmd, "-clock" );
+    char Edge      = Msta_SdcCmdEdge( pCmd );
     double Factor;
+    int i, nApplied = 0;
 
-    if ( fRise && fFall )
-    { Msta_WarnOnce("set_timing_derate cannot combine -rise and -fall"); return; }
-    if ( !fCellDelay && !fCellCheck && !fNetDelay )
-        fCellDelay = 1;          /* 不写类型时只 derate 单元延迟 */
-    if ( fNetDelay && !fCellDelay && !fCellCheck )
-    {
-        Msta_WarnOnce("set_timing_derate -net_delay has no effect (msta has no net delay)");
-        p->nCommandsIgnored++;
-        return;
-    }
-    if ( nRest < 1 || !Msta_SdcIsNumber(pRest[0]) )
-    { Msta_WarnOnce("set_timing_derate needs a derate factor"); return; }
-    Factor = atof(pRest[0]);
-    if ( Factor <= 0.0 )
-    { Msta_WarnOnce("set_timing_derate: factor must be positive"); return; }
     if ( !fCellDelay && !fCellCheck )
-        return;                  /* -net_delay 单用：msta 没有线延迟，已经告警 */
-    /* 带对象：逐条记录。分对象只支持实例（get_cells）和时钟（get_clocks）。 */
-    if ( nRest > 1 )
+    { Msta_SdcReject( p, pCmd, "-net_delay is not modeled (msta has no net delay)" ); return; }
+    if ( !Msta_SdcGetNumber( p, pCmd, "factor", pCmd->pValue, MSTA_SDC_POSITIVE, &Factor ) )
+        return;
+    /* 分对象只支持实例（get_cells）和时钟（get_clocks）；其他种类的对象在 msta
+       的模型里没有对应量，整条作废。 */
+    for ( i = 0; i < pCmd->nObjs; i++ )
     {
-        for ( i = 1; i < nRest; i++ )
+        char Kind = Msta_SdcKindOf( pCmd->ppObjs[i] );
+        if ( Kind != 0 && Kind != 'C' && Kind != 'I' )
         {
-            char Kind = Msta_SdcKindOf( pRest[i] );
-            int nInst = -1;
-            MstaId Name = MSTA_NO_ID;
-            MstaObjDerate *pRec;
-            if ( Kind == 'C' )
-            {
-                MstaClock *pClock = Msta_SdcFindClock( p, pRest[i] );
-                if ( pClock == NULL )
-                {
-                    Msta_WarnOnce( "set_timing_derate: unknown clock \"%s\"; command rejected",
-                                   pRest[i] );
-                    return;
-                }
-                Name = pClock->Name;
-                if ( fRise || fFall )
-                    Msta_WarnOnce( "set_timing_derate -rise/-fall on a clock object is not modeled; "
-                                   "the clock tree keeps rise/fall merged" );
-            }
-            else
-            {
-                nInst = Msta_DesignFindInstByName( pDes, pRest[i] );
-                if ( nInst < 0 )
-                {
-                    /* 端口/网络/库单元上的 derate 在 msta 的模型里没有对应量。 */
-                    Msta_WarnOnce( "set_timing_derate object \"%s\" is not modeled "
-                                   "(only instances and clocks); command rejected", pRest[i] );
-                    return;
-                }
-            }
-            pRec = MstaObjDerateArrayAppend( &p->vObjDerate );
-            pRec->Kind = ( Kind == 'C' ) ? 'C' : 'I';
-            pRec->Inst = nInst;
-            pRec->Name = Name;
-            pRec->fRise = fRise;
-            pRec->fFall = fFall;
-            pRec->fCellCheck = fCellCheck;
-            pRec->Early = ( fEarly || !fLate ) ? Factor : 1.0;
-            pRec->Late  = ( fLate  || !fEarly ) ? Factor : 1.0;
+            Msta_SdcReject( p, pCmd, "object \"%s\" is not modeled (only instances and clocks)",
+                            pCmd->ppObjs[i] );
+            return;
         }
+    }
+    if ( pCmd->nObjs == 0 )
+    {
+        p->fDerateClock = fCellDelay && fClock;
+        p->fDerateData  = fCellDelay && fData;
+        if ( fEarly ) p->DerateEarly = Factor;
+        if ( fLate )  p->DerateLate  = Factor;
+        if ( fCellCheck && fEarly ) p->DerateCheckEarly = Factor;
+        if ( fCellCheck && fLate )  p->DerateCheckLate  = Factor;
         return;
     }
-    if ( fClock && !fData )      { p->fDerateClock = 1; p->fDerateData  = 0; }
-    else if ( fData && !fClock ) { p->fDerateClock = 0; p->fDerateData  = 1; }
-    else                         { p->fDerateClock = 1; p->fDerateData  = 1; }
-    if ( !fCellDelay ) { p->fDerateClock = 0; p->fDerateData = 0; }
-    if ( fEarly || !fLate ) p->DerateEarly = Factor;
-    if ( fLate  || !fEarly ) p->DerateLate  = Factor;
-    if ( fCellCheck )
+    for ( i = 0; i < pCmd->nObjs; i++ )
     {
-        if ( fEarly || !fLate ) p->DerateCheckEarly = Factor;
-        if ( fLate  || !fEarly ) p->DerateCheckLate  = Factor;
+        const char *pObj = pCmd->ppObjs[i];
+        MstaClock *pClock = Msta_SdcKindOf( pObj ) == 'C' ? Msta_SdcFindClock( p, pObj ) : NULL;
+        int nInst = pClock ? -1 : Msta_DesignFindInstByName( pDes, pObj );
+        MstaObjDerate *pRec;
+        if ( pClock == NULL && nInst < 0 )
+        {
+            Msta_SdcNote( pCmd, Msta_SdcKindOf( pObj ) == 'C' ? "unknown clock \"%s\"" : "unknown instance \"%s\"", pObj );
+            continue;
+        }
+        if ( pClock && Edge != 0 )
+            Msta_SdcNote( pCmd, "-rise/-fall on a clock object is not modeled; "
+                          "the clock tree keeps rise/fall merged" );
+        pRec = MstaObjDerateArrayAppend( &p->vObjDerate );
+        pRec->Kind  = pClock ? 'C' : 'I';
+        pRec->Inst  = nInst;
+        pRec->Name  = pClock ? pClock->Name : MSTA_NO_ID;
+        pRec->fRise = Edge == 'r';
+        pRec->fFall = Edge == 'f';
+        pRec->fCellCheck = fCellCheck;
+        pRec->Early = fEarly ? Factor : 1.0;
+        pRec->Late  = fLate  ? Factor : 1.0;
+        nApplied++;
     }
+    if ( nApplied == 0 )
+        Msta_SdcReject( p, pCmd, "none of the objects was found" );
 }
 
 /* 没点名工作条件时用的角：库里 default_operating_conditions 指的那个，没有就取
@@ -2772,13 +2259,15 @@ static MstaLibInfo *Msta_SdcDefaultOpCond( MstaLib *pLib, MstaId nLibrary, MstaO
 
 /* 按库里的 K 因子算延迟缩放系数：
      derate = 1 + k_volt*(V - Vnom) + k_temp*(T - Tnom)   （process 项不建模）
-   库没声明 K 因子（或没给 V/T）时系数保持 1.0，只把选的角记录/报出来。 */
-static void Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib )
+   库没声明 K 因子时系数保持 1.0，电压/温度只记录、报告。pCmd 是触发它的命令
+   （告警里用）；fWarnNoK=0 时"库里没有 K 因子"由调用方自己告警。
+   返回 1 表示至少一个角用上了库里的 K 因子。 */
+static int Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib, const MstaSdcCmd *pCmd, int fWarnNoK )
 {
-    int nCorners = 2, c;
+    int c, fHasK = 0;
     if ( pLib == NULL )
-        return;
-    for ( c = 0; c < nCorners; c++ )
+        return 0;
+    for ( c = 0; c < 2; c++ )
     {
         int fMax = ( c == 0 );
         double v = fMax ? p->VoltageMax : p->VoltageMin;
@@ -2800,13 +2289,15 @@ static void Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib )
         if ( pCond->KVolt < 0.0 && pCond->KTemp < 0.0 && pCond->KProcess < 0.0 )
         {
             /* 库里没有 K 因子：表值按读进来的原样用，只把请求的电压/温度报出来。 */
-            if ( ( Msta_IsSet(v) && pInfo->NomVoltage >= 0.0 && v != pInfo->NomVoltage ) ||
-                 ( Msta_IsSet(t) && pInfo->NomTemperature >= 0.0 && t != pInfo->NomTemperature ) )
-                Msta_WarnOnce( "set_operating_conditions: the library has no k_volt/k_temp "
-                               "factor; delay tables are used as read (the requested "
-                               "voltage/temperature is recorded and reported only)" );
+            if ( fWarnNoK &&
+                 ( ( Msta_IsSet(v) && pInfo->NomVoltage >= 0.0 && v != pInfo->NomVoltage ) ||
+                   ( Msta_IsSet(t) && pInfo->NomTemperature >= 0.0 && t != pInfo->NomTemperature ) ) )
+                Msta_SdcNote( pCmd, "the library has no k_volt/k_temp factor; delay tables are "
+                              "used as read (the requested voltage/temperature is recorded and "
+                              "reported only)" );
             continue;
         }
+        fHasK = 1;
         dV = ( Msta_IsSet(v) && pInfo->NomVoltage >= 0.0 ) ? v - pInfo->NomVoltage : 0.0;
         dT = ( Msta_IsSet(t) && pInfo->NomTemperature >= 0.0 ) ? t - pInfo->NomTemperature : 0.0;
         if ( pCond->KVolt >= 0.0 )    Derate += pCond->KVolt * dV;
@@ -2815,10 +2306,11 @@ static void Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib )
         if ( fMax ) p->KFactorDerateLate = Derate;
         else        p->KFactorDerateEarly = Derate;
         if ( Derate != 1.0 )
-            Msta_WarnOnce( "set_operating_conditions: K-factor derate %.4f applied "
-                           "(%.3f V / %.1f C); verify it against your reference tool",
-                           Derate, Msta_IsSet(v) ? v : 0.0, Msta_IsSet(t) ? t : 0.0 );
+            Msta_SdcNote( pCmd, "K-factor derate %.4f applied (%.3f V / %.1f C); K factors are "
+                          "a linear approximation of the characterized tables",
+                          Derate, Msta_IsSet(v) ? v : 0.0, Msta_IsSet(t) ? t : 0.0 );
     }
+    return fHasK;
 }
 
 /* 统计声明某个 operating condition 的库，发现同名角的歧义。 */
@@ -2831,22 +2323,33 @@ static int Msta_SdcOpCondLibraryCount( MstaLib *pLib, const char *pName )
     return n;
 }
 
+/* 库名是否是已读入的某个库。 */
+static int Msta_SdcLibraryExists( MstaLib *pLib, MstaId nLibrary )
+{
+    int j;
+    for ( j = 0; j < pLib->vLibs.nSize; j++ )
+        if ( MstaLibInfoArrayAt(&pLib->vLibs,j)->Name == nLibrary )
+            return 1;
+    return 0;
+}
+
 /* set_operating_conditions [条件名] [-max 条件名] [-min 条件名] [-library 库]
        [-max_library 库] [-min_library 库] [-analysis_type single|bc_wc]
        [-voltage 电压] [-temperature 温度]
-   选择 max/min 两个角的工作条件与对应的 Liberty 库。-object_list 不建模；
-   -analysis_type on_chip_variation 整条拒绝。 */
+   选择 max/min 两个角的工作条件与对应的 Liberty 库。不写 -max/-min 时，
+   位置参数里的条件名两个角共用。-object_list 不建模；
+   -analysis_type on_chip_variation 不建模。 */
 static const MstaSdcOpt s_vOperatingConditionsOpts[] = {
-    { "-library",       MSTA_SDC_VALUE },
-    { "-max_library",   MSTA_SDC_VALUE },
-    { "-min_library",   MSTA_SDC_VALUE },
-    { "-max",           MSTA_SDC_VALUE },
-    { "-min",           MSTA_SDC_VALUE },
-    { "-analysis_type", MSTA_SDC_VALUE },
-    { "-voltage",       MSTA_SDC_VALUE },
-    { "-temperature",   MSTA_SDC_VALUE },
-    { "-object_list",   MSTA_SDC_VALUE },
-    { NULL,             MSTA_SDC_FLAG  } };
+    { "-library",       MSTA_SDC_VALUE, 0               },
+    { "-max_library",   MSTA_SDC_VALUE, 0               },
+    { "-min_library",   MSTA_SDC_VALUE, 0               },
+    { "-max",           MSTA_SDC_VALUE, 0               },
+    { "-min",           MSTA_SDC_VALUE, 0               },
+    { "-analysis_type", MSTA_SDC_VALUE, 0               },
+    { "-voltage",       MSTA_SDC_VALUE, 0               },
+    { "-temperature",   MSTA_SDC_VALUE, 0               },
+    { "-object_list",   MSTA_SDC_OBJECTS, MSTA_SDC_IGNORE },
+    { NULL,             MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
@@ -2858,169 +2361,105 @@ static void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLi
     const char *pAnalysis   = Msta_SdcOptValue( pCmd, "-analysis_type" );
     const char *pVolt       = Msta_SdcOptValue( pCmd, "-voltage" );
     const char *pTemp       = Msta_SdcOptValue( pCmd, "-temperature" );
-    int i;
-    MstaId nLibraryMax, nLibraryMin;
+    int fMaxLibrary = pLibName != NULL || pMaxLibName != NULL;
+    int fMinLibrary = pLibName != NULL || pMinLibName != NULL;
+    MstaId nLibraryMax = pMaxLibName ? Msta_NameId(pMaxLibName) : pLibName ? Msta_NameId(pLibName) : MSTA_NO_ID;
+    MstaId nLibraryMin = pMinLibName ? Msta_NameId(pMinLibName) : pLibName ? Msta_NameId(pLibName) : MSTA_NO_ID;
     MstaLibInfo *pMaxInfo = NULL, *pMinInfo = NULL;
-    int fMaxLibrarySpecified, fMinLibrarySpecified;
+    double Volt = 0.0, Temp = 0.0;
 
-    if ( Msta_SdcOptValue( pCmd, "-object_list" ) )
-        Msta_WarnOnce( "set_operating_conditions: -object_list is not modeled" );
     if ( pAnalysis && strcasecmp(pAnalysis,"on_chip_variation") == 0 )
-    {
-        Msta_WarnOnce( "set_operating_conditions: -analysis_type on_chip_variation is "
-                       "not modeled; command rejected" );
-        p->nCommandsIgnored++;
-        return;
-    }
-    if ( pAnalysis && strcasecmp(pAnalysis,"single") != 0 &&
-         strcasecmp(pAnalysis,"bc_wc") != 0 )
-    {
-        Msta_WarnOnce( "set_operating_conditions: unknown -analysis_type \"%s\"; command rejected",
-                       pAnalysis );
-        p->nCommandsIgnored++;
-        return;
-    }
+    { Msta_SdcReject( p, pCmd, "-analysis_type on_chip_variation is not modeled" ); return; }
+    if ( pAnalysis && strcasecmp(pAnalysis,"single") != 0 && strcasecmp(pAnalysis,"bc_wc") != 0 )
+    { Msta_SdcReject( p, pCmd, "unknown -analysis_type \"%s\"", pAnalysis ); return; }
     if ( pAnalysis && strcasecmp(pAnalysis,"single") == 0 &&
-         (pMax != NULL || pMin != NULL || pMaxLibName != NULL || pMinLibName != NULL) )
-    {
-        Msta_WarnOnce( "set_operating_conditions: -analysis_type single cannot use "
-                       "-max/-min or -max_library/-min_library; command rejected" );
-        p->nCommandsIgnored++;
+         ( pMax != NULL || pMin != NULL || pMaxLibName != NULL || pMinLibName != NULL ) )
+    { Msta_SdcReject( p, pCmd, "-analysis_type single cannot use -max/-min or -max_library/-min_library" ); return; }
+    if ( ( pVolt && !Msta_SdcGetNumber( p, pCmd, "-voltage", pVolt, MSTA_SDC_POSITIVE, &Volt ) ) ||
+         ( pTemp && !Msta_SdcGetNumber( p, pCmd, "-temperature", pTemp, MSTA_SDC_ANY, &Temp ) ) )
         return;
-    }
-    nLibraryMax = pLibName ? Msta_NameId(pLibName) : MSTA_NO_ID;
-    nLibraryMin = nLibraryMax;
-    if ( pMaxLibName ) nLibraryMax = Msta_NameId(pMaxLibName);
-    if ( pMinLibName ) nLibraryMin = Msta_NameId(pMinLibName);
-    fMaxLibrarySpecified = pLibName != NULL || pMaxLibName != NULL;
-    fMinLibrarySpecified = pLibName != NULL || pMinLibName != NULL;
-    for ( i = 0; i < 2; i++ )
-    {
-        MstaId nLibrary = i ? nLibraryMin : nLibraryMax;
-        int fSpecified = i ? fMinLibrarySpecified : fMaxLibrarySpecified;
-        if ( fSpecified && nLibrary != MSTA_NO_ID )
-        {
-            int j, fFound = 0;
-            for ( j = 0; j < pLib->vLibs.nSize; j++ )
-                if ( MstaLibInfoArrayAt(&pLib->vLibs,j)->Name == nLibrary )
-                    { fFound = 1; break; }
-            if ( !fFound )
-            {
-                Msta_WarnOnce("set_operating_conditions: unknown library \"%s\"",
-                              Msta_NameStr(nLibrary));
-                return;
-            }
-        }
-    }
-    /* 不写 -max/-min 时，第一个位置参数是两个角共用的条件名。 */
-    if ( pMax == NULL && pMin == NULL )
-    {
-        if ( pCmd->nPos > 0 )
-            pMax = pMin = pCmd->ppPos[0];
-        else if ( pVolt == NULL && pTemp == NULL && !fMaxLibrarySpecified &&
-                  !fMinLibrarySpecified )
-        {
-            Msta_WarnOnce( "set_operating_conditions needs a condition name, library, "
-                           "or -voltage/-temperature" );
-            return;
-        }
-    }
-    if ( pMax != NULL )
-    {
-        pMaxInfo = Msta_LibFindOpCond(pLib,pMax,nLibraryMax,NULL);
-        if ( pMaxInfo == NULL )
-        {
-            Msta_WarnOnce( "set_operating_conditions: no library declares operating "
-                           "condition \"%s\"; constraint ignored", pMax );
-            return;
-        }
-    }
-    if ( pMin != NULL )
-    {
-        pMinInfo = Msta_LibFindOpCond(pLib,pMin,nLibraryMin,NULL);
-        if ( pMinInfo == NULL )
-        {
-            Msta_WarnOnce( "set_operating_conditions: no library declares operating "
-                           "condition \"%s\"; constraint ignored", pMin );
-            return;
-        }
-    }
+    if ( fMaxLibrary && !Msta_SdcLibraryExists( pLib, nLibraryMax ) )
+    { Msta_SdcReject( p, pCmd, "unknown library \"%s\"", Msta_NameStr(nLibraryMax) ); return; }
+    if ( fMinLibrary && !Msta_SdcLibraryExists( pLib, nLibraryMin ) )
+    { Msta_SdcReject( p, pCmd, "unknown library \"%s\"", Msta_NameStr(nLibraryMin) ); return; }
+    if ( pMax == NULL && pMin == NULL && pCmd->nObjs == 1 )
+        pMax = pMin = pCmd->ppObjs[0];
+    else if ( pCmd->nObjs == 1 )
+    { Msta_SdcReject( p, pCmd, "a condition name cannot be combined with -max/-min" ); return; }
+    if ( pMax == NULL && pMin == NULL && pVolt == NULL && pTemp == NULL && !fMaxLibrary && !fMinLibrary )
+    { Msta_SdcReject( p, pCmd, "needs a condition name, a library, or -voltage/-temperature" ); return; }
+    if ( pMax != NULL && ( pMaxInfo = Msta_LibFindOpCond( pLib, pMax, nLibraryMax, NULL ) ) == NULL )
+    { Msta_SdcReject( p, pCmd, "no library declares operating condition \"%s\"", pMax ); return; }
+    if ( pMin != NULL && ( pMinInfo = Msta_LibFindOpCond( pLib, pMin, nLibraryMin, NULL ) ) == NULL )
+    { Msta_SdcReject( p, pCmd, "no library declares operating condition \"%s\"", pMin ); return; }
 
     /* 给出的名字都有效，库与工艺角的改动一起生效。 */
-    if ( fMaxLibrarySpecified ) p->OpCondLibraryMax = nLibraryMax;
-    if ( fMinLibrarySpecified ) p->OpCondLibraryMin = nLibraryMin;
+    if ( fMaxLibrary ) p->OpCondLibraryMax = nLibraryMax;
+    if ( fMinLibrary ) p->OpCondLibraryMin = nLibraryMin;
     if ( pMaxInfo != NULL )
     {
         p->OpCondMax = Msta_NameId(pMax);
-        if ( !fMaxLibrarySpecified )
+        if ( !fMaxLibrary )
         {
             if ( Msta_SdcOpCondLibraryCount(pLib,pMax) > 1 )
-                Msta_WarnOnce("set_operating_conditions: max corner \"%s\" is in multiple libraries; specify -max_library",
-                              pMax);
+                Msta_SdcNote( pCmd, "max corner \"%s\" is in multiple libraries; specify -max_library", pMax );
             p->OpCondLibraryMax = pMaxInfo->Name;
         }
     }
-    else if ( fMaxLibrarySpecified && p->OpCondMax != MSTA_NO_ID &&
+    else if ( fMaxLibrary && p->OpCondMax != MSTA_NO_ID &&
               Msta_LibFindOpCond(pLib,Msta_NameStr(p->OpCondMax),nLibraryMax,NULL) == NULL )
         p->OpCondMax = MSTA_NO_ID;
     if ( pMinInfo != NULL )
     {
         p->OpCondMin = Msta_NameId(pMin);
-        if ( !fMinLibrarySpecified )
+        if ( !fMinLibrary )
         {
             if ( Msta_SdcOpCondLibraryCount(pLib,pMin) > 1 )
-                Msta_WarnOnce("set_operating_conditions: min corner \"%s\" is in multiple libraries; specify -min_library",
-                              pMin);
+                Msta_SdcNote( pCmd, "min corner \"%s\" is in multiple libraries; specify -min_library", pMin );
             p->OpCondLibraryMin = pMinInfo->Name;
         }
     }
-    else if ( fMinLibrarySpecified && p->OpCondMin != MSTA_NO_ID &&
+    else if ( fMinLibrary && p->OpCondMin != MSTA_NO_ID &&
               Msta_LibFindOpCond(pLib,Msta_NameStr(p->OpCondMin),nLibraryMin,NULL) == NULL )
         p->OpCondMin = MSTA_NO_ID;
 
     /* 只给电压/温度的写法，对带 K 因子的库同样有效。 */
-    if ( pVolt != NULL ) p->VoltageMax = p->VoltageMin = atof( pVolt );
-    if ( pTemp != NULL ) p->TempMax = p->TempMin = atof( pTemp );
-    Msta_SdcUpdateKFactor( p, pLib );
+    if ( pVolt != NULL ) p->VoltageMax = p->VoltageMin = Volt;
+    if ( pTemp != NULL ) p->TempMax = p->TempMin = Temp;
+    Msta_SdcUpdateKFactor( p, pLib, pCmd, 1 );
 }
 
 /* set_voltage 最高电压 [-min 最低电压] [-object_list 电源网络]
-   记录设计的工作电压。分对象的电压要电源域模型，未建模（告警）。 */
+   记录设计的工作电压。分对象的电压要电源域模型，不建模。 */
 static const MstaSdcOpt s_vVoltageOpts[] = {
-    { "-min",         MSTA_SDC_VALUE },
-    { "-object_list", MSTA_SDC_VALUE },
-    { NULL,           MSTA_SDC_FLAG  } };
+    { "-min",         MSTA_SDC_VALUE, 0               },
+    { "-object_list", MSTA_SDC_OBJECTS, MSTA_SDC_IGNORE },
+    { NULL,           MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetVoltage( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     const char *pMin = Msta_SdcOptValue( pCmd, "-min" );
-    int i;
-    if ( Msta_SdcOptValue( pCmd, "-object_list" ) )
-        Msta_WarnOnce( "set_voltage: -object_list needs a power domain model; ignored" );
-    for ( i = 0; i < pCmd->nPos; i++ )
-        if ( !Msta_SdcIsNumber(pCmd->ppPos[i]) )
-        {
-            Msta_WarnOnce( "set_voltage: per-object voltage is not modeled; ignored" );
-            return;
-        }
-    if ( pCmd->nPos < 1 || !Msta_SdcIsNumber(pCmd->ppPos[0]) )
-    { Msta_WarnOnce("set_voltage needs a voltage value"); return; }
-    p->VoltageMax = atof( pCmd->ppPos[0] );
-    p->VoltageMin = pMin ? atof( pMin ) : p->VoltageMax;
-    Msta_SdcUpdateKFactor( p, pLib );
+    double Max, Min;
+    if ( pCmd->nObjs > 0 )
+    { Msta_SdcReject( p, pCmd, "per-object voltage is not modeled" ); return; }
+    if ( !Msta_SdcGetNumber( p, pCmd, "voltage", pCmd->pValue, MSTA_SDC_POSITIVE, &Max ) ||
+         ( pMin && !Msta_SdcGetNumber( p, pCmd, "-min", pMin, MSTA_SDC_POSITIVE, &Min ) ) )
+        return;
+    p->VoltageMax = Max;
+    p->VoltageMin = pMin ? Min : Max;
     /* 延迟表只能靠库里的 k 因子随电压缩放；没有 k 因子时 set_voltage 只被记录、
-       不改变延迟，电压偏离标称值时要告警，免得用户以为结果已按新电压算过。 */
-    if ( pLib != NULL && pLib->vLibs.nSize > 0 )
+       不改变延迟，电压偏离标称值时要告警，免得用户以为结果已按新电压算过。
+       有 k 因子时缩放系数由 Msta_SdcUpdateKFactor 报出。 */
+    if ( !Msta_SdcUpdateKFactor( p, pLib, pCmd, 0 ) && pLib != NULL && pLib->vLibs.nSize > 0 )
     {
         double Nominal = MstaLibInfoArrayAt(&pLib->vLibs,0)->NomVoltage;
         if ( Nominal >= 0.0 && fabs(p->VoltageMax - Nominal) > 1e-6 )
-            Msta_WarnOnce( "set_voltage: %.3f V is recorded, but the library has no "
-                           "k_volt factor; delay tables are used as read (nominal %.3f V)",
-                           p->VoltageMax, Nominal );
+            Msta_SdcNote( pCmd, "%.3f V is recorded, but the library has no k_volt factor; "
+                          "delay tables are used as read (nominal %.3f V)", p->VoltageMax, Nominal );
     }
 }
 
-/* 把时间/电容单位文本换算成内部比例。 */
+/* 把时间/电容单位文本换算成内部比例（ps / fF）；不认识时返回 0。 */
 static double Msta_SdcUnitScale( const char *pText, int fTime )
 {
     char *pEnd;
@@ -3045,43 +2484,36 @@ static double Msta_SdcUnitScale( const char *pText, int fTime )
 }
 
 /* set_units [-time 单位] [-capacitance 单位]
-   把单位用到后面命令的数值上。其他单位（-resistance 等）不建模，告警后忽略。 */
+   把单位用到后面命令的数值上。其他单位（-resistance 等）不建模。 */
 static const MstaSdcOpt s_vUnitsOpts[] = {
-    { "-time",        MSTA_SDC_VALUE },
-    { "-capacitance", MSTA_SDC_VALUE },
-    { NULL,           MSTA_SDC_FLAG  } };
+    { "-time",        MSTA_SDC_VALUE, 0               },
+    { "-capacitance", MSTA_SDC_VALUE, 0               },
+    { "-resistance",  MSTA_SDC_VALUE, MSTA_SDC_IGNORE },
+    { "-voltage",     MSTA_SDC_VALUE, MSTA_SDC_IGNORE },
+    { "-current",     MSTA_SDC_VALUE, MSTA_SDC_IGNORE },
+    { "-power",       MSTA_SDC_VALUE, MSTA_SDC_IGNORE },
+    { NULL,           MSTA_SDC_FLAG,  0               } };
 
 static void Msta_SdcSetUnits( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     const char *pTime = Msta_SdcOptValue( pCmd, "-time" );
     const char *pCap  = Msta_SdcOptValue( pCmd, "-capacitance" );
-    double Scale;
-    int i;
-    /* 命令里每个以 - 开头、又不是 -time/-capacitance 的词都告警一次
-       （包括负数，也包括被当成值取走的词）。 */
-    for ( i = 1; i < pCmd->argc; i++ )
-        if ( pCmd->argv[i][0] == '-' && strcmp(pCmd->argv[i],"-time") &&
-             strcmp(pCmd->argv[i],"-capacitance") )
-            Msta_WarnOnce("set_units option \"%s\" is not modeled; ignored",pCmd->argv[i]);
-    if ( pTime )
-    {
-        Scale = Msta_SdcUnitScale(pTime,1);
-        if ( Scale > 0.0 ) p->TimeScalePs = Scale;
-        else Msta_WarnOnce("set_units: unsupported time unit \"%s\"",pTime);
-    }
-    if ( pCap )
-    {
-        Scale = Msta_SdcUnitScale(pCap,0);
-        if ( Scale > 0.0 ) p->CapScaleFf = Scale;
-        else Msta_WarnOnce("set_units: unsupported capacitance unit \"%s\"",pCap);
-    }
+    double TimeScale = pTime ? Msta_SdcUnitScale( pTime, 1 ) : 0.0;
+    double CapScale  = pCap  ? Msta_SdcUnitScale( pCap, 0 )  : 0.0;
+    if ( pTime && TimeScale <= 0.0 )
+    { Msta_SdcReject( p, pCmd, "unsupported time unit \"%s\"", pTime ); return; }
+    if ( pCap && CapScale <= 0.0 )
+    { Msta_SdcReject( p, pCmd, "unsupported capacitance unit \"%s\"", pCap ); return; }
+    if ( pTime ) p->TimeScalePs = TimeScale;
+    if ( pCap )  p->CapScaleFf  = CapScale;
 }
 
 /* =====================================================================
    读入与分发
    ===================================================================== */
 
-static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv );
+static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv,
+                           const int *pArg );
 
 /* 集合是否用了 -quiet：用了就不报 "没匹配到对象"。 */
 static int Msta_SdcIsQuiet( const char *pText )
@@ -3726,14 +3158,38 @@ static int Msta_SdcExpandOfObjects( MstaSdc *pSdc, MstaDesign *pDes, char *pOfMa
     }
     Msta_SdcArgListFree( &Patterns );
     Msta_SdcArgListFree( &Parents );
-    if ( pL->nSize == nBeg )
-        Msta_WarnOnce( "-of_objects matched no objects; command skipped" );
-    return pL->nSize - nBeg;
+    return pL->nSize - nBeg;          /* 一个都没有时由 Msta_SdcExpandRecord 作废整条命令 */
+}
+
+/* 集合标记对应的 SDC 命令名，告警用。 */
+static const char *Msta_SdcCollectionName( char Kind )
+{
+    switch ( Kind )
+    {
+        case 'P': return "get_ports";
+        case 'G': return "get_pins";
+        case 'N': return "get_nets";
+        case 'C': return "get_clocks";
+        case 'I': return "get_cells";
+        case 'L': return "get_libs";
+        case 'B': return "get_lib_cells";
+        case 'Y': return "get_lib_pins";
+    }
+    return "collection";
+}
+
+/* 给了对象集合、但集合是空的：整条命令作废。不能把它当成"没写对象"，
+   否则 set_timing_derate 这类"不写对象就是全局"的命令会把约束加到整个设计上。 */
+static void Msta_SdcEmptyCollection( MJsonValue *pRecord, const char *pWhat, const char *pForm )
+{
+    MJsonValue *pName = Msta_JsonAt( pRecord, 0 );
+    Msta_WarnOnce( "%s: object collection [%s%s] is empty; constraint rejected",
+                   pName ? pName->pStr : "sdc", pWhat, pForm );
 }
 
 static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc *pSdc )
 {
-    int i;
+    int i, k, nBefore;
     s_Args.nSize = 0;
     free( s_pArgHash );
     s_pArgHash = NULL;
@@ -3747,11 +3203,17 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
         if ( pWord == NULL || pWord->Kind != MJSON_STRING )
             return -1;
         pText = pWord->pStr;
+        nBefore = s_Args.nSize;
         if ( pText[0] == '\036' && pText[1] == 'A' )
         {
             if ( Msta_SdcExpandAll( pSdc, pDes, pText + 2, &s_Args ) < 0 )
             {
                 Msta_WarnOnce( "sdc collection \"%s\" is not modeled; command skipped", pText + 2 );
+                return 0;
+            }
+            if ( s_Args.nSize == nBefore )
+            {
+                Msta_SdcEmptyCollection( pRecord, strncmp( pText + 2, "all_", 4 ) ? "all_" : "", pText + 2 );
                 return 0;
             }
         }
@@ -3793,6 +3255,13 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
                 if ( Msta_SdcExpandOfObjects( pSdc, pDes, pOf, pPart, Kind,
                                               pMinus, nMinus, &s_Args ) < 0 )
                     return 0;               /* 父对象解析不了：丢这条命令（上面已告警） */
+                if ( s_Args.nSize == nBefore )
+                {
+                    Msta_SdcEmptyCollection( pRecord, Msta_SdcCollectionName( Kind ), " -of_objects" );
+                    return 0;
+                }
+                for ( k = nBefore; k < s_Args.nSize; k++ )
+                    s_Args.pArg[k] = i;
                 continue;
             }
             while ( *pPart )
@@ -3826,9 +3295,16 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
                 if ( pNext == NULL ) break;
                 pPart = pNext;
             }
+            if ( s_Args.nSize == nBefore )
+            {
+                Msta_SdcEmptyCollection( pRecord, Msta_SdcCollectionName( Kind ), "" );
+                return 0;
+            }
         }
         else
             Msta_SdcArgListPush( &s_Args, pText, 0, 0 );
+        for ( k = nBefore; k < s_Args.nSize; k++ )
+            s_Args.pArg[k] = i;
     }
     Msta_SdcBuildArgHash();
     return s_Args.nSize;
@@ -3988,7 +3464,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
             p->nCommandsIgnored++;
             continue;
         }
-        Msta_SdcRunOne( p, pDes, pLib, argc, s_Args.ppText );
+        Msta_SdcRunOne( p, pDes, pLib, argc, s_Args.ppText, s_Args.pArg );
     }
     Msta_SdcScratchFree();
     Msta_JsonFree( pCommands );
@@ -4022,52 +3498,54 @@ static const struct { const char *pName; const char *pNote; } s_vIgnoredCommands
     { "set_max_leakage_power", "not an STA constraint (power)" },
     { NULL, NULL } };
 
-/* 分发表：msta 建模的每条 SDC 命令一行 { 命令名, 解析模式, 选项表, 处理函数 }。
+/* 分发表：msta 建模的每条 SDC 命令一行，就是这条命令的语法：
+   { 命令名, 选项表, 位置参数开头的值, 对象至少几个, 对象最多几个（-1 = 不限）, 处理函数 }。
    选项表与处理函数见"各条命令"一节。 */
 static const MstaSdcCmdDef s_vSdcCommands[] = {
-    { "create_clock",             MSTA_SDC_SCAN,    s_vCreateClockOpts,         Msta_SdcCreateClock            },
-    { "create_generated_clock",   MSTA_SDC_SCAN,    s_vGeneratedClockOpts,      Msta_SdcCreateGeneratedClock   },
-    { "set_clock_uncertainty",    MSTA_SDC_SCAN,    s_vClockUncertaintyOpts,    Msta_SdcSetClockUncertainty    },
-    { "set_clock_latency",        MSTA_SDC_SCAN,    s_vClockLatencyOpts,        Msta_SdcSetClockLatency        },
-    { "set_propagated_clock",     MSTA_SDC_WORDS,   s_vPropagatedClockOpts,     Msta_SdcSetPropagatedClock     },
-    { "set_clock_transition",     MSTA_SDC_SCAN,    s_vClockTransitionOpts,     Msta_SdcSetClockTransition     },
-    { "set_clock_sense",          MSTA_SDC_SCAN,    s_vClockSenseOpts,          Msta_SdcSetClockSense          },
-    { "set_clock_groups",         MSTA_SDC_ORDERED, s_vClockGroupsOpts,         Msta_SdcSetClockGroups         },
-    { "set_input_delay",          MSTA_SDC_SCAN,    s_vPortDelayOpts,           Msta_SdcSetInputDelay          },
-    { "set_output_delay",         MSTA_SDC_SCAN,    s_vPortDelayOpts,           Msta_SdcSetOutputDelay         },
-    { "set_load",                 MSTA_SDC_SCAN,    s_vLoadOpts,                Msta_SdcSetLoad                },
-    { "set_input_transition",     MSTA_SDC_SCAN,    s_vInputTransitionOpts,     Msta_SdcSetInputTransition     },
-    { "set_driving_cell",         MSTA_SDC_SCAN,    s_vDrivingCellOpts,         Msta_SdcSetDrivingCell         },
-    { "set_ideal_network",        MSTA_SDC_SCAN,    s_vIdealNetworkOpts,        Msta_SdcSetIdealNetwork        },
-    { "set_ideal_latency",        MSTA_SDC_SCAN,    s_vIdealValueOpts,          Msta_SdcSetIdealLatency        },
-    { "set_ideal_transition",     MSTA_SDC_SCAN,    s_vIdealValueOpts,          Msta_SdcSetIdealTransition     },
-    { "set_case_analysis",        MSTA_SDC_SCAN,    s_vCaseAnalysisOpts,        Msta_SdcSetCaseAnalysis        },
-    { "set_logic_zero",           MSTA_SDC_WORDS,   s_vLogicOpts,               Msta_SdcSetLogicZero           },
-    { "set_logic_one",            MSTA_SDC_WORDS,   s_vLogicOpts,               Msta_SdcSetLogicOne            },
-    { "set_logic_dc",             MSTA_SDC_WORDS,   s_vLogicOpts,               Msta_SdcSetLogicDc             },
-    { "set_disable_timing",       MSTA_SDC_SCAN,    s_vDisableTimingOpts,       Msta_SdcSetDisableTiming       },
-    { "set_false_path",           MSTA_SDC_ORDERED, s_vPathExceptionOpts,       Msta_SdcSetFalsePath           },
-    { "set_multicycle_path",      MSTA_SDC_ORDERED, s_vPathExceptionOpts,       Msta_SdcSetMulticyclePath      },
-    { "set_max_delay",            MSTA_SDC_ORDERED, s_vPathDelayOpts,           Msta_SdcSetMaxDelay            },
-    { "set_min_delay",            MSTA_SDC_ORDERED, s_vPathDelayOpts,           Msta_SdcSetMinDelay            },
-    { "group_path",               MSTA_SDC_ORDERED, s_vGroupPathOpts,           Msta_SdcSetGroupPath           },
-    { "set_data_check",           MSTA_SDC_SCAN,    s_vDataCheckOpts,           Msta_SdcSetDataCheck           },
-    { "set_clock_gating_check",   MSTA_SDC_SCAN,    s_vClockGatingCheckOpts,    Msta_SdcSetClockGatingCheck    },
-    { "set_max_time_borrow",      MSTA_SDC_SCAN,    s_vMaxTimeBorrowOpts,       Msta_SdcSetMaxTimeBorrow       },
-    { "set_timing_derate",        MSTA_SDC_SCAN,    s_vTimingDerateOpts,        Msta_SdcSetTimingDerate        },
-    { "set_max_transition",       MSTA_SDC_SCAN,    s_vDrcLimitOpts,            Msta_SdcSetMaxTransition       },
-    { "set_max_fanout",           MSTA_SDC_SCAN,    s_vDrcLimitOpts,            Msta_SdcSetMaxFanout           },
-    { "set_max_capacitance",      MSTA_SDC_SCAN,    s_vDrcLimitOpts,            Msta_SdcSetMaxCapacitance      },
-    { "set_min_capacitance",      MSTA_SDC_SCAN,    s_vDrcLimitOpts,            Msta_SdcSetMinCapacitance      },
-    { "set_max_area",             MSTA_SDC_WORDS,   s_vMaxAreaOpts,             Msta_SdcSetMaxArea             },
-    { "set_operating_conditions", MSTA_SDC_SCAN,    s_vOperatingConditionsOpts, Msta_SdcSetOperatingConditions },
-    { "set_voltage",              MSTA_SDC_SCAN,    s_vVoltageOpts,             Msta_SdcSetVoltage             },
-    { "set_units",                MSTA_SDC_SCAN,    s_vUnitsOpts,               Msta_SdcSetUnits               },
-    { NULL,                       MSTA_SDC_SCAN,    NULL,                       NULL                           } };
+    { "create_clock",             s_vCreateClockOpts,         MSTA_SDC_NO_VALUE, 0, -1, Msta_SdcCreateClock            },
+    { "create_generated_clock",   s_vGeneratedClockOpts,      MSTA_SDC_NO_VALUE, 1,  1, Msta_SdcCreateGeneratedClock   },
+    { "set_clock_uncertainty",    s_vClockUncertaintyOpts,    MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetClockUncertainty    },
+    { "set_clock_latency",        s_vClockLatencyOpts,        MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetClockLatency        },
+    { "set_propagated_clock",     s_vNoOpts,                  MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetPropagatedClock     },
+    { "set_clock_transition",     s_vMinMaxRiseFallOpts,      MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetClockTransition     },
+    { "set_clock_sense",          s_vClockSenseOpts,          MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetClockSense          },
+    { "set_clock_groups",         s_vClockGroupsOpts,         MSTA_SDC_NO_VALUE, 0,  0, Msta_SdcSetClockGroups         },
+    { "set_input_delay",          s_vPortDelayOpts,           MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetInputDelay          },
+    { "set_output_delay",         s_vPortDelayOpts,           MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetOutputDelay         },
+    { "set_load",                 s_vLoadOpts,                MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetLoad                },
+    { "set_input_transition",     s_vInputTransitionOpts,     MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetInputTransition     },
+    { "set_driving_cell",         s_vDrivingCellOpts,         MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetDrivingCell         },
+    { "set_ideal_network",        s_vIdealNetworkOpts,        MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetIdealNetwork        },
+    { "set_ideal_latency",        s_vMinMaxRiseFallOpts,      MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetIdealLatency        },
+    { "set_ideal_transition",     s_vMinMaxRiseFallOpts,      MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetIdealTransition     },
+    { "set_case_analysis",        s_vNoOpts,                  MSTA_SDC_WORD,     1, -1, Msta_SdcSetCaseAnalysis        },
+    { "set_logic_zero",           s_vNoOpts,                  MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetLogicZero           },
+    { "set_logic_one",            s_vNoOpts,                  MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetLogicOne            },
+    { "set_logic_dc",             s_vNoOpts,                  MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetLogicDc             },
+    { "set_disable_timing",       s_vDisableTimingOpts,       MSTA_SDC_NO_VALUE, 1, -1, Msta_SdcSetDisableTiming       },
+    { "set_false_path",           s_vPathExceptionOpts,       MSTA_SDC_NO_VALUE, 0,  0, Msta_SdcSetFalsePath           },
+    { "set_multicycle_path",      s_vPathExceptionOpts,       MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetMulticyclePath      },
+    { "set_max_delay",            s_vPathDelayOpts,           MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetMaxDelay            },
+    { "set_min_delay",            s_vPathDelayOpts,           MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetMinDelay            },
+    { "group_path",               s_vGroupPathOpts,           MSTA_SDC_NO_VALUE, 0,  0, Msta_SdcSetGroupPath           },
+    { "set_data_check",           s_vDataCheckOpts,           MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetDataCheck           },
+    { "set_clock_gating_check",   s_vClockGatingCheckOpts,    MSTA_SDC_NO_VALUE, 0, -1, Msta_SdcSetClockGatingCheck    },
+    { "set_max_time_borrow",      s_vNoOpts,                  MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetMaxTimeBorrow       },
+    { "set_timing_derate",        s_vTimingDerateOpts,        MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetTimingDerate        },
+    { "set_max_transition",       s_vDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMaxTransition       },
+    { "set_max_fanout",           s_vDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMaxFanout           },
+    { "set_max_capacitance",      s_vDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMaxCapacitance      },
+    { "set_min_capacitance",      s_vDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMinCapacitance      },
+    { "set_max_area",             s_vNoOpts,                  MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetMaxArea             },
+    { "set_operating_conditions", s_vOperatingConditionsOpts, MSTA_SDC_NO_VALUE, 0,  1, Msta_SdcSetOperatingConditions },
+    { "set_voltage",              s_vVoltageOpts,             MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetVoltage             },
+    { "set_units",                s_vUnitsOpts,               MSTA_SDC_NO_VALUE, 0,  0, Msta_SdcSetUnits               },
+    { NULL,                       NULL,                       MSTA_SDC_NO_VALUE, 0,  0, NULL                           } };
 
-/* 执行一条已经展开好的命令（argv[0] 是命令名）。返回 1 表示交给了处理函数，
-   0 表示这条命令被忽略（已告警并计数）。 */
-static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv )
+/* 执行一条已经展开好的命令（argv[0] 是命令名，pArg[i] 是 argv[i] 来自第几个
+   Tcl 参数）。返回 1 表示交给了处理函数，0 表示这条命令被忽略（已告警并计数）。 */
+static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc, char **argv,
+                           const int *pArg )
 {
     const char *pCmd = argv[0];
     int i;
@@ -4078,7 +3556,8 @@ static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc
         {
             MstaSdcCmd Cmd;
             p->nCommandsRead++;
-            Msta_SdcParseCmd( &s_vSdcCommands[i], argc, argv, &Cmd );
+            if ( !Msta_SdcParseCmd( p, &s_vSdcCommands[i], argc, argv, pArg, &Cmd ) )
+                return 0;                       /* 语法有错：已告警并计入忽略数 */
             s_vSdcCommands[i].pfHandler( p, pDes, pLib, &Cmd );
             return 1;
         }

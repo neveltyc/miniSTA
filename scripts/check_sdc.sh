@@ -55,7 +55,7 @@ grep -Fq 'collection option -expression is not modeled; the command is skipped' 
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 grep -Fq 'unknown sdc command "set_max_transtion" (ignored)' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
-grep -Fq 'set_voltage: per-object voltage is not modeled; ignored' \
+grep -Fq 'set_voltage: per-object voltage is not modeled; constraint rejected' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 grep -Fq '1 command(s) skipped; the remaining constraints are applied' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
@@ -98,7 +98,7 @@ grep -Fq 'set_voltage: 0.950 V is recorded, but the library has no k_volt factor
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'setup : WNS   15.505 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'hold  : WNS    0.465 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
-grep -Fq 'set_operating_conditions: -analysis_type on_chip_variation is not modeled; command rejected' \
+grep -Fq 'set_operating_conditions: -analysis_type on_chip_variation is not modeled; constraint rejected' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 
 # 显式库限定必须精确匹配，不能静默改用另一个库里的同名单元。
@@ -331,15 +331,46 @@ fi
 # 手册里有、msta 没建模的选项：报告后整条命令作废。
 grep -Fq 'collection option -expression is not modeled; the command is skipped' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
-grep -Fq 'path exception option "-start" is not modeled; constraint rejected' \
+grep -Fq 'set_multicycle_path: option "-start" is not modeled; constraint rejected' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
-# "-min/-max value" 是别家工具的写法（手册里 -min/-max 只是开关），整条作废。
-grep -Fq 'set_ideal_latency: "-min/-max value" is not SDC 1.8 syntax; constraint rejected' \
+# "-max 0.5 -min 0.2" 不是 SDC 1.8 语法（-min/-max 只是开关，值只有一个），整条作废。
+grep -Fq 'set_ideal_latency: "-min 0.2" is not SDC 1.8 syntax (-min takes no value); constraint rejected' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 # 同一根网络上的第二个 create_clock 必须写 -add（不写是替换，msta 不做替换）。
-grep -Fq 'create_clock on a source that already has a clock needs -add; clock rejected' \
+grep -Fq 'create_clock: the source already has a clock (use -add for another one); constraint rejected' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 grep -Fq 'setup : WNS   17.737 ns' "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
+
+# 命令解析规则（docs/sdc.md）：写错的约束整条作废、告警并计入忽略数，
+# 其余约束照常生效。sdc_rules 在 generated.sdc 之后追加了 12 条写错的约束。
+RULES="${LOG}/testcases_sdc_features_sdc_rules.dofile.log"
+for rule in 'set_input_delay: option "-foo" is not modeled; constraint rejected' \
+            'create_clock: option "-name" needs a value; constraint rejected' \
+            'set_output_delay: option "-max" is given more than once; constraint rejected' \
+            'set_multicycle_path: cycle count must be positive (got -2); constraint rejected' \
+            'set_multicycle_path: cycle count must be a positive integer (got 2.5); constraint rejected' \
+            'set_input_delay: "-min 1.0" is not SDC 1.8 syntax (-min takes no value); constraint rejected' \
+            'set_load: unexpected value "0.02"; constraint rejected' \
+            'set_case_analysis: value "2" must be 0, 1, zero or one; constraint rejected' \
+            'set_case_analysis: value "rising" is not modeled (only 0, 1, zero and one); constraint rejected' \
+            'set_load: value must not be negative (got -0.05); constraint rejected' \
+            'set_timing_derate: object collection [get_clocks] is empty; constraint rejected' \
+            'set_timing_derate: object collection [get_cells -of_objects] is empty; constraint rejected' \
+            '12 command(s) were not modeled and were ignored'; do
+    grep -Fq -- "${rule}" "${RULES}" || { echo "sdc_rules: 缺少告警：${rule}" >&2; exit 1; }
+done
+# 负数是值：-2 不应被当成不认识的选项。
+if grep -Fq 'option "-2"' "${RULES}"; then
+    echo 'sdc_rules: 负数被当成了选项' >&2
+    exit 1
+fi
+# 作废的约束不留下任何影响：时序结果与只读 generated.sdc 的逐行相同
+# （空集合的 derate 若退化成全局系数，到达时间会变）。
+if ! diff <(grep -E 'WNS|arrival time|capture clock' "${LOG}/testcases_sdc_features_generated.dofile.log") \
+          <(grep -E 'WNS|arrival time|capture clock' "${RULES}") > /dev/null; then
+    echo 'sdc_rules: 作废的约束影响了时序结果' >&2
+    exit 1
+fi
 
 # 兼容层（读别家工具生成的 SDC 才用得到）单独在这里守一条：
 # all_inputs -no_clocks 应该被接受，并告警说明它不是 SDC 1.8 语法。
@@ -358,7 +389,7 @@ printf 'set_ideal_network -no_propagation [get_pins ct2/Y]\n' > "${LOG}/compat_i
      current_design ideal_demo; read_sdc ideal_network.sdc; \
      read_sdc ${LOG}/compat_ideal_network.sdc; report_clock_tree" ) \
     > "${LOG}/compat_ideal_network.log" 2>&1
-grep -Fq 'set_ideal_network -no_propagation is not SDC 1.8 syntax; honored as -no_propagate' \
+grep -Fq 'set_ideal_network: -no_propagation is not SDC 1.8 syntax; honored as -no_propagate' \
     "${LOG}/compat_ideal_network.log"
 # 认下来之后行为与 -no_propagate 一致（0.442 ns）；如果被丢掉会是整棵树的 0.584 ns。
 grep -Fq '最大插入延迟 0.442 ns' "${LOG}/compat_ideal_network.log"
