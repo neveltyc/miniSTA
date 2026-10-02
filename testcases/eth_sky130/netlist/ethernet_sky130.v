@@ -1,3 +1,36 @@
+// 本文件是 OpenCores "Ethernet MAC 10/100 Mbps"（ethmac）的 RTL 经逻辑综合得到的
+// sky130 门级网表，用作 miniSTA 的测试数据（综合工具与日期见下方原生成信息）。
+// 上游：https://opencores.org/projects/ethmac （镜像 https://github.com/freecores/ethmac）
+// 上游作者：Igor Mohor、Novan Hartadi、Mahmud Galela、Bill Dittenhofer、Olof Kindgren。
+// 上游各源文件的版权行为 "Copyright (C) 2001 Authors"（部分文件为 2001, 2002 或
+// 2001, 2011），许可声明原文如下；LGPL 2.1 全文见仓库 licenses/LGPL-2.1.txt。
+//
+////                                                              ////
+//// Copyright (C) 2001 Authors                                   ////
+////                                                              ////
+//// This source file may be used and distributed without         ////
+//// restriction provided that this copyright statement is not    ////
+//// removed from the file and that any derivative work contains  ////
+//// the original copyright notice and the associated disclaimer. ////
+////                                                              ////
+//// This source file is free software; you can redistribute it   ////
+//// and/or modify it under the terms of the GNU Lesser General   ////
+//// Public License as published by the Free Software Foundation; ////
+//// either version 2.1 of the License, or (at your option) any   ////
+//// later version.                                               ////
+////                                                              ////
+//// This source is distributed in the hope that it will be       ////
+//// useful, but WITHOUT ANY WARRANTY; without even the implied   ////
+//// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR      ////
+//// PURPOSE.  See the GNU Lesser General Public License for more ////
+//// details.                                                     ////
+////                                                              ////
+//// You should have received a copy of the GNU Lesser General    ////
+//// Public License along with this source; if not, download it   ////
+//// from http://www.opencores.org/lgpl.shtml                     ////
+////                                                              ////
+//////////////////////////////////////////////////////////////////////
+
 /////////////////////////////////////////////////////////////
 // Created by: Synopsys DC Expert(TM) in wire load mode
 // Version   : V-2023.12-SP3

@@ -1,3 +1,7 @@
+// 本文件改写自 OpenTimer（https://github.com/OpenTimer/OpenTimer）的 example/simple/simple.v，
+// 改动：删去 NOR2X1 u4 与线网 n2，触发器 f1 由 DFFNEGX1 改为 DFFPOSX1、D 端改接 n1。
+// OpenTimer 按 MIT 许可证分发，许可证全文见仓库 THIRD_PARTY_NOTICES.md。
+// Copyright (c) 2018-2021 Tsung-Wei Huang and Martin D. F. Wong
 module simple (
 inp1,
 inp2,
