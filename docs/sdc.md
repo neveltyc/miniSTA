@@ -39,6 +39,8 @@ get_nets -filter {fanout > 1}
 
 - 只有以 `-` 开头、后面跟字母的词才是选项。`-5`、`-0.1` 这样的负数永远是值，可以写在选项之间。
 - 不认识的选项、带值的选项缺值、同一个选项写两次，都会使整条约束作废。`-from` 与 `-rise_from` 算同一个选项。手册里有但未建模的选项各有说明：有的告警后忽略，有的使整条约束作废。
+- 带值的选项只带紧跟的一个 Tcl 参数。`-from`、`-to`、`-through`、`-group`、`set_clock_latency -clock` 这类对象选项的参数可以是一个名字、一个列表或一个集合：多个对象写成 `-from {a b}` 或 `-from [get_pins {a b}]`。`-from a b` 里的 `b` 不属于 `-from`，而是一个位置参数；路径类命令没有位置对象，这样写整条约束作废。列表里再套集合（如 `[list [get_pins a] [get_ports b]]`）未建模，整条约束作废；同类对象请写进同一个集合。
+- 只能带一个值的选项（如 `-name`、`-period`、`set_input_delay -clock`、`set_disable_timing -from`）收到列表或展开出多个名字的集合时，整条约束作废。`create_clock -waveform`、`create_generated_clock -edges` 与 `-edge_shift` 本身就是数值列表，照常接受 `{0 5}` 这样的写法。
 - 位置参数先写值，再写对象。值的个数是固定的：多出来的数值（例如 `-max 2 -min 1` 这种为两个角分别给值的写法）、对象太多或缺少对象，都会使整条约束作废。
 - 数值要在合理范围内：周期数必须是正整数，负载、转换时间、面积不能为负，周期、电压、`-multiply_by`、`group_path -weight` 等必须为正。`set_case_analysis` 只接受 `0`、`1`、`zero`、`one`。
 - 给了对象集合、但集合为空（例如 `get_clocks` 的模式没有匹配，或 `-of_objects` 没有找到对象）时，整条约束作废，不会当作"没写对象"处理。对象列表中找不到的对象逐个告警并跳过，一个都找不到时整条作废。

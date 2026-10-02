@@ -26,20 +26,22 @@
 
 MstaArrayDefine( int, MstaSdcIntArray )
 
-/* 选项的种类：决定解析器怎样取它的值。Tcl 里选项的值是紧跟的下一个参数；
-   一个参数可能是 get_* 集合，展开后是多个名字。 */
+/* 选项的种类：决定解析器怎样取它的值。选项的值都是紧跟的下一个 Tcl 参数；
+   这个参数可以是一个名字、一段 Tcl 列表文本（如 {a b}），也可以是 get_* 集合
+   （展开后是多个名字）。 */
 typedef enum {
     MSTA_SDC_FLAG,         /* 开关，如 -add：出现就算数 */
-    MSTA_SDC_VALUE,        /* 带一个值，如 -period 5：下一个参数，只能是一个词 */
-    MSTA_SDC_OBJECTS,      /* 带一组对象，如 -clock [get_clocks {a b}]：下一个参数里的
-                              所有名字（Tcl 列表 {a b} 也拆开） */
-    MSTA_SDC_LIST          /* 带一串对象，如 -from a b：Tcl 桥会把 -from/-to/-through/-group
-                              后面的列表拆成多个参数，所以一直取到下一个选项或数值为止 */
+    MSTA_SDC_VALUE,        /* 带一个值，如 -period 5、-clock clk：下一个参数只能是一个词，
+                              列表文本或展开出多个名字的集合都会使约束作废 */
+    MSTA_SDC_NUMBERS,      /* 带一个数值列表，如 -waveform {0 5}：下一个参数的整段文本
+                              原样作为值，由处理函数拆开、检查个数 */
+    MSTA_SDC_OBJECTS       /* 带一组对象，如 -from {a b}、-clock [get_clocks {a b}]：
+                              下一个参数里的所有名字（列表文本按空白拆开，集合展开） */
 } MstaSdcOptKind;
 
 /* 选项的附加属性，可以用 | 组合。 */
 #define MSTA_SDC_RF      1 /* 也认 -rise_xxx / -fall_xxx 写法，并记下用的是哪个边沿 */
-#define MSTA_SDC_REPEAT  2 /* 可以写多次，每次是单独的一组，如 -through、-group（只用于 LIST） */
+#define MSTA_SDC_REPEAT  2 /* 可以写多次，每次是单独的一组，如 -through、-group（只用于 OBJECTS） */
 #define MSTA_SDC_IGNORE  4 /* 认得但不建模：告警后忽略这个选项，约束照常生效 */
 #define MSTA_SDC_REJECT  8 /* 认得但不建模：出现就作废整条约束 */
 
@@ -65,9 +67,9 @@ typedef struct {
     int           argc;
     char        **argv;
     int          *pAt;         /* 选项出现的位置（argv 下标），0 = 没出现 */
-    const char  **ppValue;     /* MSTA_SDC_VALUE 选项的值 */
+    const char  **ppValue;     /* MSTA_SDC_VALUE / NUMBERS 选项的值 */
     char         *pEdge;       /* MSTA_SDC_RF 选项用的写法：'r' / 'f' / 0 */
-    int          *pListOpt;    /* 对象类选项（OBJECTS / LIST）的每次出现，按顺序：选项表下标、 */
+    int          *pListOpt;    /* MSTA_SDC_OBJECTS 选项的每次出现，按顺序：选项表下标、 */
     char         *pListEdge;   /*   边沿（'r' / 'f' / 0）、 */
     char       ***pppListWords;/*   对象名数组、 */
     int          *pListCount;  /*   对象个数 */

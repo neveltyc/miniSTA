@@ -145,6 +145,8 @@ int Msta_SdcResolveNets( MstaDesign *pDes, const char *pTarget, int **ppNets )
    并统一检查语法（规则见 docs/sdc.md 的"命令解析规则"）：
    - 只有"以 - 开头、后面跟字母"的词才是选项；-5 这样的负数永远是值；
    - 不认识的选项、带值选项缺值、同一个选项写了两次：作废整条约束；
+   - 选项的值是紧跟的一个 Tcl 参数；只能带一个值的选项收到列表或多个名字：
+     作废整条约束；
    - 位置参数开头可以有一个值，其余是对象；多出来的值、对象太多或太少：
      同样作废整条约束。
    处理函数只做语义，取结果用 Msta_SdcHasFlag / Msta_SdcOptValue /
@@ -262,20 +264,24 @@ static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaS
     return 1;
 }
 
-/* 把 Tcl 列表文本（如 -clock {a b} 传来的 "a b"）按空白拆成多个词，挂在临时内存上。 */
+/* Tcl 列表文本里的分隔符（多行花括号里还会有换行）。 */
+#define MSTA_SDC_SPACES " \t\r\n"
+
+/* 把 Tcl 列表文本（如 -from {a b} 传来的 "a b"）按空白拆成多个词，挂在临时内存上。 */
 static int Msta_SdcSplitWords( const char *pText, char ***pppWords )
 {
     char *pCopy = Msta_SdcArena( "%s", pText ), *pTok;
     char **ppWords = (char **)Msta_SdcArenaZeros( (int)strlen(pText), sizeof(char *) );
     int n = 0;
-    for ( pTok = strtok( pCopy, " \t" ); pTok != NULL; pTok = strtok( NULL, " \t" ) )
+    for ( pTok = strtok( pCopy, MSTA_SDC_SPACES ); pTok != NULL; pTok = strtok( NULL, MSTA_SDC_SPACES ) )
         ppWords[n++] = pTok;
     *pppWords = ppWords;
     return n;
 }
 
 /* 通用解析器：按 pDef 把 argv 从左到右拆进 *pCmd。pArg[i] 是 argv[i] 来自第几个
-   Tcl 参数，用来确定选项的值有多少个词。选项词按种类取值；其余的词都是位置参数。
+   Tcl 参数：集合在 argv 里展开成多个词，它们的 pArg 相同。带值的选项都取紧跟的
+   那一个 Tcl 参数，按种类解释；其余的词都是位置参数。
    语法有错时告警、作废整条约束（计入忽略数）并返回 0，处理函数就不会被调用。 */
 int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **argv,
                       const int *pArg, MstaSdcCmd *pCmd )
@@ -318,37 +324,38 @@ int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **ar
         if ( pCmd->pAt[k] == 0 )
             pCmd->pAt[k] = i;
         pCmd->pEdge[k] = Edge;
-        if ( pOpt->Kind == MSTA_SDC_FLAG )
-            ;
-        else if ( pOpt->Kind == MSTA_SDC_LIST )
+        if ( pOpt->Kind != MSTA_SDC_FLAG )
         {
-            /* 对象一直取到下一个选项词或数值：对象名不会是数，数是位置参数里的值。 */
-            for ( j = i + 1; j < argc; j++ )
-                if ( Msta_SdcLooksLikeOption( argv[j] ) || Msta_SdcIsNumber( argv[j] ) )
-                    break;
-            ppWords = argv + i + 1;
-            nWords  = j - i - 1;
-            if ( nWords == 0 )
-            { Msta_SdcReject( p, pCmd, "选项 \"%s\" 后面没有对象", argv[i] ); return 0; }
-        }
-        else
-        {
-            /* VALUE 和 OBJECTS 取紧跟的下一个参数（它展开出的所有词）。 */
+            /* 取紧跟的下一个 Tcl 参数：集合展开出的所有词，或者一段文本。 */
             if ( i + 1 >= argc || Msta_SdcLooksLikeOption( argv[i+1] ) )
             { Msta_SdcReject( p, pCmd, "选项 \"%s\" 缺少值", argv[i] ); return 0; }
             for ( j = i + 1; j < argc && pArg[j] == pArg[i+1]; j++ )
                 ;
             ppWords = argv + i + 1;
             nWords  = j - i - 1;
-            if ( pOpt->Kind == MSTA_SDC_VALUE && nWords > 1 )
-            { Msta_SdcReject( p, pCmd, "选项 \"%s\" 只能带一个值", argv[i] ); return 0; }
-            if ( pOpt->Kind == MSTA_SDC_VALUE )
-                pCmd->ppValue[k] = argv[i+1];
-            else if ( nWords == 1 && strpbrk( argv[i+1], " \t" ) != NULL )
-                nWords = Msta_SdcSplitWords( argv[i+1], &ppWords );
         }
-        if ( pOpt->Kind == MSTA_SDC_LIST || pOpt->Kind == MSTA_SDC_OBJECTS )
+        if ( pOpt->Kind == MSTA_SDC_VALUE || pOpt->Kind == MSTA_SDC_NUMBERS )
         {
+            /* VALUE 只能是一个词；NUMBERS 是一段数值列表文本，但也不能是集合。 */
+            if ( nWords > 1 || ( pOpt->Kind == MSTA_SDC_VALUE &&
+                                 strpbrk( argv[i+1], MSTA_SDC_SPACES ) != NULL ) )
+            { Msta_SdcReject( p, pCmd, "选项 \"%s\" 只能带一个值", argv[i] ); return 0; }
+            pCmd->ppValue[k] = argv[i+1];
+        }
+        else if ( pOpt->Kind == MSTA_SDC_OBJECTS )
+        {
+            /* 列表文本 {a b} 拆成多个对象名（空列表 {} 拆出 0 个）；集合已经展开过了，
+               不再拆，以免丢掉集合类型。 */
+            if ( nWords == 1 && ( argv[i+1][0] == 0 || strpbrk( argv[i+1], MSTA_SDC_SPACES ) != NULL ) )
+            {
+                /* 集合标记以 \036 开头。列表里套集合（如 [list [get_pins a] b]）时标记
+                   夹在文本中间，展开不了，作废而不是当成名字。 */
+                if ( strchr( argv[i+1], '\036' ) != NULL )
+                { Msta_SdcReject( p, pCmd, "选项 \"%s\" 的列表里套了集合，未建模", argv[i] ); return 0; }
+                nWords = Msta_SdcSplitWords( argv[i+1], &ppWords );
+            }
+            if ( nWords == 0 )
+            { Msta_SdcReject( p, pCmd, "选项 \"%s\" 后面没有对象", argv[i] ); return 0; }
             pCmd->pListOpt[pCmd->nLists]     = k;
             pCmd->pListEdge[pCmd->nLists]    = Edge;
             pCmd->pppListWords[pCmd->nLists] = ppWords;
@@ -357,7 +364,7 @@ int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **ar
         }
         if ( pOpt->Attr & MSTA_SDC_IGNORE )
             Msta_SdcNote( pCmd, "选项 \"%s\" 未建模，已忽略", argv[i] );
-        /* 跳过刚取走的值或对象（拆开的 Tcl 列表在 argv 里只占一个词） */
+        /* 跳过刚取走的那个 Tcl 参数（集合在 argv 里可能占多个词） */
         if ( pOpt->Kind != MSTA_SDC_FLAG )
             i = j - 1;
     }
@@ -381,7 +388,7 @@ int Msta_SdcHasFlag( const MstaSdcCmd *pCmd, const char *pName )
     return pCmd->pAt[ Msta_SdcOptIndex( pCmd, pName ) ] > 0;
 }
 
-/* MSTA_SDC_VALUE 选项的值，没写返回 NULL。 */
+/* MSTA_SDC_VALUE / NUMBERS 选项的值（NUMBERS 是整段列表文本），没写返回 NULL。 */
 const char *Msta_SdcOptValue( const MstaSdcCmd *pCmd, const char *pName )
 {
     return pCmd->ppValue[ Msta_SdcOptIndex( pCmd, pName ) ];
@@ -393,7 +400,8 @@ char Msta_SdcOptEdge( const MstaSdcCmd *pCmd, const char *pName )
     return pCmd->pEdge[ Msta_SdcOptIndex( pCmd, pName ) ];
 }
 
-/* 只能写一次的对象类选项（OBJECTS / LIST）：对象写进 *pppWords，返回个数；没写返回 0。 */
+/* 不带 MSTA_SDC_REPEAT 的 MSTA_SDC_OBJECTS 选项：对象写进 *pppWords，返回个数；
+   没写返回 0。可以写多次的选项按 pListOpt 等数组逐次取。 */
 int Msta_SdcOptList( const MstaSdcCmd *pCmd, const char *pName, char ***pppWords )
 {
     int k = Msta_SdcOptIndex( pCmd, pName ), l;

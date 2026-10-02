@@ -49,11 +49,11 @@ static int Msta_SdcNetHasClock( MstaSdc *p, int nNet )
    -period 的 "多周期波形"（{4 8}）写法不支持；只认标量。不写 -name 时，
    源端口名就是时钟名；同一个源上的第二个时钟要写 -add。 */
 const MstaSdcOpt Msta_SdcCreateClockOpts[] = {
-    { "-name",     MSTA_SDC_VALUE, 0 },
-    { "-period",   MSTA_SDC_VALUE, 0 },
-    { "-waveform", MSTA_SDC_VALUE, 0 },
-    { "-add",      MSTA_SDC_FLAG,  0 },
-    { NULL,        MSTA_SDC_FLAG,  0 } };
+    { "-name",     MSTA_SDC_VALUE,   0 },
+    { "-period",   MSTA_SDC_VALUE,   0 },
+    { "-waveform", MSTA_SDC_NUMBERS, 0 },
+    { "-add",      MSTA_SDC_FLAG,    0 },
+    { NULL,        MSTA_SDC_FLAG,    0 } };
 
 void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
@@ -152,18 +152,18 @@ static int Msta_SdcGetRatio( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pNa
        [-edges {e1 e2 e3} [-edge_shift {s1 s2 s3}]] 目标引脚
    创建支持分频、倍频和反相的生成时钟。-add / -combinational 不建模。 */
 const MstaSdcOpt Msta_SdcGeneratedClockOpts[] = {
-    { "-name",          MSTA_SDC_VALUE, 0               },
-    { "-source",        MSTA_SDC_VALUE, 0               },
-    { "-master_clock",  MSTA_SDC_VALUE, 0               },
-    { "-divide_by",     MSTA_SDC_VALUE, 0               },
-    { "-multiply_by",   MSTA_SDC_VALUE, 0               },
-    { "-duty_cycle",    MSTA_SDC_VALUE, 0               },
-    { "-edges",         MSTA_SDC_VALUE, 0               },
-    { "-edge_shift",    MSTA_SDC_VALUE, 0               },
-    { "-invert",        MSTA_SDC_FLAG,  0               },
-    { "-add",           MSTA_SDC_FLAG,  MSTA_SDC_REJECT },
-    { "-combinational", MSTA_SDC_FLAG,  MSTA_SDC_REJECT },
-    { NULL,             MSTA_SDC_FLAG,  0               } };
+    { "-name",          MSTA_SDC_VALUE,   0               },
+    { "-source",        MSTA_SDC_VALUE,   0               },
+    { "-master_clock",  MSTA_SDC_VALUE,   0               },
+    { "-divide_by",     MSTA_SDC_VALUE,   0               },
+    { "-multiply_by",   MSTA_SDC_VALUE,   0               },
+    { "-duty_cycle",    MSTA_SDC_VALUE,   0               },
+    { "-edges",         MSTA_SDC_NUMBERS, 0               },
+    { "-edge_shift",    MSTA_SDC_NUMBERS, 0               },
+    { "-invert",        MSTA_SDC_FLAG,    0               },
+    { "-add",           MSTA_SDC_FLAG,    MSTA_SDC_REJECT },
+    { "-combinational", MSTA_SDC_FLAG,    MSTA_SDC_REJECT },
+    { NULL,             MSTA_SDC_FLAG,    0               } };
 
 void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
@@ -263,13 +263,13 @@ void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, 
    给时钟、或者两组时钟之间设置 setup/hold 不确定度。-setup/-hold 都没写时两者
    都设；裸 -rise/-fall 限定的是 -to 一侧（捕获沿）的边沿。 */
 const MstaSdcOpt Msta_SdcClockUncertaintyOpts[] = {
-    { "-setup", MSTA_SDC_FLAG, 0           },
-    { "-hold",  MSTA_SDC_FLAG, 0           },
-    { "-rise",  MSTA_SDC_FLAG, 0           },
-    { "-fall",  MSTA_SDC_FLAG, 0           },
-    { "-from",  MSTA_SDC_LIST, MSTA_SDC_RF },
-    { "-to",    MSTA_SDC_LIST, MSTA_SDC_RF },
-    { NULL,     MSTA_SDC_FLAG, 0           } };
+    { "-setup", MSTA_SDC_FLAG,    0           },
+    { "-hold",  MSTA_SDC_FLAG,    0           },
+    { "-rise",  MSTA_SDC_FLAG,    0           },
+    { "-fall",  MSTA_SDC_FLAG,    0           },
+    { "-from",  MSTA_SDC_OBJECTS, MSTA_SDC_RF },
+    { "-to",    MSTA_SDC_OBJECTS, MSTA_SDC_RF },
+    { NULL,     MSTA_SDC_FLAG,    0           } };
 
 void Msta_SdcSetClockUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
@@ -458,13 +458,13 @@ void Msta_SdcSetClockSense( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdc
                     [-name 名字] -group 时钟列表 -group 时钟列表 ...
    不同时钟组之间没有 setup/hold 关系，两两展开成例外。-allow_paths 不建模。 */
 const MstaSdcOpt Msta_SdcClockGroupsOpts[] = {
-    { "-asynchronous",         MSTA_SDC_FLAG,  0               },
-    { "-logically_exclusive",  MSTA_SDC_FLAG,  0               },
-    { "-physically_exclusive", MSTA_SDC_FLAG,  0               },
-    { "-name",                 MSTA_SDC_VALUE, 0               },
-    { "-allow_paths",          MSTA_SDC_FLAG,  MSTA_SDC_REJECT },
-    { "-group",                MSTA_SDC_LIST,  MSTA_SDC_REPEAT },
-    { NULL,                    MSTA_SDC_FLAG,  0               } };
+    { "-asynchronous",         MSTA_SDC_FLAG,    0               },
+    { "-logically_exclusive",  MSTA_SDC_FLAG,    0               },
+    { "-physically_exclusive", MSTA_SDC_FLAG,    0               },
+    { "-name",                 MSTA_SDC_VALUE,   0               },
+    { "-allow_paths",          MSTA_SDC_FLAG,    MSTA_SDC_REJECT },
+    { "-group",                MSTA_SDC_OBJECTS, MSTA_SDC_REPEAT },
+    { NULL,                    MSTA_SDC_FLAG,    0               } };
 
 void Msta_SdcSetClockGroups( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {

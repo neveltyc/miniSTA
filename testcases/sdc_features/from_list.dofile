@@ -1,0 +1,6 @@
+read_liberty ../sta_compare/lib/osu018_stdcells.lib
+read_verilog generated.v
+current_design generated_demo
+read_sdc from_list.sdc
+report_checks -max_paths 3 -setup
+report_checks -max_paths 3 -hold

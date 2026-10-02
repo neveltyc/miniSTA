@@ -69,6 +69,16 @@ grep -Fq '未约束 0 个' "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 grep -Fq '路径例外排除 1 个' "${LOG}/testcases_sdc_features_through_order.dofile.log"
 grep -Fq '路径例外排除 0 个' "${LOG}/testcases_sdc_features_through_reversed.dofile.log"
 
+# -from/-to 各带一个参数：列表 {d sink/Q} 是两个起点，setup 的三个端点全被排除；
+# 集合 [get_pins {divider/D sink/D}] 是两个终点，hold 只剩输出端口 q。
+FROM_LIST="${LOG}/testcases_sdc_features_from_list.dofile.log"
+grep -Fq 'setup : 没有一条可分析的路径' "${FROM_LIST}"
+grep -Fq '路径例外排除 2 个' "${FROM_LIST}"
+if grep -Fq 'hold path (min corner, to register)' "${FROM_LIST}"; then
+    echo 'from_list：-to 集合里的寄存器端点没有被排除' >&2
+    exit 1
+fi
+
 # -rise_through / -fall_through：命中路径上的那个边沿时，换成同一条链上的另一个
 # 边沿继续查（端点不是整条被切掉）。对照基准最差路径 slack 15.505、在 X 上下降。
 grep -Fq 'setup : WNS   15.684 ns' "${LOG}/testcases_sdc_features_through_edge.dofile.log"
@@ -345,7 +355,7 @@ grep -Fq 'create_clock：源对象上已经有时钟（要再加一个请用 -ad
 grep -Fq 'setup : WNS   17.737 ns' "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 
 # 命令解析规则（docs/sdc.md）：写错的约束整条作废、告警并计入忽略数，
-# 其余约束照常生效。sdc_rules 在 generated.sdc 之后追加了 12 条写错的约束。
+# 其余约束照常生效。sdc_rules 在 generated.sdc 之后追加了 14 条写错的约束。
 RULES="${LOG}/testcases_sdc_features_sdc_rules.dofile.log"
 for rule in 'set_input_delay：选项 "-foo" 未建模；约束作废' \
             'create_clock：选项 "-name" 缺少值；约束作废' \
@@ -359,9 +369,16 @@ for rule in 'set_input_delay：选项 "-foo" 未建模；约束作废' \
             'set_load：值不能为负（给的是 -0.05）；约束作废' \
             'set_timing_derate：对象集合 [get_clocks] 为空；约束作废' \
             'set_timing_derate：对象集合 [get_cells -of_objects] 为空；约束作废' \
-            '12 条命令未建模或写错，已忽略'; do
+            'set_disable_timing：选项 "-from" 只能带一个值；约束作废' \
+            'set_false_path：多出了参数 "clk"；约束作废' \
+            '14 条命令未建模或写错，已忽略'; do
     grep -Fq -- "${rule}" "${RULES}" || { echo "sdc_rules：缺少告警：${rule}" >&2; exit 1; }
 done
+# -from {CLK D} 里的 D 不应被当成实例。
+if grep -Fq '找不到实例 "D"' "${RULES}"; then
+    echo 'sdc_rules：set_disable_timing 把 -from 列表里的 D 当成了实例' >&2
+    exit 1
+fi
 # 负数是值：-2 不应被当成不认识的选项。
 if grep -Fq '选项 "-2"' "${RULES}"; then
     echo 'sdc_rules：负数被当成了选项' >&2

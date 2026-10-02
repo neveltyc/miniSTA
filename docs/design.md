@@ -81,7 +81,7 @@ argv：命令名 + 参数
 msta_sdc_query.c 的查询接口 → 时序引擎
 ```
 
-1. **Tcl 桥**。`Msta_SdcReadFile` 起一个 `tclsh` 子进程运行 `scripts/sdc_bridge.tcl`。桥接脚本用 `info complete` 逐条执行命令，单条出错只丢这一条，其余照常生效。约束命令不在 Tcl 里执行，而是由 `msta::emit` 记录下来；`-from`、`-to`、`-through`、`-group` 后面的 Tcl 列表在这一步拆成多个词。
+1. **Tcl 桥**。`Msta_SdcReadFile` 起一个 `tclsh` 子进程运行 `scripts/sdc_bridge.tcl`。桥接脚本用 `info complete` 逐条执行命令，单条出错只丢这一条，其余照常生效。约束命令不在 Tcl 里执行，而是由 `msta::emit` 原样记录下来：每个 Tcl 参数记成一个字符串（集合是下面的标记），`{a b}` 这样的列表也只是一段文本，怎样解释由 C 侧的选项表决定。
 2. **集合标记**。`get_*`、`all_*` 在 Tcl 侧返回一个字符串标记：`\x1e` 开头，后跟一个类型字符和以 `\x1f` 分隔的名字；`-of_objects`、`remove_from_collection` 等选项挂在 `\x1d` 之后，由 C 侧展开。类型字符如下（C 侧在 `Msta_SdcExpandRecord` 里识别），小写表示该集合用了 `-quiet`：
 
    | 标记 | 对象 |
@@ -95,7 +95,7 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 3. **需要设计信息的查询**。Tcl 子进程看不到 C 侧的数据，所以 C 侧在启动 `tclsh` 之前把需要的信息写成临时文件，路径作为参数传给桥接脚本：库索引（`Msta_SdcWriteLibIndex`）供 `get_libs`、`get_lib_cells`、`get_lib_pins` 查询；网表索引（`Msta_SdcWriteDesignIndex`）只在 SDC 文本里出现 `-filter` 时才导出，供 Tcl 用 `expr` 求过滤表达式。其他需要设计信息的查询也走这条通道。
 4. **JSON 与展开**。桥接脚本把命令写成 JSON 数组，C 侧用 `msta_json.c` 读回，`Msta_SdcExpandRecord` 把每个标记展开成对象名，并记下每个词来自第几个 Tcl 参数（选项的值要按参数取）。集合为空时整条命令作废。
 5. **分发表**。`Msta_SdcRunOne` 在 `s_vSdcCommands` 里按命令名查找。每一行就是一条命令的完整语法：`{ 命令名, 选项表, 位置参数开头的值, 对象个数下限, 上限, 处理函数 }`。查不到时再查 `s_vIgnoredCommands`（手册里有但不建模的命令，告警说明原因）；两张表都没有的报 `sdc：未知命令`。
-6. **选项表解析**。`Msta_SdcParseCmd` 按选项表从左到右读 argv，统一检查语法（规则见 [SDC 参考的命令解析规则](sdc.md#命令解析规则)），语法错误时整条作废并计数。选项种类为 `MSTA_SDC_FLAG`、`VALUE`、`OBJECTS`、`LIST`，附加属性 `MSTA_SDC_RF`（也认 `-rise_xxx`/`-fall_xxx`）、`REPEAT`、`IGNORE`（告警后忽略该选项）、`REJECT`（出现即作废整条约束），定义在 `msta_sdc_int.h`。
+6. **选项表解析**。`Msta_SdcParseCmd` 按选项表从左到右读 argv，统一检查语法（规则见 [SDC 参考的命令解析规则](sdc.md#命令解析规则)），语法错误时整条作废并计数。选项的值都是紧跟的一个 Tcl 参数，按种类解释：`MSTA_SDC_FLAG`（开关，不带值）、`VALUE`（一个词；列表文本或展开出多个名字的集合都会使约束作废）、`NUMBERS`（一段数值列表文本，如 `-waveform {0 5}`，由处理函数拆开）、`OBJECTS`（一组对象：列表文本按空白拆开，集合展开成多个名字）。附加属性 `MSTA_SDC_RF`（也认 `-rise_xxx`/`-fall_xxx`）、`REPEAT`、`IGNORE`（告警后忽略该选项）、`REJECT`（出现即作废整条约束），定义在 `msta_sdc_int.h`。
 7. **处理函数**。只做语义：用 `Msta_SdcHasFlag`、`Msta_SdcOptValue`、`Msta_SdcOptList` 取选项，用 `pValue`、`ppObjs` 取位置参数；取值错误调用 `Msta_SdcReject` 作废整条，提醒用 `Msta_SdcNote`。本条命令的临时内存（`Msta_SdcArena`）在读下一条命令时统一释放。
 
 ### 3.2 加一条新命令要改哪几处
@@ -103,7 +103,7 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 1. 在对应领域的 `msta_sdc_clock.c`、`msta_sdc_io.c`、`msta_sdc_except.c` 或 `msta_sdc_env.c` 里写选项表（`MstaSdcOpt` 数组，以 `pName == NULL` 结尾）和处理函数；没有选项时用 `Msta_SdcNoOpts`。
 2. 在 `msta_sdc_int.h` 对应的分组里声明选项表和处理函数。
 3. 在 `msta_sdc.c` 的 `s_vSdcCommands` 加一行，写明位置参数的形状；如果这条命令原本在 `s_vIgnoredCommands` 里，从那里删掉。
-4. 检查 `scripts/sdc_bridge.tcl`：Tcl 的 `unknown` 只把 `set_*`、`create_*` 开头的命令转给 C 侧，其他名字（例如 `group_path`）必须加进文件末尾的 `interp alias` 列表，否则会被当成未实现的命令丢掉。选项后面跟的是 Tcl 列表并需要拆开时，把选项名加进 `msta::emit` 的列表。
+4. 检查 `scripts/sdc_bridge.tcl`：Tcl 的 `unknown` 只把 `set_*`、`create_*` 开头的命令转给 C 侧，其他名字（例如 `group_path`）必须加进文件末尾的 `interp alias` 列表，否则会被当成未实现的命令丢掉。
 5. 需要新的约束数据时，扩展 `msta_sdc.h` 里的 `MstaSdc`（初始化和释放在 `Msta_SdcStart`、`Msta_SdcFree`），在 `msta_sdc_query.c` 提供查询接口，再在时序引擎里使用。
 6. 在 `testcases/sdc_features/` 加 `.sdc` 和 `.dofile`，在 `scripts/check_sdc.sh` 加断言，并更新 [SDC 参考](sdc.md)。
 

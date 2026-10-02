@@ -547,22 +547,11 @@ namespace eval msta {
         return "\"${value}\""
     }
 
+    # 记录一条约束命令：参数原样交给 C 侧（集合已是标记）。选项的值是紧跟的
+    # 一个参数，列表文本 {a b} 怎么解释由 C 侧的选项表决定。
     proc emit {name args} {
         variable commands
-        set normalized {}
-        set expand_list 0
-        foreach arg $args {
-            if {$expand_list && ![string match "\u001e*" $arg]} {
-                foreach item $arg { lappend normalized $item }
-            } else {
-                lappend normalized $arg
-            }
-            set expand_list [expr {$arg in {
-                -group -from -to -through
-                -rise_from -fall_from -rise_to -fall_to -rise_through -fall_through
-            }}]
-        }
-        lappend commands [linsert $normalized 0 $name]
+        lappend commands [linsert $args 0 $name]
     }
 
     proc write_json {path} {

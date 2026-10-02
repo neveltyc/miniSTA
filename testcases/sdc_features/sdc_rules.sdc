@@ -24,3 +24,8 @@ set_load -0.05 [get_ports q]
 # 给了对象但集合为空：作废整条，而不是退化成"不写对象 = 全局"
 set_timing_derate -late 3.0 [get_clocks nomatch*]
 set_timing_derate -late 3.0 [get_cells -of_objects [get_nets divclk] nomatch*]
+# 选项只带紧跟的一个参数。set_disable_timing 的 -from 只能是一个库引脚名，
+# 写成列表 {CLK D} 作废（D 不会被当成实例）
+set_disable_timing -from {CLK D} -to Q [get_cells sink]
+# 多个起点要写成列表 {d clk} 或集合；裸写的 clk 是多出来的位置参数
+set_false_path -from d clk

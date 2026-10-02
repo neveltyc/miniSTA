@@ -18,9 +18,9 @@
 
 /* 路径描述：路径类命令（set_false_path、set_multicycle_path、set_max_delay、
    set_min_delay、group_path）共用的 -from / -through / -to 三段，在选项表里写成
-   三个带 MSTA_SDC_RF 的 MSTA_SDC_LIST 选项（-through 还带 MSTA_SDC_REPEAT），
-   所以 -rise_from、-fall_through 这类写法也认。Tcl 桥已经把这些选项后面的列表
-   拆成了多个词。
+   三个带 MSTA_SDC_RF 的 MSTA_SDC_OBJECTS 选项（-through 还带 MSTA_SDC_REPEAT），
+   所以 -rise_from、-fall_through 这类写法也认。每个选项带一个 Tcl 参数（名字、
+   列表或集合），解析器已经把它拆成了对象名。
    每个 -through 是一组可以互相替代的对象（组内取"或"），多个 -through 按路径上
    的先后顺序依次经过。 */
 typedef struct {
@@ -111,14 +111,14 @@ static void Msta_SdcAddPathExceptions( MstaSdc *p, const MstaSdcPath *pPath, int
    路径选项是 -from/-through/-to 及其 -rise_/-fall_ 写法；只写 -rise 或 -fall 时
    它限定 -to 一端的边沿。周期数必须是正整数。 */
 const MstaSdcOpt Msta_SdcPathExceptionOpts[] = {
-    { "-setup",   MSTA_SDC_FLAG, 0                             },
-    { "-hold",    MSTA_SDC_FLAG, 0                             },
-    { "-rise",    MSTA_SDC_FLAG, 0                             },
-    { "-fall",    MSTA_SDC_FLAG, 0                             },
-    { "-from",    MSTA_SDC_LIST, MSTA_SDC_RF                   },
-    { "-through", MSTA_SDC_LIST, MSTA_SDC_RF | MSTA_SDC_REPEAT },
-    { "-to",      MSTA_SDC_LIST, MSTA_SDC_RF                   },
-    { NULL,       MSTA_SDC_FLAG, 0                             } };
+    { "-setup",   MSTA_SDC_FLAG,    0                             },
+    { "-hold",    MSTA_SDC_FLAG,    0                             },
+    { "-rise",    MSTA_SDC_FLAG,    0                             },
+    { "-fall",    MSTA_SDC_FLAG,    0                             },
+    { "-from",    MSTA_SDC_OBJECTS, MSTA_SDC_RF                   },
+    { "-through", MSTA_SDC_OBJECTS, MSTA_SDC_RF | MSTA_SDC_REPEAT },
+    { "-to",      MSTA_SDC_OBJECTS, MSTA_SDC_RF                   },
+    { NULL,       MSTA_SDC_FLAG,    0                             } };
 
 static void Msta_SdcSetPathException( MstaSdc *p, int fFalse, MstaSdcCmd *pCmd )
 {
@@ -152,10 +152,10 @@ void Msta_SdcSetMulticyclePath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Mst
 /* set_max_delay / set_min_delay [路径选项...] 延迟
    路径选项同 set_false_path。 */
 const MstaSdcOpt Msta_SdcPathDelayOpts[] = {
-    { "-from",    MSTA_SDC_LIST, MSTA_SDC_RF                   },
-    { "-through", MSTA_SDC_LIST, MSTA_SDC_RF | MSTA_SDC_REPEAT },
-    { "-to",      MSTA_SDC_LIST, MSTA_SDC_RF                   },
-    { NULL,       MSTA_SDC_FLAG, 0                             } };
+    { "-from",    MSTA_SDC_OBJECTS, MSTA_SDC_RF                   },
+    { "-through", MSTA_SDC_OBJECTS, MSTA_SDC_RF | MSTA_SDC_REPEAT },
+    { "-to",      MSTA_SDC_OBJECTS, MSTA_SDC_RF                   },
+    { NULL,       MSTA_SDC_FLAG,    0                             } };
 
 static void Msta_SdcSetPathDelay( MstaSdc *p, int fMax, MstaSdcCmd *pCmd )
 {
@@ -181,14 +181,14 @@ void Msta_SdcSetMinDelay( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCm
    -name 与 -default 必须二选一。不写路径选项就是"所有路径"（-default 常这么用）。
    -critical_range 不建模，分组收下所有命中的路径。 */
 const MstaSdcOpt Msta_SdcGroupPathOpts[] = {
-    { "-default",        MSTA_SDC_FLAG,  0                             },
-    { "-name",           MSTA_SDC_VALUE, 0                             },
-    { "-weight",         MSTA_SDC_VALUE, 0                             },
-    { "-critical_range", MSTA_SDC_VALUE, MSTA_SDC_IGNORE               },
-    { "-from",           MSTA_SDC_LIST,  MSTA_SDC_RF                   },
-    { "-through",        MSTA_SDC_LIST,  MSTA_SDC_RF | MSTA_SDC_REPEAT },
-    { "-to",             MSTA_SDC_LIST,  MSTA_SDC_RF                   },
-    { NULL,              MSTA_SDC_FLAG,  0                             } };
+    { "-default",        MSTA_SDC_FLAG,    0                             },
+    { "-name",           MSTA_SDC_VALUE,   0                             },
+    { "-weight",         MSTA_SDC_VALUE,   0                             },
+    { "-critical_range", MSTA_SDC_VALUE,   MSTA_SDC_IGNORE               },
+    { "-from",           MSTA_SDC_OBJECTS, MSTA_SDC_RF                   },
+    { "-through",        MSTA_SDC_OBJECTS, MSTA_SDC_RF | MSTA_SDC_REPEAT },
+    { "-to",             MSTA_SDC_OBJECTS, MSTA_SDC_RF                   },
+    { NULL,              MSTA_SDC_FLAG,    0                             } };
 
 void Msta_SdcSetGroupPath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
@@ -231,14 +231,14 @@ void Msta_SdcSetGroupPath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcC
    两条数据路径之间的检查，-from 是参照；-from/-to 各是一个对象，解析成一个网络。
    -clock 读入但不使用；-rise/-fall 不建模。不写 -setup/-hold 时两个都查。 */
 const MstaSdcOpt Msta_SdcDataCheckOpts[] = {
-    { "-from",  MSTA_SDC_LIST,  MSTA_SDC_RF     },
-    { "-to",    MSTA_SDC_LIST,  MSTA_SDC_RF     },
-    { "-clock", MSTA_SDC_VALUE, 0               },
-    { "-setup", MSTA_SDC_FLAG,  0               },
-    { "-hold",  MSTA_SDC_FLAG,  0               },
-    { "-rise",  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
-    { "-fall",  MSTA_SDC_FLAG,  MSTA_SDC_IGNORE },
-    { NULL,     MSTA_SDC_FLAG,  0               } };
+    { "-from",  MSTA_SDC_OBJECTS, MSTA_SDC_RF     },
+    { "-to",    MSTA_SDC_OBJECTS, MSTA_SDC_RF     },
+    { "-clock", MSTA_SDC_VALUE,   0               },
+    { "-setup", MSTA_SDC_FLAG,    0               },
+    { "-hold",  MSTA_SDC_FLAG,    0               },
+    { "-rise",  MSTA_SDC_FLAG,    MSTA_SDC_IGNORE },
+    { "-fall",  MSTA_SDC_FLAG,    MSTA_SDC_IGNORE },
+    { NULL,     MSTA_SDC_FLAG,    0               } };
 
 void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
