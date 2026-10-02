@@ -147,8 +147,8 @@ int Msta_SdcResolveNets( MstaDesign *pDes, const char *pTarget, int **ppNets )
    - 不认识的选项、带值选项缺值、同一个选项写了两次：作废整条约束；
    - 选项的值是紧跟的一个 Tcl 参数；只能带一个值的选项收到列表或多个名字：
      作废整条约束；
-   - 位置参数开头可以有一个值，其余是对象；多出来的值、对象太多或太少：
-     同样作废整条约束。
+   - 位置参数开头可以有一个值，其余是对象；对象写成列表文本 {a b} 时按空白
+     拆开（同选项）；多出来的值、对象太多或太少、空列表 {}：同样作废整条约束。
    处理函数只做语义，取结果用 Msta_SdcHasFlag / Msta_SdcOptValue /
    Msta_SdcOptList 和 pValue / ppObjs。
    ===================================================================== */
@@ -220,12 +220,28 @@ static int Msta_SdcFindOpt( const MstaSdcOpt *pOpts, const char *pWord, char *pE
     return -1;
 }
 
-/* 位置参数拆成"开头的值 + 对象"，并按分发表检查个数。ppPos[i] 在 argv 的
-   下标是 pPosAt[i]。有错时告警作废并返回 0。 */
-static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaSdcCmd *pCmd,
-                                    char **ppPos, int *pPosAt, int nPos )
+/* Tcl 列表文本里的分隔符（多行花括号里还会有换行）。 */
+#define MSTA_SDC_SPACES " \t\r\n"
+
+/* 把 Tcl 列表文本（如 -from {a b} 传来的 "a b"）按空白拆成多个词，挂在临时内存上。 */
+static int Msta_SdcSplitWords( const char *pText, char ***pppWords )
 {
-    int i, iFirst = 0;
+    char *pCopy = Msta_SdcArena( "%s", pText ), *pTok;
+    char **ppWords = (char **)Msta_SdcArenaZeros( (int)strlen(pText), sizeof(char *) );
+    int n = 0;
+    for ( pTok = strtok( pCopy, MSTA_SDC_SPACES ); pTok != NULL; pTok = strtok( NULL, MSTA_SDC_SPACES ) )
+        ppWords[n++] = pTok;
+    *pppWords = ppWords;
+    return n;
+}
+
+/* 位置参数拆成"开头的值 + 对象"，并按分发表检查个数。ppPos[i] 在 argv 的
+   下标是 pPosAt[i]，pArg 同 Msta_SdcParseCmd。对象部分的列表文本 {a b} 与选项
+   OBJECTS 一样按空白拆成多个对象；开头的值不拆。有错时告警作废并返回 0。 */
+static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaSdcCmd *pCmd,
+                                    char **ppPos, int *pPosAt, int nPos, const int *pArg )
+{
+    int i, j, iFirst = 0, nSplit;
     char Edge;
     if ( pDef->Value != MSTA_SDC_NO_VALUE )
     {
@@ -235,6 +251,45 @@ static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaS
         { Msta_SdcReject( p, pCmd, "值 \"%s\" 不是数", ppPos[0] ); return 0; }
         pCmd->pValue = ppPos[0];
         iFirst = 1;
+    }
+    /* 对象部分：一个 Tcl 参数只给出一个词、且是带空白的列表文本（或空列表 {}）时
+       拆开，规则同选项 OBJECTS；集合展开出的名字不再拆。空列表与空集合一样作废
+       整条约束。pSplit[i] 标出要拆的位置参数，先按它算出拆完最多有几个词。 */
+    {
+        char *pSplit = (char *)Msta_SdcArenaZeros( nPos, sizeof(char) );
+        char **ppNew, **ppWords;
+        int *pNewAt, nCap = 0, nNew = 0;
+        for ( i = iFirst; i < nPos; i++ )
+        {
+            int a = pPosAt[i];
+            int fAlone = pArg[a-1] != pArg[a] && ( a + 1 >= pCmd->argc || pArg[a+1] != pArg[a] );
+            pSplit[i] = (char)( fAlone && ( ppPos[i][0] == 0 ||
+                                            strpbrk( ppPos[i], MSTA_SDC_SPACES ) != NULL ) );
+        }
+        for ( i = 0; i < nPos; i++ )
+            nCap += pSplit[i] ? (int)strlen( ppPos[i] ) : 1;
+        ppNew  = (char **)Msta_SdcArenaZeros( nCap, sizeof(char *) );
+        pNewAt = (int *)Msta_SdcArenaZeros( nCap, sizeof(int) );
+        for ( i = 0; i < nPos; i++ )
+        {
+            if ( !pSplit[i] )
+            {
+                ppNew[nNew] = ppPos[i];
+                pNewAt[nNew++] = pPosAt[i];
+                continue;
+            }
+            nSplit = Msta_SdcSplitWords( ppPos[i], &ppWords );
+            if ( nSplit == 0 )
+            { Msta_SdcReject( p, pCmd, "对象列表是空的" ); return 0; }
+            for ( j = 0; j < nSplit; j++ )
+            {
+                ppNew[nNew] = ppWords[j];
+                pNewAt[nNew++] = pPosAt[i];
+            }
+        }
+        ppPos = ppNew;
+        pPosAt = pNewAt;
+        nPos = nNew;
     }
     /* 对象里不能再有数值：只有一个值的命令写了两个数。紧跟在开关后面的数
        是 "-max 2 -min 1" 这类写法，告警里点明。 */
@@ -262,21 +317,6 @@ static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaS
         return 0;
     }
     return 1;
-}
-
-/* Tcl 列表文本里的分隔符（多行花括号里还会有换行）。 */
-#define MSTA_SDC_SPACES " \t\r\n"
-
-/* 把 Tcl 列表文本（如 -from {a b} 传来的 "a b"）按空白拆成多个词，挂在临时内存上。 */
-static int Msta_SdcSplitWords( const char *pText, char ***pppWords )
-{
-    char *pCopy = Msta_SdcArena( "%s", pText ), *pTok;
-    char **ppWords = (char **)Msta_SdcArenaZeros( (int)strlen(pText), sizeof(char *) );
-    int n = 0;
-    for ( pTok = strtok( pCopy, MSTA_SDC_SPACES ); pTok != NULL; pTok = strtok( NULL, MSTA_SDC_SPACES ) )
-        ppWords[n++] = pTok;
-    *pppWords = ppWords;
-    return n;
 }
 
 /* 通用解析器：按 pDef 把 argv 从左到右拆进 *pCmd。pArg[i] 是 argv[i] 来自第几个
@@ -344,16 +384,10 @@ int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **ar
         }
         else if ( pOpt->Kind == MSTA_SDC_OBJECTS )
         {
-            /* 列表文本 {a b} 拆成多个对象名（空列表 {} 拆出 0 个）；集合已经展开过了，
-               不再拆，以免丢掉集合类型。 */
+            /* 列表文本 {a b} 拆成多个对象名（空列表 {} 拆出 0 个）。集合、以及列表里
+               套了集合的参数（桥接脚本已展平）已经展开成多个词，不再拆，以免丢掉集合类型。 */
             if ( nWords == 1 && ( argv[i+1][0] == 0 || strpbrk( argv[i+1], MSTA_SDC_SPACES ) != NULL ) )
-            {
-                /* 集合标记以 \036 开头。列表里套集合（如 [list [get_pins a] b]）时标记
-                   夹在文本中间，展开不了，作废而不是当成名字。 */
-                if ( strchr( argv[i+1], '\036' ) != NULL )
-                { Msta_SdcReject( p, pCmd, "选项 \"%s\" 的列表里套了集合，未建模", argv[i] ); return 0; }
                 nWords = Msta_SdcSplitWords( argv[i+1], &ppWords );
-            }
             if ( nWords == 0 )
             { Msta_SdcReject( p, pCmd, "选项 \"%s\" 后面没有对象", argv[i] ); return 0; }
             pCmd->pListOpt[pCmd->nLists]     = k;
@@ -368,7 +402,7 @@ int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **ar
         if ( pOpt->Kind != MSTA_SDC_FLAG )
             i = j - 1;
     }
-    return Msta_SdcSplitPositional( p, pDef, pCmd, ppPos, pPosAt, nPos );
+    return Msta_SdcSplitPositional( p, pDef, pCmd, ppPos, pPosAt, nPos, pArg );
 }
 
 /* 选项名在表里的下标。名字不在表里说明处理函数和选项表对不上，是代码错误。 */

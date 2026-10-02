@@ -78,6 +78,27 @@ if grep -Fq 'hold path (min corner, to register)' "${FROM_LIST}"; then
     echo 'from_list：-to 集合里的寄存器端点没有被排除' >&2
     exit 1
 fi
+# 列表里套集合、位置参数写成列表 {d clk}：from_list 后半段的这些写法与
+# from_list_flat 的平铺写法（位置参数分开写）效果相同——两份报告除首行（用例名）
+# 外逐行一致，且没有约束作废。这些写法确实生效：hold 到 q 推后一个 slow 周期并
+# 归入 out_grp；clk 的输入转换时间 0.2 让捕获沿从 -18.381 变成 -18.357。
+FROM_FLAT="${LOG}/testcases_sdc_features_from_list_flat.dofile.log"
+grep -Fq 'capture clock: slow @ -18.357 ns' "${FROM_LIST}"
+grep -Eq '^out_grp[[:space:]]+1\.00[[:space:]]+0[[:space:]]+-[[:space:]]+-[[:space:]]+1[[:space:]]+19\.695' "${FROM_LIST}"
+if grep -Eq '约束作废|未建模或写错' "${FROM_LIST}"; then
+    echo 'from_list：列表里套集合或位置参数列表的写法被作废了' >&2
+    exit 1
+fi
+if ! diff <(tail -n +2 "${FROM_LIST}") <(tail -n +2 "${FROM_FLAT}") > /dev/null; then
+    echo 'from_list：嵌套写法与平铺写法（from_list_flat）的结果不同' >&2
+    exit 1
+fi
+# set_clock_groups -group 的列表里套集合：与 clock_groups 的报告逐行一致。
+if ! diff <(tail -n +2 "${LOG}/testcases_sdc_features_clock_groups.dofile.log") \
+          <(tail -n +2 "${LOG}/testcases_sdc_features_clock_groups_nested.dofile.log") > /dev/null; then
+    echo 'clock_groups_nested：-group 的嵌套写法与平铺写法的结果不同' >&2
+    exit 1
+fi
 
 # -rise_through / -fall_through：命中路径上的那个边沿时，换成同一条链上的另一个
 # 边沿继续查（端点不是整条被切掉）。对照基准最差路径 slack 15.505、在 X 上下降。
@@ -355,7 +376,7 @@ grep -Fq 'create_clock：源对象上已经有时钟（要再加一个请用 -ad
 grep -Fq 'setup : WNS   17.737 ns' "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 
 # 命令解析规则（docs/sdc.md）：写错的约束整条作废、告警并计入忽略数，
-# 其余约束照常生效。sdc_rules 在 generated.sdc 之后追加了 14 条写错的约束。
+# 其余约束照常生效。sdc_rules 在 generated.sdc 之后追加了 16 条写错的约束。
 RULES="${LOG}/testcases_sdc_features_sdc_rules.dofile.log"
 for rule in 'set_input_delay：选项 "-foo" 未建模；约束作废' \
             'create_clock：选项 "-name" 缺少值；约束作废' \
@@ -371,7 +392,9 @@ for rule in 'set_input_delay：选项 "-foo" 未建模；约束作废' \
             'set_timing_derate：对象集合 [get_cells -of_objects] 为空；约束作废' \
             'set_disable_timing：选项 "-from" 只能带一个值；约束作废' \
             'set_false_path：多出了参数 "clk"；约束作废' \
-            '14 条命令未建模或写错，已忽略'; do
+            'set_false_path：列表里的集合都是空的；约束作废' \
+            'sdc：set_false_path：集合不能和别的文字拼成一个名字；跳过这条命令' \
+            '16 条命令未建模或写错，已忽略'; do
     grep -Fq -- "${rule}" "${RULES}" || { echo "sdc_rules：缺少告警：${rule}" >&2; exit 1; }
 done
 # -from {CLK D} 里的 D 不应被当成实例。
@@ -401,6 +424,12 @@ grep -Fq -- 'sdc：-no_clocks 不是 SDC 1.8 语法，按兼容写法处理' \
     "${LOG}/compat_dialect.log"
 grep -Fq 'Ainputs' "${LOG}/compat_dialect.json"
 grep -Fq 'no_clocks' "${LOG}/compat_dialect.json"
+# 列表里套的 -quiet 集合保留小写类型标记（压掉"没匹配到对象"的提示），
+# 名字元素照常是名字：这个参数在 JSON 里是一个字符串数组。
+printf 'set_false_path -to [list [get_ports -quiet q] d]\n' > "${LOG}/compat_quiet_list.sdc"
+tclsh "${ROOT}/scripts/sdc_bridge.tcl" "${LOG}/compat_quiet_list.sdc" "${LOG}/compat_quiet_list.json" \
+    2> "${LOG}/compat_quiet_list.log"
+grep -Fq '["set_false_path","-to",["\u001epq","d"]]' "${LOG}/compat_quiet_list.json"
 
 # 方言写法（C 侧）：有的工具把 -no_propagate 写成 -no_propagation，这条认但告警。
 printf 'set_ideal_network -no_propagation [get_pins ct2/Y]\n' > "${LOG}/compat_ideal_network.sdc"

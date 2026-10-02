@@ -29,3 +29,7 @@ set_timing_derate -late 3.0 [get_cells -of_objects [get_nets divclk] nomatch*]
 set_disable_timing -from {CLK D} -to Q [get_cells sink]
 # 多个起点要写成列表 {d clk} 或集合；裸写的 clk 是多出来的位置参数
 set_false_path -from d clk
+# 列表里可以套集合，但套进去的集合全都是空的：与"给了集合但为空"一样整条作废
+set_false_path -to [list [remove_from_collection [get_pins sink/D] [get_pins sink/D]] {}]
+# 集合不能和别的文字拼成一个名字（在 Tcl 桥里就丢掉）
+set_false_path -from "x[get_ports d]"

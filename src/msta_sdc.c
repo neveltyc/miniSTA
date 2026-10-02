@@ -546,7 +546,7 @@ static int Msta_SdcNameHit( const char *pPattern, const char *pName, const char 
     return pAlt != NULL && Msta_SdcGlobMatch( pPattern, pAlt );
 }
 
-/* 把 @e/@d/@f/@@ 换回控制字符。 */
+/* 把 @e/@d/@f/@s/@@ 换回控制字符、空格和 @（桥接脚本的 escapeOption 反过来）。 */
 static void Msta_SdcUnescapeMarker( char *pText )
 {
     char *pSrc, *pDst;
@@ -556,7 +556,8 @@ static void Msta_SdcUnescapeMarker( char *pText )
             pSrc++;
             *pDst++ = ( *pSrc == 'e' ) ? '\036'
                      : ( *pSrc == 'd' ) ? '\035'
-                     : ( *pSrc == 'f' ) ? '\037' : *pSrc;
+                     : ( *pSrc == 'f' ) ? '\037'
+                     : ( *pSrc == 's' ) ? ' ' : *pSrc;
         }
         else *pDst++ = *pSrc;
     *pDst = 0;
@@ -860,9 +861,122 @@ static void Msta_SdcEmptyCollection( MJsonValue *pRecord, const char *pWhat, con
                    pName ? pName->pStr : "sdc", pWhat, pForm );
 }
 
+/* 展开一个词（集合标记或普通文本），追加到 s_Args。fInList=1 表示它是列表参数里的
+   一个元素（见 Msta_SdcExpandRecord）：这时空集合只是没有贡献对象，整个参数是否为空
+   由调用方判断；否则给了集合却为空就作废整条命令。
+   返回 1 表示成功，0 表示丢掉整条命令（已告警），-1 表示格式不对。 */
+static int Msta_SdcExpandWord( MJsonValue *pRecord, char *pText, MstaDesign *pDes, MstaSdc *pSdc,
+                               int fInList )
+{
+    int nBefore = s_Args.nSize;
+    if ( pText[0] == '\036' && pText[1] == 'A' )
+    {
+        if ( Msta_SdcExpandAll( pSdc, pDes, pText + 2, &s_Args ) < 0 )
+        {
+            Msta_WarnOnce( "sdc：集合 \"%s\" 未建模；跳过这条命令", pText + 2 );
+            return 0;
+        }
+        if ( s_Args.nSize == nBefore && !fInList )
+        {
+            Msta_SdcEmptyCollection( pRecord, strncmp( pText + 2, "all_", 4 ) ? "all_" : "", pText + 2 );
+            return 0;
+        }
+    }
+    else if ( pText[0] == '\036' && pText[1] == 'Z' )
+    {
+        /* 桥接脚本已经说明原因（选项不在 SDC 1.8 里，或者 msta 没建模）。 */
+        return 0;
+    }
+    else if ( pText[0] == '\036' )
+    {
+        char Kind = (char)toupper( (unsigned char)pText[1] );
+        int  fQuiet = islower( (unsigned char)pText[1] ) ? 1 : 0;
+        char *pPart = pText + 2;
+        const char *pMinus[MSTA_SDC_MAX_MINUS];
+        int nMinus = 0;
+        char *pOf = NULL;
+        /* P/N/C/I/G 是网表对象（G 是引脚，与网络分开以便 -of_objects 推关系），
+           L/B/Y 是库对象（get_libs/get_lib_cells/get_lib_pins）。 */
+        if ( Kind != 'P' && Kind != 'N' && Kind != 'C' && Kind != 'I' && Kind != 'G' &&
+             Kind != 'L' && Kind != 'B' && Kind != 'Y' )
+            return -1;
+        {
+            /* 选项区在 \x1d 之后（minus= 与 of= 都在这里）。 */
+            char *pOptions = strchr( pPart, '\035' );
+            if ( pOptions != NULL )
+            {
+                char *pOpt;
+                *pOptions++ = 0;
+                nMinus = Msta_SdcCollectMinus( pOptions, pMinus );
+                for ( pOpt = strtok(pOptions,"\037"); pOpt != NULL; pOpt = strtok(NULL,"\037") )
+                    if ( !strncmp(pOpt,"of=",3) )
+                        pOf = pOpt + 3;
+            }
+        }
+        /* -of_objects：按对象关系现推（父对象本身可能还是集合）。 */
+        if ( pOf != NULL )
+        {
+            Msta_SdcUnescapeMarker( pOf );
+            if ( Msta_SdcExpandOfObjects( pSdc, pDes, pOf, pPart, Kind,
+                                          pMinus, nMinus, &s_Args ) < 0 )
+                return 0;                   /* 父对象解析不了：丢这条命令（上面已告警） */
+            if ( s_Args.nSize == nBefore && !fInList )
+            {
+                Msta_SdcEmptyCollection( pRecord, Msta_SdcCollectionName( Kind ), " -of_objects" );
+                return 0;
+            }
+            return 1;
+        }
+        while ( *pPart )
+        {
+            char *pNext = strchr( pPart, '\037' );
+            if ( pNext ) *pNext++ = 0;
+            if ( Kind == 'C' && strpbrk(pPart,"*?") )
+            {
+                int j, nMatched = 0;
+                for ( j = 0; j < pSdc->vClocks.nSize; j++ )
+                {
+                    char *pName = (char *)Msta_NameStr(Msta_SdcClockByIndex(pSdc,j)->Name);
+                    if ( !Msta_SdcGlobMatch(pPart,pName) ) continue;
+                    if ( Msta_SdcIsMinus(pName,pMinus,nMinus) ) continue;
+                    Msta_SdcArgListPush( &s_Args, pName, Kind, (char)fQuiet );
+                    nMatched++;
+                }
+                if ( nMatched == 0 && !fQuiet )
+                    Msta_WarnOnce("sdc：get_clocks 的模式 \"%s\" 没有匹配到任何时钟",pPart);
+            }
+            else
+            {
+                if ( Msta_SdcIsMinus(pPart,pMinus,nMinus) )
+                {
+                    if ( pNext == NULL ) break;
+                    pPart = pNext;
+                    continue;
+                }
+                Msta_SdcArgListPush( &s_Args, pPart, Kind, (char)fQuiet );
+            }
+            if ( pNext == NULL ) break;
+            pPart = pNext;
+        }
+        if ( s_Args.nSize == nBefore && !fInList )
+        {
+            Msta_SdcEmptyCollection( pRecord, Msta_SdcCollectionName( Kind ), "" );
+            return 0;
+        }
+    }
+    else
+        Msta_SdcArgListPush( &s_Args, pText, 0, 0 );
+    return 1;
+}
+
+/* 展开一条命令：每个 Tcl 参数是一个字符串（名字、列表文本或集合标记），
+   或者是一个字符串数组——列表里套了集合（如 [list d [get_pins x]]）时，桥接脚本
+   已经把它展平成一组词，每个词是一个名字或一个集合标记。数组里的词逐个展开，
+   合起来仍算同一个 Tcl 参数（pArg 相同），所以选项照样取到全部对象；
+   全部元素展开后一个对象都没有时，与"给了集合却为空"一样作废整条命令。 */
 static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc *pSdc )
 {
-    int i, k, nBefore;
+    int i, j, k, rc, nBefore;
     s_Args.nSize = 0;
     free( s_pArgHash );
     s_pArgHash = NULL;
@@ -872,110 +986,32 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
     for ( i = 0; i < pRecord->nItems; i++ )
     {
         MJsonValue *pWord = Msta_JsonAt( pRecord, i );
-        char *pText;
-        if ( pWord == NULL || pWord->Kind != MJSON_STRING )
+        if ( pWord == NULL )
             return -1;
-        pText = pWord->pStr;
         nBefore = s_Args.nSize;
-        if ( pText[0] == '\036' && pText[1] == 'A' )
+        if ( pWord->Kind == MJSON_STRING )
         {
-            if ( Msta_SdcExpandAll( pSdc, pDes, pText + 2, &s_Args ) < 0 )
+            if ( (rc = Msta_SdcExpandWord( pRecord, pWord->pStr, pDes, pSdc, 0 )) <= 0 )
+                return rc;
+        }
+        else if ( pWord->Kind == MJSON_ARRAY && i > 0 )
+        {
+            for ( j = 0; j < pWord->nItems; j++ )
             {
-                Msta_WarnOnce( "sdc：集合 \"%s\" 未建模；跳过这条命令", pText + 2 );
-                return 0;
+                MJsonValue *pItem = Msta_JsonAt( pWord, j );
+                if ( pItem == NULL || pItem->Kind != MJSON_STRING )
+                    return -1;
+                if ( (rc = Msta_SdcExpandWord( pRecord, pItem->pStr, pDes, pSdc, 1 )) <= 0 )
+                    return rc;
             }
             if ( s_Args.nSize == nBefore )
             {
-                Msta_SdcEmptyCollection( pRecord, strncmp( pText + 2, "all_", 4 ) ? "all_" : "", pText + 2 );
-                return 0;
-            }
-        }
-        else if ( pText[0] == '\036' && pText[1] == 'Z' )
-        {
-            /* 桥接脚本已经说明原因（选项不在 SDC 1.8 里，或者 msta 没建模）。 */
-            return 0;
-        }
-        else if ( pText[0] == '\036' )
-        {
-            char Kind = (char)toupper( (unsigned char)pText[1] );
-            int  fQuiet = islower( (unsigned char)pText[1] ) ? 1 : 0;
-            char *pPart = pText + 2;
-            const char *pMinus[MSTA_SDC_MAX_MINUS];
-            int nMinus = 0;
-            char *pOf = NULL;
-            /* P/N/C/I/G 是网表对象（G 是引脚，与网络分开以便 -of_objects 推关系），
-               L/B/Y 是库对象（get_libs/get_lib_cells/get_lib_pins）。 */
-            if ( Kind != 'P' && Kind != 'N' && Kind != 'C' && Kind != 'I' && Kind != 'G' &&
-                 Kind != 'L' && Kind != 'B' && Kind != 'Y' )
-                return -1;
-            {
-                /* 选项区在 \x1d 之后（minus= 与 of= 都在这里）。 */
-                char *pOptions = strchr( pPart, '\035' );
-                if ( pOptions != NULL )
-                {
-                    char *pOpt;
-                    *pOptions++ = 0;
-                    nMinus = Msta_SdcCollectMinus( pOptions, pMinus );
-                    for ( pOpt = strtok(pOptions,"\037"); pOpt != NULL; pOpt = strtok(NULL,"\037") )
-                        if ( !strncmp(pOpt,"of=",3) )
-                            pOf = pOpt + 3;
-                }
-            }
-            /* -of_objects：按对象关系现推（父对象本身可能还是集合）。 */
-            if ( pOf != NULL )
-            {
-                Msta_SdcUnescapeMarker( pOf );
-                if ( Msta_SdcExpandOfObjects( pSdc, pDes, pOf, pPart, Kind,
-                                              pMinus, nMinus, &s_Args ) < 0 )
-                    return 0;               /* 父对象解析不了：丢这条命令（上面已告警） */
-                if ( s_Args.nSize == nBefore )
-                {
-                    Msta_SdcEmptyCollection( pRecord, Msta_SdcCollectionName( Kind ), " -of_objects" );
-                    return 0;
-                }
-                for ( k = nBefore; k < s_Args.nSize; k++ )
-                    s_Args.pArg[k] = i;
-                continue;
-            }
-            while ( *pPart )
-            {
-                char *pNext = strchr( pPart, '\037' );
-                if ( pNext ) *pNext++ = 0;
-                if ( Kind == 'C' && strpbrk(pPart,"*?") )
-                {
-                    int j, nMatched = 0;
-                    for ( j = 0; j < pSdc->vClocks.nSize; j++ )
-                    {
-                        char *pName = (char *)Msta_NameStr(Msta_SdcClockByIndex(pSdc,j)->Name);
-                        if ( !Msta_SdcGlobMatch(pPart,pName) ) continue;
-                        if ( Msta_SdcIsMinus(pName,pMinus,nMinus) ) continue;
-                        Msta_SdcArgListPush( &s_Args, pName, Kind, (char)fQuiet );
-                        nMatched++;
-                    }
-                    if ( nMatched == 0 && !fQuiet )
-                        Msta_WarnOnce("sdc：get_clocks 的模式 \"%s\" 没有匹配到任何时钟",pPart);
-                }
-                else
-                {
-                    if ( Msta_SdcIsMinus(pPart,pMinus,nMinus) )
-                    {
-                        if ( pNext == NULL ) break;
-                        pPart = pNext;
-                        continue;
-                    }
-                    Msta_SdcArgListPush( &s_Args, pPart, Kind, (char)fQuiet );
-                }
-                if ( pNext == NULL ) break;
-                pPart = pNext;
-            }
-            if ( s_Args.nSize == nBefore )
-            {
-                Msta_SdcEmptyCollection( pRecord, Msta_SdcCollectionName( Kind ), "" );
+                Msta_WarnOnce( "%s：列表里的集合都是空的；约束作废", s_Args.ppText[0] );
                 return 0;
             }
         }
         else
-            Msta_SdcArgListPush( &s_Args, pText, 0, 0 );
+            return -1;
         for ( k = nBefore; k < s_Args.nSize; k++ )
             s_Args.pArg[k] = i;
     }

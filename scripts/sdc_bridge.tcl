@@ -322,9 +322,11 @@ namespace eval msta {
     proc markerKind {value} { return [string index $value 1] }
 
     # 选项区里要带一整个集合标记（-of_objects）时，把标记里的分隔符换成 @e/@d/@f，
-    # 免得和选项之间的 \x1f 打架；C 侧读出来再换回去。
+    # 免得和选项之间的 \x1f 打架；空白换成 @s，这样标记里不含空白，放进 concat
+    # 拼成的列表也不会被拆开。C 侧读出来再换回去（空白一律还原成空格）。
     proc escapeOption {value} {
-        return [string map [list @ @@ \u001e @e \u001d @d \u001f @f] $value]
+        return [string map [list @ @@ \u001e @e \u001d @d \u001f @f \
+                                 " " @s \t @s \n @s \r @s] $value]
     }
 
     # 从集合里取名字：带类型标记的取标记里的名字（\x1f 分隔），裸字符串原样返回。
@@ -541,6 +543,45 @@ namespace eval msta {
         return "\u001eA${form}\u001d[join $parts \u001f]"
     }
 
+    # 本次运行里 get_* / all_* 等返回过的集合标记。emit 靠它准确认出"这个参数就是
+    # 一个集合"，而不是"一个列表，里面有集合"：标记里可能有空白（例如
+    # -of_objects {u1 u2}），单看文本分不清。
+    variable aMarkers
+    array set aMarkers {}
+
+    # 记下一个集合标记并原样返回；文件末尾的 get_* / all_* 等全局命令都经过这里。
+    proc marker {value} {
+        variable aMarkers
+        set aMarkers($value) 1
+        return $value
+    }
+
+    proc isMarker {value} {
+        variable aMarkers
+        return [info exists aMarkers($value)]
+    }
+
+    # 把一个含集合的 Tcl 列表（[list d [get_pins x]]、[concat ...]，可以多层嵌套）
+    # 展平成一组词：每个词是一个集合标记或一个名字。不含集合的部分按空白拆开，
+    # 与 C 侧拆列表文本 {a b} 的规则相同，所以写在这里的名字和直接写在 {a b}
+    # 里的名字解释成同样的对象。空元素 {} 不产生词。
+    proc flattenList {value} {
+        if {[isMarker $value]} { return [list $value] }
+        if {[string first "\u001e" $value] < 0} {
+            return [regexp -all -inline {[^ \t\r\n]+} $value]
+        }
+        if {![string is list $value]} {
+            error "含集合的参数不是合法的 Tcl 列表"
+        }
+        # 只有一个元素、拆不开（如 "x[get_ports a]"）：集合和别的文字拼成了一个词。
+        if {[llength $value] == 1 && [lindex $value 0] eq $value} {
+            error "集合不能和别的文字拼成一个名字"
+        }
+        set words {}
+        foreach item $value { lappend words {*}[flattenList $item] }
+        return $words
+    }
+
     proc quote {value} {
         set value [string map [list \\ \\\\ \" \\" \n \\n \r \\r \t \\t \
                                     \u001d \\u001d \u001e \\u001e \u001f \\u001f] $value]
@@ -549,9 +590,23 @@ namespace eval msta {
 
     # 记录一条约束命令：参数原样交给 C 侧（集合已是标记）。选项的值是紧跟的
     # 一个参数，列表文本 {a b} 怎么解释由 C 侧的选项表决定。
+    # 列表里套了集合的参数，C 侧没法从文本里把标记拆出来，这里先用 flattenList
+    # 展平成一组词，写 JSON 时这个参数成为一个字符串数组。
+    # 每个参数记成 {s 文本} 或 {l 词列表}。
     proc emit {name args} {
         variable commands
-        lappend commands [linsert $args 0 $name]
+        set words [list [list s $name]]
+        foreach arg $args {
+            if {[isMarker $arg] || [string first "\u001e" $arg] < 0} {
+                lappend words [list s $arg]
+            } elseif {[catch {flattenList $arg} items]} {
+                warn "$name：$items；跳过这条命令"
+                lappend words [list s "\u001eZ0"]
+            } else {
+                lappend words [list l $items]
+            }
+        }
+        lappend commands $words
     }
 
     proc write_json {path} {
@@ -567,7 +622,14 @@ namespace eval msta {
             foreach word $command {
                 if {!$first_word} {puts -nonewline $file ","}
                 set first_word 0
-                puts -nonewline $file [quote $word]
+                lassign $word type value
+                if {$type eq "l"} {
+                    set items {}
+                    foreach item $value { lappend items [quote $item] }
+                    puts -nonewline $file "\[[join $items ,]\]"
+                } else {
+                    puts -nonewline $file [quote $value]
+                }
             }
             puts -nonewline $file "\]"
         }
@@ -621,22 +683,22 @@ namespace eval msta {
     }
 }
 
-proc get_ports {args} { return [msta::collection P {*}$args] }
+proc get_ports {args} { return [msta::marker [msta::collection P {*}$args]] }
 # 引脚用 G 标记（与网络 N 分开），-of_objects 时要按关系推对象。
-proc get_pins {args} { return [msta::collection G {*}$args] }
-proc get_clocks {args} { return [msta::collection C {*}$args] }
-proc get_cells {args} { return [msta::collection I {*}$args] }
-proc get_nets {args} { return [msta::collection N {*}$args] }
-proc all_inputs {args} { return [msta::allForm inputs {*}$args] }
-proc all_outputs {args} { return [msta::allForm outputs {*}$args] }
-proc all_registers {args} { return [msta::allForm registers {*}$args] }
-proc all_clocks {} { return [msta::allForm all_clocks] }
+proc get_pins {args} { return [msta::marker [msta::collection G {*}$args]] }
+proc get_clocks {args} { return [msta::marker [msta::collection C {*}$args]] }
+proc get_cells {args} { return [msta::marker [msta::collection I {*}$args]] }
+proc get_nets {args} { return [msta::marker [msta::collection N {*}$args]] }
+proc all_inputs {args} { return [msta::marker [msta::allForm inputs {*}$args]] }
+proc all_outputs {args} { return [msta::marker [msta::allForm outputs {*}$args]] }
+proc all_registers {args} { return [msta::marker [msta::allForm registers {*}$args]] }
+proc all_clocks {} { return [msta::marker [msta::allForm all_clocks]] }
 
 # Tcl 层的集合运算：实现在 msta 命名空间里，这里只做全局入口。
-proc remove_from_collection {a b} { return [msta::remove_from_collection $a $b] }
+proc remove_from_collection {a b} { return [msta::marker [msta::remove_from_collection $a $b]] }
 
 # current_design 既是语句（指定当前设计）也是对象：[current_design] 表示整个设计。
-proc current_design {args} { return "\u001eAdesign\u001d" }
+proc current_design {args} { return [msta::marker "\u001eAdesign\u001d"] }
 
 # 层次相关的命令：msta 只有一张展平网表，名字始终从顶层解析。
 proc current_instance {args} {
@@ -657,9 +719,9 @@ proc set_hierarchy_separator {args} {
 # 库对象查询：索引由 C 侧在起 tclsh 之前写进文件（loadLibIndex）。
 # 查询结果用 L/B/Y 三种标记打包，交给 C 侧展开成名字；名字可以直接喂给
 # set_driving_cell -lib_cell / -pin 这类命令。
-proc get_libs {args} { return [msta::libQuery get_libs libs {*}$args] }
-proc get_lib_cells {args} { return [msta::libQuery get_lib_cells cells {*}$args] }
-proc get_lib_pins {args} { return [msta::libQuery get_lib_pins pins {*}$args] }
+proc get_libs {args} { return [msta::marker [msta::libQuery get_libs libs {*}$args]] }
+proc get_lib_cells {args} { return [msta::marker [msta::libQuery get_lib_cells cells {*}$args]] }
+proc get_lib_pins {args} { return [msta::marker [msta::libQuery get_lib_pins pins {*}$args]] }
 
 foreach command {
     create_clock create_generated_clock set_clock_uncertainty set_clock_latency
