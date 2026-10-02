@@ -75,10 +75,13 @@ get_nets -filter {fanout > 1}
 | `set_input_transition` | 输入转换时间，可按边沿和 max/min 指定 |
 | `set_driving_cell` | 用 Liberty 单元的延迟和输出转换时间模拟外部驱动 |
 | `set_case_analysis`、`set_disable_timing` | 固定逻辑值或禁用单元时序弧 |
+| `set_logic_zero`、`set_logic_one`、`set_logic_dc` | 把端口或网络标为常量 0、常量 1 或无关值 |
 | `set_operating_conditions`、`set_voltage` | 选择工作条件、库角和电压信息 |
 | `set_max_transition`、`set_max_fanout`、`set_max_capacitance`、`set_min_capacitance`、`set_max_area` | 设计规则与面积限制 |
 
 对 I/O delay，`-max` 和 `-min` 分别约束 setup 和 hold；只写其中一个不会自动产生另一个角的值。两个选项都不写时，同一个值用于两角。`-source_latency_included` 和 `-network_latency_included` 表示延迟数值已包含相应时钟延迟。`-reference_pin` 使用指定时钟树引脚或端口上的时钟到达作为参照。
+
+`set_logic_zero` 和 `set_logic_one` 的效果与 `set_case_analysis 0`、`set_case_analysis 1` 相同。`set_logic_dc` 标记的对象不作为路径起点，路径也不穿过它，但它不提供确定的逻辑值，不参与单元极性推导。
 
 `set_driving_cell` 支持选择库、输入/输出引脚及输入转换时间。多库情况下可用 `-library` 或 `库名/单元名` 消除同名单元歧义。`read_liberty` 可读取多个文件；`set_operating_conditions` 可以为 max/min 分析选择不同的库和工作条件。若库提供 K 因子并指定电压或温度，延迟会按该信息缩放；否则电压和温度仅用于报告。
 
@@ -94,13 +97,34 @@ get_nets -filter {fanout > 1}
 
 路径选取可使用 `-from`、`-to` 和重复的 `-through`。同一个 `-through` 集合中的对象取“或”，多个 `-through` 按路径经过顺序匹配。支持路径边沿限定；边沿无法判定时会告警。`group_path` 只改变报告分组，不改变 slack。
 
-`set_data_check` 支持 setup 检查；hold 数据检查尚未建模。`set_clock_gating_check` 的边沿、高低电平选项不会改变按 Liberty 标记确定的检查对象。
+`set_data_check` 支持 setup 检查，不建模 hold 数据检查。`set_clock_gating_check` 的边沿、高低电平选项不会改变按 Liberty 标记确定的检查对象。
 
-## 模型边界
+## 未支持的选项
 
-- miniSTA 不读取 SPEF/SDF，也不计算线网 RC 延迟。
-- 锁存器输出按关闭沿加 clk-to-Q 计算，不模拟透明期提前出数。
-- 未实现 `create_generated_clock -add/-combinational`、`set_clock_sense -pulse`、`set_clock_groups -allow_paths` 等选项。
-- 部分常见工具扩展可以读取并告警；不支持的 SDC 命令或选项不应被视为已参与时序分析。
+- `create_generated_clock -add`、`-combinational`，`set_clock_sense -pulse`，`set_clock_groups -allow_paths` 等选项会使整条约束作废并告警。
+- 部分常见工具扩展（如 `-quiet`、`all_inputs -no_clocks`）可以读取，并告警说明它们不是 SDC 1.8 语法。
+- 不支持的 SDC 命令或选项不应被视为已参与时序分析。miniSTA 整体的模型范围见 [README 的支持范围](../README.md#支持范围)。
 
-可运行 `make test` 查看仓库中覆盖这些命令的 SDC 用例。
+## 明确不支持的命令
+
+下列命令属于 SDC 1.8，但 miniSTA 不建模。读取时会识别它们，告警说明原因，并只忽略该条命令。
+
+| 命令 | 说明 |
+| --- | --- |
+| `set_drive` | 用电阻描述输入驱动的过时写法；请使用 `set_driving_cell` |
+| `set_resistance` | 给网络标注电阻；miniSTA 不计算线网 RC |
+| `set_fanout_load` | 用扇出负载单位描述输出负载的过时写法；请使用 `set_load` |
+| `set_port_fanout_number` | 用外部扇出个数描述端口负载的过时写法；请使用 `set_load` |
+| `set_wire_load_min_block_size` | 线负载模型的设置；miniSTA 不使用线负载模型 |
+| `set_wire_load_mode` | 同上 |
+| `set_wire_load_model` | 同上 |
+| `set_wire_load_selection_group` | 同上 |
+| `create_voltage_area` | 多电压域的物理区域，不是 STA 约束 |
+| `set_level_shifter_strategy` | 多电压域的电平转换策略，不是 STA 约束 |
+| `set_level_shifter_threshold` | 多电压域的电平转换阈值，不是 STA 约束 |
+| `set_max_dynamic_power` | 动态功耗目标，不是 STA 约束 |
+| `set_max_leakage_power` | 漏电功耗目标，不是 STA 约束 |
+
+其他不认识的命令同样告警并忽略。
+
+SDC 用例在 `testcases/sdc_features/`，`make test` 会全部运行。其中 `sdc_commands.sdc` 对手册中的命令各写一条，检查它们都能被识别。

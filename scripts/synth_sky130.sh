@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # 把 testcases/synth_sky130/rtl 下的 RTL 综合成 sky130 门级网表。
-# 生成结果进仓库，这样跑 STA 不需要 Yosys。
+# 生成的网表 testcases/synth_sky130/netlist/pipe_demo.v 随仓库提供，只有重新综合
+# 时才需要运行本脚本。用例的 dofile 用 read_verilog 读这份网表，运行 msta 时仍需要
+# Yosys 把 Verilog 转成 JSON。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+#
+# SDC 语义断言：读取 run_all.sh 写在 build/ 下的用例日志，检查约束是否按预期生效。
+# 由 make test 调用；加 SDC 用例时在这里同步加断言。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -230,7 +233,7 @@ for idea_case in ideal_network ideal_network_tree ideal_network_noprop ideal_net
     fi
 done
 
-# create_clock -add：同一根网络两个时钟，各自传播、各自检查（见 docs/compare_sta.md）。
+# create_clock -add：同一根网络两个时钟，各自传播、各自检查（见 docs/sdc.md）。
 grep -Eq '^core[[:space:]]+20\.000' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 grep -Eq '^slow[[:space:]]+50\.000' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 grep -Fq '  时钟 core       网络 1 根，算出插入延迟的 1 根，最大插入延迟 0.000 ns' \

@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 #
-# 在小用例 testcases/sta_compare 上把 msta 和 OpenSTA/OpenTimer 对比。
-# 缺哪个工具就跳过哪个；在的工具必须和 msta 的 WNS 对得上。
+# make compare：用本地编译的参考工具检查 msta（说明见 docs/compare_sta.md）。
+#   1. testcases/sta_compare：setup/hold WNS 与 OpenSTA、OpenTimer 比较，
+#      容差 TOLERANCE_NS（默认 0.05 ns）。
+#   2. 有 OpenSTA 时再跑三组小用例，逐个比较 setup/hold WNS（容差 0.001 ns）：
+#      testcases/check_edges（compare_check_edges.py）、
+#      testcases/clock_edges（check_clock_edges.py）、
+#      testcases/nonunate_clock（check_nonunate_clock.py）。
+# 缺哪个工具就跳过哪个；在的工具必须和 msta 对得上。
+# 工具路径：OPENSTA_BIN、OPENTIMER_BIN；不设时在 vendor/ 下自动查找。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,7 +34,8 @@ if [[ -d "${ROOT}/vendor/sysroot/usr/lib/x86_64-linux-gnu" ]]; then
 fi
 
 if [[ -z "${OPENTIMER_BIN:-}" ]]; then
-    OPENTIMER_BIN="$(find "${ROOT}/vendor/opentimer" -type f -path '*/bin/ot-shell' 2>/dev/null | head -n 1 || true)"
+    OPENTIMER_BIN="$(find "${ROOT}/vendor/opentimer-src" "${ROOT}/vendor/opentimer" \
+                     -type f -path '*/bin/ot-shell' 2>/dev/null | head -n 1 || true)"
 fi
 if [[ ! -x "${OPENSTA_BIN}" && -x "${ROOT}/vendor/opensta-build/sta" ]]; then
     OPENSTA_BIN="${ROOT}/vendor/opensta-build/sta"

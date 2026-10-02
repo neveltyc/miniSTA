@@ -3,7 +3,7 @@
 # 用 scripts/synth_sky130.sh 从 testcases/synth_sky130/rtl/pipe_demo.v 综合出的
 # sky130 网表和 OpenSTA 对比。
 #
-# 不跟 OpenTimer 比：它的 Verilog 前端读不了总线位选，sky130 库也只认下一部分
+# 不跟 OpenTimer 比：它的 Verilog 前端读不了总线位选，sky130 库也只认得一部分
 # 单元，会报 no critical path。
 set -euo pipefail
 

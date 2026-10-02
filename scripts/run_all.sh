@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 #
-# 冒烟回归：把 testcases/ 下的每个 dofile 各起一个进程跑一遍；
+# make test：把 testcases/ 下的每个 dofile 各起一个进程跑一遍，日志写到 build/；
 # 任何命令报错、解析失败或非零退出都让脚本失败。
+# 之后依次运行读这些日志的断言脚本：
+#   check_sdc.sh            SDC 语义
+#   check_edges.sh          按数据边沿的约束检查（testcases/check_edges）
+#   check_clock_edges.py    时钟 min/max × rise/fall（testcases/clock_edges）
+#   check_nonunate_clock.py non_unate 时钟（testcases/nonunate_clock）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

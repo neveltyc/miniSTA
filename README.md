@@ -4,14 +4,22 @@ miniSTA（命令名 `msta`）是一个门级静态时序分析器。它读取 Li
 
 支持组合逻辑、触发器、锁存器、时钟传播、生成时钟、常见路径例外、时钟门控检查和部分设计规则检查。适合学习 STA、检查小型门级设计，以及复现仓库中的时序用例。分析范围和已知限制见[支持范围](#支持范围)。
 
-## 构建
-
-需要支持 GNU C99 的 C 编译器和 `make`。读取 SDC 需要 `tclsh`；使用 `read_verilog` 时还需要 Yosys。已有 Yosys `write_json` 输出时，可以使用 `read_json`，无需在运行时调用 Yosys。
+## 构建与依赖
 
 ```bash
 make
 ./build/msta --help
 ```
+
+| 依赖 | 何时需要 |
+| --- | --- |
+| 支持 GNU C99 的 C 编译器、`make` | 构建 `msta` |
+| `tclsh` | `read_sdc`：SDC 由 `scripts/sdc_bridge.tcl` 在 Tcl 中解释 |
+| Yosys | `read_verilog`：运行时调用 `yosys` 把门级 Verilog 转成 JSON。仓库中的用例都使用 `read_verilog`，因此运行用例和 `make test` 也需要它 |
+| `python3` | `make test` 和 `make compare` 中的断言脚本 |
+| OpenSTA、OpenTimer（可选） | `make compare` 系列对比，需要本地编译，见[参考工具对比](docs/compare_sta.md) |
+
+`tclsh` 和 `yosys` 需在 `PATH` 中。`msta` 按可执行文件的位置查找 `../scripts/sdc_bridge.tcl`，移动 `build/msta` 时要保持这一相对位置。已有 Yosys `write_json` 输出时，可以用 `read_json` 读取网表，运行时无需 Yosys。
 
 ## 快速开始
 
@@ -65,17 +73,24 @@ report_checks -max_paths 5 -hold
 - 支持时钟树传播、生成时钟、输入和输出延迟、时钟不确定度、路径例外、路径分组、负载与输入驱动等 SDC 子集。具体选项和行为见 [SDC 参考](docs/sdc.md)。
 - 支持单个分析模式下分别指定 max/min 工作条件和 Liberty 库。
 
-miniSTA 使用集中电容表示负载，不读取 SPEF/SDF，也不计算线网 RC 延迟；结果适用于前布局估算。当前不建模 SI、CCS/ECSM、CPPR、多场景分析、锁存器透明期提前出数及部分 SDC 选项。未支持的约束会在读取时给出警告；请检查日志和未约束端点数量，再使用分析结果。
+miniSTA 使用集中电容表示负载，不读取 SPEF/SDF，也不计算线网 RC 延迟；结果适用于前布局估算。当前不建模 SI、CCS/ECSM、CPPR、多场景分析、锁存器透明期提前出数及部分 SDC 选项。未支持的约束会在读取时给出警告；请检查日志和未约束端点数量，再使用分析结果。实现上的取舍见[设计说明的模型边界](docs/design.md#5-模型边界)。
 
 ## 示例与验证
 
-`testcases/` 包含最小电路、SDC 功能、多库设计和较大的 sky130 门级网表。运行全部仓库用例：
+`testcases/` 包含最小电路、SDC 功能、多库设计和较大的 sky130 门级网表。运行全部用例及其断言：
 
 ```bash
 make test
 ```
 
 与 OpenSTA、OpenTimer 对照的方法见[参考工具对比](docs/compare_sta.md)。这些工具只在运行相应对比命令时需要。
+
+## 文档
+
+- [SDC 参考](docs/sdc.md)：支持的命令、选项、解析规则和明确不支持的命令。
+- [设计说明](docs/design.md)：模块划分、时序分析步骤、SDC 读入链路、编码约定和模型边界。
+- [参考工具对比](docs/compare_sta.md)：`make compare` 系列对比的用例、容差和工具路径。
+- 各用例目录下的 `README.md`：用例的手算推导与覆盖点。
 
 ## 许可证
 
