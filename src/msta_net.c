@@ -54,7 +54,7 @@ static int Msta_BitFromJson( MJsonValue *pValue )
         if ( !strcmp( pValue->pStr, "1" ) ) return MSTA_BIT_CONST1;
         if ( !strcmp( pValue->pStr, "x" ) || !strcmp( pValue->pStr, "z" ) )
         {
-            Msta_WarnOnce( "a pin is tied to 1'bx/1'bz; msta ties it to constant 0" );
+            Msta_WarnOnce( "有引脚接到 1'bx/1'bz；msta 按常数 0 处理" );
             return MSTA_BIT_CONST0;
         }
     }
@@ -71,7 +71,7 @@ static void Msta_ReadBits( MJsonValue *pArray, MstaIdArray *pOut, int *pnMaxBit 
         int nBit = Msta_BitFromJson( Msta_JsonAt(pArray, i) );
         if ( nBit == MSTA_BIT_BAD )
         {
-            Msta_WarnOnce( "unsupported bit value in the yosys json (treated as constant 0)" );
+            Msta_WarnOnce( "yosys json 里有不支持的位值（按常数 0 处理）" );
             nBit = MSTA_BIT_CONST0;
         }
         *MstaIdArrayAppend( pOut ) = nBit;
@@ -110,13 +110,13 @@ int Msta_DesignReadYosysJson( MstaDesign *pDes, const char *pJsonFile, int fVerb
     pRoot = Msta_JsonParseFile( pJsonFile, sError, (int)sizeof(sError) );
     if ( pRoot == NULL )
     {
-        Msta_Error( "%s: %s\n", pJsonFile, sError[0] ? sError : "parse failed" );
+        Msta_Error( "%s：%s\n", pJsonFile, sError[0] ? sError : "解析失败" );
         return 0;
     }
     pModules = Msta_JsonGet( pRoot, "modules" );
     if ( pModules == NULL )
     {
-        Msta_Error( "\"%s\" has no \"modules\": is it a yosys write_json file?\n", pJsonFile );
+        Msta_Error( "\"%s\" 里没有 \"modules\"：它是 yosys write_json 生成的文件吗？\n", pJsonFile );
         Msta_JsonFree( pRoot );
         return 0;
     }
@@ -204,7 +204,7 @@ int Msta_DesignReadYosysJson( MstaDesign *pDes, const char *pJsonFile, int fVerb
 
     Msta_JsonFree( pRoot );
     if ( fVerbose )
-        Msta_Info( "yosys json \"%s\": %d modules, %d cell statements\n",
+        Msta_Info( "yosys json \"%s\"：模块 %d 个，单元语句 %d 条\n",
                    pJsonFile, nMods, nCellStmts );
     return 1;
 }
@@ -237,12 +237,12 @@ int Msta_DesignReadVerilog( MstaDesign *pDes, const char **ppFiles, int nFiles,
 
     if ( nFiles <= 0 || pWorkDir == NULL )
     {
-        Msta_Error( "read_verilog: no file given.\n" );
+        Msta_Error( "read_verilog：没有给出文件\n" );
         return 0;
     }
     if ( !Msta_IsShellSafePath(pWorkDir) )
     {
-        Msta_Error( "work directory contains characters msta will not pass to the shell: \"%s\"\n",
+        Msta_Error( "工作目录里有 msta 不会传给 shell 的字符：\"%s\"\n",
                     pWorkDir );
         return 0;
     }
@@ -252,7 +252,7 @@ int Msta_DesignReadVerilog( MstaDesign *pDes, const char **ppFiles, int nFiles,
     {
         if ( !Msta_IsShellSafePath(ppFiles[i]) )
         {
-            Msta_Error( "file name contains characters msta will not pass to the shell: \"%s\"\n",
+            Msta_Error( "文件名里有 msta 不会传给 shell 的字符：\"%s\"\n",
                         ppFiles[i] );
             return 0;
         }
@@ -260,19 +260,19 @@ int Msta_DesignReadVerilog( MstaDesign *pDes, const char **ppFiles, int nFiles,
                           " read_verilog \"%s\";", ppFiles[i] );
         if ( nLen >= (int)sizeof(sReads) - 128 )
         {
-            Msta_Error( "read_verilog: too many files.\n" );
+            Msta_Error( "read_verilog：文件太多\n" );
             return 0;
         }
     }
     snprintf( sCmd, sizeof(sCmd), "yosys -q -l \"%s\" -p '%s write_json \"%s\"'",
               sLog, sReads, sJson );
     if ( fVerbose )
-        Msta_Info( "front-end: %s\n", sCmd );
+        Msta_Info( "前端：%s\n", sCmd );
     nRet = system( sCmd );
     if ( nRet != 0 )
     {
         unlink( sJson );
-        Msta_Error( "yosys failed (exit %d); see %s\n", nRet, sLog );
+        Msta_Error( "yosys 运行失败（退出码 %d）；详见 %s\n", nRet, sLog );
         return 0;
     }
     fOk = Msta_DesignReadYosysJson( pDes, sJson, fVerbose );
@@ -339,7 +339,7 @@ static int Msta_GlobalNetForBit( MstaFlatten *pF, MstaModule *pMod, const int *p
     if ( nBit == MSTA_BIT_CONST1 ) return pDes->nConst1Net;
     if ( nBit < 0 || nBit >= pMod->nBits )
     {
-        Msta_WarnOnce( "module \"%s\" refers to bit %d which is out of range",
+        Msta_WarnOnce( "模块 \"%s\" 引用的位 %d 超出范围",
                        Msta_NameStr(pMod->Name), nBit );
         return pDes->nConst0Net;
     }
@@ -390,7 +390,7 @@ static MstaCell *Msta_BlackBoxCell( MstaFlatten *pF, MstaModule *pMod, MstaModCe
         pPin->MaxSlew = -1.0;
     }
     pDes->nBlackBoxes++;
-    Msta_WarnOnce( "cell \"%s\" is not in the library: treated as a black box with ideal timing",
+    Msta_WarnOnce( "单元 \"%s\" 不在库里：按理想时序的黑盒处理",
                    Msta_NameStr(pCell->Type) );
     return pNew;
 }
@@ -461,13 +461,13 @@ static void Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap
                 int b, n;
                 if ( pFormal == NULL )
                 {
-                    Msta_WarnOnce( "module \"%s\" has no port \"%s\"",
+                    Msta_WarnOnce( "模块 \"%s\" 没有端口 \"%s\"",
                                    Msta_NameStr(pChild->Name), Msta_NameStr(pConn->Pin) );
                     continue;
                 }
                 n = pFormal->Bits.nSize < pConn->Bits.nSize ? pFormal->Bits.nSize : pConn->Bits.nSize;
                 if ( pFormal->Bits.nSize != pConn->Bits.nSize )
-                    Msta_WarnOnce( "port \"%s.%s\" is %d bits but %d bits are connected",
+                    Msta_WarnOnce( "端口 \"%s.%s\" 是 %d 位，却连了 %d 位",
                                    Msta_NameStr(pChild->Name), Msta_NameStr(pFormal->Name),
                                    pFormal->Bits.nSize, pConn->Bits.nSize );
                 for ( b = 0; b < n; b++ )       /* 两端都是低位在前，按下标配对 */
@@ -509,14 +509,14 @@ static void Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap
                 int nPin = Msta_CellPinIndexOf( pLibCell, pConn->Pin );
                 if ( nPin < 0 )
                 {
-                    Msta_WarnOnce( "cell \"%s\" has no pin \"%s\"",
+                    Msta_WarnOnce( "单元 \"%s\" 没有引脚 \"%s\"",
                                    Msta_NameStr(pCell->Type), Msta_NameStr(pConn->Pin) );
                     continue;
                 }
                 if ( pConn->Bits.nSize == 0 )
                     continue;                              /* 悬空脚 */
                 if ( pConn->Bits.nSize > 1 )
-                    Msta_WarnOnce( "pin \"%s.%s\" is 1 bit but %d bits are connected",
+                    Msta_WarnOnce( "引脚 \"%s.%s\" 是 1 位，却连了 %d 位",
                                    Msta_NameStr(pCell->Type), Msta_NameStr(pConn->Pin), pConn->Bits.nSize );
                 pNew->pNets[nPin] = Msta_GlobalNetForBit( pF, pMod, pNetMap, pConn->Bits.pData[0] );
             }
@@ -599,7 +599,7 @@ static void Msta_BuildDrivers( MstaDesign *pDes )
                 if ( pNet->Driver.InstId == MSTA_NO_ID )
                     pNet->Driver = Ref;
                 else if ( !pNet->fConst )
-                    Msta_WarnOnce( "net \"%s\" has more than one driver", Msta_NameStr(pNet->Name) );
+                    Msta_WarnOnce( "网络 \"%s\" 有不止一个驱动", Msta_NameStr(pNet->Name) );
             }
             else if ( pPin->Dir == MSTA_DIR_INPUT || pPin->Dir == MSTA_DIR_INOUT )
                 *MstaPinRefArrayAppend( &pNet->vLoads ) = Ref;
@@ -616,13 +616,13 @@ int Msta_DesignFlatten( MstaDesign *pDes, MstaLib *pLib, const char *pTopName, i
         pTopName = Msta_DesignGuessTop( pDes );
     if ( pTopName == NULL )
     {
-        Msta_Error( "cannot guess the top module; say \"current_design <name>\" first.\n" );
+        Msta_Error( "无法推断顶层模块；请先执行 \"current_design <name>\"\n" );
         return 0;
     }
     nTop = Msta_IntMapGet( &pDes->modMap, Msta_NameId(pTopName), -1 );
     if ( nTop < 0 )
     {
-        Msta_Error( "the netlist has no module named \"%s\".\n", pTopName );
+        Msta_Error( "网表里没有名为 \"%s\" 的模块\n", pTopName );
         return 0;
     }
     pDes->TopName = Msta_NameId( pTopName );
@@ -677,7 +677,7 @@ const char *Msta_DesignGuessTop( MstaDesign *pDes )
     if ( nFound != 1 )
     {
         if ( nFound > 1 )
-            Msta_WarnOnce( "%d modules are not instantiated by anyone: say current_design <name>", nFound );
+            Msta_WarnOnce( "有 %d 个模块没有被例化：请用 current_design <name> 指定顶层", nFound );
         return NULL;
     }
     return Msta_NameStr( pDes->vModules.pData[nLast].Name );

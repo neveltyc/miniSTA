@@ -267,7 +267,7 @@ static void Msta_LibReadTiming( Scl_Tree_t *pTree, Scl_Item_t *pTiming,
 
     /* 对未支持的 timing_type 发出告警。 */
     if ( pType != NULL && pArc->Type == MSTA_TT_UNKNOWN )
-        Msta_WarnOnce( "timing_type \"%s\" is not modeled by msta (it is kept as an unused arc)",
+        Msta_WarnOnce( "timing_type \"%s\" 未建模，已忽略（保留为不参与分析的弧）",
                        Scl_LibertyItemName(pTree, pType) );
 }
 
@@ -825,7 +825,7 @@ int Msta_LibRead( MstaLib *pLib, const char *pFileName, int fVerbose )
              ? pRoot : Scl_LibertyFindTop( pTree, "library" );
     if ( pLibrary == NULL )
     {
-        Msta_Error( "\"%s\": no \"library\" entry found at top level.\n", pFileName );
+        Msta_Error( "\"%s\"：顶层没有找到 \"library\" 组\n", pFileName );
         Scl_LibertyStop( pTree );
         return 0;
     }
@@ -869,7 +869,7 @@ int Msta_LibRead( MstaLib *pLib, const char *pFileName, int fVerbose )
         MstaLibInfo *pInfo = MstaLibInfoArrayAt( &pLib->vLibs, pLib->vLibs.nSize - 1 );
         pInfo->nCells = pLib->vCells.nSize + pLib->vCornerCells.nSize - nCellsBefore;
         if ( fVerbose )
-            Msta_Info( "liberty \"%s\": %d cells (library \"%s\", %d duplicate definitions skipped)\n",
+            Msta_Info( "liberty \"%s\"：单元 %d 个（库 \"%s\"，跳过重复定义 %d 个）\n",
                        pFileName, pInfo->nCells, Msta_NameStr(pInfo->Name),
                        pLib->nCellsSkipped - nSkippedBefore );
     }
@@ -1419,7 +1419,7 @@ void Msta_LibPrintCell( MstaLib *pLib, FILE *pFile, const char *pCellName )
     int i;
     if ( pCell == NULL )
     {
-        fprintf( pFile, "cell \"%s\" not found\n", pCellName );
+        fprintf( pFile, "找不到单元 \"%s\"\n", pCellName );
         return;
     }
     fprintf( pFile, "cell %s : %d pins, %d arcs, %d reg checks, area %.4f, %s\n",

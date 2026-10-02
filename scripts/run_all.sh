@@ -13,12 +13,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MSTA="${ROOT}/build/msta"
 
 if [[ ! -x "${MSTA}" ]]; then
-    echo "error: ${MSTA} is missing; run make first" >&2
+    echo "错误：找不到 ${MSTA}，请先运行 make" >&2
     exit 1
 fi
 
 if [[ -z "$(find "${ROOT}/testcases" -name '*.dofile' -type f -print -quit)" ]]; then
-    echo "error: no testcases/*.dofile found" >&2
+    echo "错误：testcases/ 下没有找到 *.dofile" >&2
     exit 1
 fi
 
@@ -33,7 +33,7 @@ while IFS= read -r dofile; do
     count=$((count + 1))
 done < <(find "${ROOT}/testcases" -name '*.dofile' -type f | sort)
 
-echo "==> ${count} testcases passed"
+echo "==> ${count} 个用例全部通过"
 bash "${ROOT}/scripts/check_sdc.sh"
 bash "${ROOT}/scripts/check_edges.sh"
 python3 "${ROOT}/scripts/check_clock_edges.py"

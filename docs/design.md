@@ -94,7 +94,7 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 
 3. **需要设计信息的查询**。Tcl 子进程看不到 C 侧的数据，所以 C 侧在启动 `tclsh` 之前把需要的信息写成临时文件，路径作为参数传给桥接脚本：库索引（`Msta_SdcWriteLibIndex`）供 `get_libs`、`get_lib_cells`、`get_lib_pins` 查询；网表索引（`Msta_SdcWriteDesignIndex`）只在 SDC 文本里出现 `-filter` 时才导出，供 Tcl 用 `expr` 求过滤表达式。其他需要设计信息的查询也走这条通道。
 4. **JSON 与展开**。桥接脚本把命令写成 JSON 数组，C 侧用 `msta_json.c` 读回，`Msta_SdcExpandRecord` 把每个标记展开成对象名，并记下每个词来自第几个 Tcl 参数（选项的值要按参数取）。集合为空时整条命令作废。
-5. **分发表**。`Msta_SdcRunOne` 在 `s_vSdcCommands` 里按命令名查找。每一行就是一条命令的完整语法：`{ 命令名, 选项表, 位置参数开头的值, 对象个数下限, 上限, 处理函数 }`。查不到时再查 `s_vIgnoredCommands`（手册里有但不建模的命令，告警说明原因）；两张表都没有的报 `unknown sdc command`。
+5. **分发表**。`Msta_SdcRunOne` 在 `s_vSdcCommands` 里按命令名查找。每一行就是一条命令的完整语法：`{ 命令名, 选项表, 位置参数开头的值, 对象个数下限, 上限, 处理函数 }`。查不到时再查 `s_vIgnoredCommands`（手册里有但不建模的命令，告警说明原因）；两张表都没有的报 `sdc：未知命令`。
 6. **选项表解析**。`Msta_SdcParseCmd` 按选项表从左到右读 argv，统一检查语法（规则见 [SDC 参考的命令解析规则](sdc.md#命令解析规则)），语法错误时整条作废并计数。选项种类为 `MSTA_SDC_FLAG`、`VALUE`、`OBJECTS`、`LIST`，附加属性 `MSTA_SDC_RF`（也认 `-rise_xxx`/`-fall_xxx`）、`REPEAT`、`IGNORE`（告警后忽略该选项）、`REJECT`（出现即作废整条约束），定义在 `msta_sdc_int.h`。
 7. **处理函数**。只做语义：用 `Msta_SdcHasFlag`、`Msta_SdcOptValue`、`Msta_SdcOptList` 取选项，用 `pValue`、`ppObjs` 取位置参数；取值错误调用 `Msta_SdcReject` 作废整条，提醒用 `Msta_SdcNote`。本条命令的临时内存（`Msta_SdcArena`）在读下一条命令时统一释放。
 

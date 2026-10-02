@@ -35,7 +35,7 @@ static void Msta_JsonFail( MJsonReader *p, const char *pMessage )
         return;
     p->fFailed = 1;
     if ( p->pErr && p->nErr > 0 )
-        snprintf( p->pErr, (size_t)p->nErr, "JSON error near byte %d: %s",
+        snprintf( p->pErr, (size_t)p->nErr, "JSON 错误（第 %d 字节附近）：%s",
                   (int)(p->pCur - p->pStart), pMessage );
 }
 
@@ -62,7 +62,7 @@ static char *Msta_JsonReadStringRaw( MJsonReader *p )
     char *pOut = (char *)malloc( nCap );
     assert( pOut );
     if ( p->pCur >= p->pEnd || *p->pCur != '\"' )
-    {   Msta_JsonFail( p, "expected a string." ); free(pOut); return NULL;  }
+    {   Msta_JsonFail( p, "这里应该是字符串" ); free(pOut); return NULL;  }
     p->pCur++;
     while ( p->pCur < p->pEnd )
     {
@@ -79,7 +79,7 @@ static char *Msta_JsonReadStringRaw( MJsonReader *p )
         {
             /* JSON 规范要求控制字符必须转义，裸控制字符直接判为非法输入。 */
             if ( (unsigned char)c < 0x20 )
-            {   Msta_JsonFail( p, "unescaped control character in a string." );
+            {   Msta_JsonFail( p, "字符串里有未转义的控制字符" );
                 free(pOut); return NULL;  }
             pOut[nLen++] = c;
             continue;
@@ -110,7 +110,7 @@ static char *Msta_JsonReadStringRaw( MJsonReader *p )
                     if      ( h >= '0' && h <= '9' ) nCode += (unsigned)(h - '0');
                     else if ( h >= 'a' && h <= 'f' ) nCode += (unsigned)(h - 'a' + 10);
                     else if ( h >= 'A' && h <= 'F' ) nCode += (unsigned)(h - 'A' + 10);
-                    else { Msta_JsonFail( p, "bad \\u escape." ); free(pOut); return NULL; }
+                    else { Msta_JsonFail( p, "\\u 转义写错了" ); free(pOut); return NULL; }
                 }
                 if ( nCode < 0x80 )
                     pOut[nLen++] = (char)nCode;
@@ -128,12 +128,12 @@ static char *Msta_JsonReadStringRaw( MJsonReader *p )
                 break;
             }
             default:
-                Msta_JsonFail( p, "unknown escape." );
+                Msta_JsonFail( p, "未知的转义序列" );
                 free( pOut );
                 return NULL;
         }
     }
-    Msta_JsonFail( p, "unterminated string." );
+    Msta_JsonFail( p, "字符串没有结束引号" );
     free( pOut );
     return NULL;
 }
@@ -144,7 +144,7 @@ static MJsonValue *Msta_JsonReadNumber( MJsonReader *p )
     double Value = strtod( p->pCur, &pEndPtr );
     MJsonValue *pNode;
     if ( pEndPtr == p->pCur )
-    {   Msta_JsonFail( p, "bad number." ); return NULL;  }
+    {   Msta_JsonFail( p, "数字格式不对" ); return NULL;  }
     p->pCur = pEndPtr;
     pNode = Msta_JsonNewValue( MJSON_NUMBER );
     pNode->Num = Value;
@@ -173,10 +173,10 @@ static MJsonValue *Msta_JsonParseValue( MJsonReader *p )
     char c;
 
     if ( ++p->nDepth > MJSON_MAX_DEPTH )
-    {   Msta_JsonFail( p, "nesting too deep." ); return NULL;  }
+    {   Msta_JsonFail( p, "嵌套层数太深" ); return NULL;  }
     Msta_JsonSkipSpace( p );
     if ( p->pCur >= p->pEnd )
-    {   Msta_JsonFail( p, "unexpected end of file." ); p->nDepth--; return NULL;  }
+    {   Msta_JsonFail( p, "文件意外结束" ); p->nDepth--; return NULL;  }
     c = *p->pCur;
 
     if ( c == '{' )
@@ -196,7 +196,7 @@ static MJsonValue *Msta_JsonParseValue( MJsonReader *p )
                 goto fail;
             Msta_JsonSkipSpace( p );
             if ( p->pCur >= p->pEnd || *p->pCur != ':' )
-            {   Msta_JsonFail( p, "expected \":\" in an object." ); free(pKey); goto fail;  }
+            {   Msta_JsonFail( p, "对象里这里应该是 \":\"" ); free(pKey); goto fail;  }
             p->pCur++;
             pChild = Msta_JsonParseValue( p );
             if ( pChild == NULL )
@@ -207,7 +207,7 @@ static MJsonValue *Msta_JsonParseValue( MJsonReader *p )
             {   p->pCur++; continue;  }
             if ( p->pCur < p->pEnd && *p->pCur == '}' )
             {   p->pCur++; p->nDepth--; return pNode;  }
-            Msta_JsonFail( p, "expected \",\" or \"}\" in an object." );
+            Msta_JsonFail( p, "对象里这里应该是 \",\" 或 \"}\"" );
             goto fail;
         }
     }
@@ -229,7 +229,7 @@ static MJsonValue *Msta_JsonParseValue( MJsonReader *p )
             {   p->pCur++; continue;  }
             if ( p->pCur < p->pEnd && *p->pCur == ']' )
             {   p->pCur++; p->nDepth--; return pNode;  }
-            Msta_JsonFail( p, "expected \",\" or \"]\" in an array." );
+            Msta_JsonFail( p, "数组里这里应该是 \",\" 或 \"]\"" );
             goto fail;
         }
     }
@@ -255,7 +255,7 @@ static MJsonValue *Msta_JsonParseValue( MJsonReader *p )
         p->nDepth--;
         return pNode;
     }
-    Msta_JsonFail( p, "unexpected token." );
+    Msta_JsonFail( p, "无法识别的内容" );
     return NULL;
 
 fail:
@@ -283,7 +283,7 @@ MJsonValue *Msta_JsonParse( const char *pText, size_t nLength, char *pErrBuf, in
     Msta_JsonSkipSpace( &r );
     if ( r.pCur != r.pEnd )
     {
-        Msta_JsonFail( &r, "trailing characters after the JSON value." );
+        Msta_JsonFail( &r, "JSON 值后面还有多余字符" );
         Msta_JsonFree( pRoot );
         return NULL;
     }

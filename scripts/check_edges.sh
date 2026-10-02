@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 expect = {
-    # setup/hold: (slack, edge, arrival, constraint)
+    # 依次为 setup、hold 两组：(slack, 数据边沿, data arrival time, 约束值)
     'normal': ((4.1, 'fall', 2, 3.9), (.5, 'rise', 3, 2.5)),
     'swapped': ((4.1, 'fall', 2, 3.9), (.5, 'rise', 3, 2.5)),
     'rise_only': ((6.5, 'rise', 3, .5), (.5, 'rise', 3, 2.5)),
@@ -72,5 +72,5 @@ for name, setup, hold in (
         assert 'endpoint   : q' in text
     else:
         assert 'to output port' not in text
-print('==> edge constraint checks passed (17 cases)')
+print('==> 按边沿约束检查全部通过（17 个用例）')
 PY

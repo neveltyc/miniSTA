@@ -73,7 +73,7 @@ int Msta_SdcResolveNetsInto( MstaDesign *pDes, const char *pTarget, MstaSdcIntAr
             *MstaSdcIntArrayAppend( vOut ) = i;
         }
         if ( vOut->nSize == nBeg && !Msta_SdcIsQuiet(pTarget) )
-            Msta_WarnOnce("sdc pattern \"%s\" matched no nets",pTarget);
+            Msta_WarnOnce("sdc：模式 \"%s\" 没有匹配到任何网络",pTarget);
         return vOut->nSize - nBeg;
     }
 
@@ -105,7 +105,7 @@ int Msta_SdcResolveNetsInto( MstaDesign *pDes, const char *pTarget, MstaSdcIntAr
         if ( pSlash == NULL )
         {
             if ( !Msta_SdcIsQuiet(pTarget) )
-                Msta_WarnOnce( "sdc target \"%s\" is not a net of this design", pTarget );
+                Msta_WarnOnce( "sdc：对象 \"%s\" 不是本设计里的网络", pTarget );
             return 0;
         }
         *pSlash = 0;
@@ -113,13 +113,13 @@ int Msta_SdcResolveNetsInto( MstaDesign *pDes, const char *pTarget, MstaSdcIntAr
         if ( nInst < 0 )
         {
             if ( !Msta_SdcIsQuiet(pTarget) )
-                Msta_WarnOnce( "sdc target \"%s\" is neither a net nor an instance pin", pTarget );
+                Msta_WarnOnce( "sdc：对象 \"%s\" 既不是网络也不是实例引脚", pTarget );
             return 0;
         }
         nNet = Msta_DesignInstPinNet( pDes, nInst, pSlash + 1 );
         if ( nNet < 0 )
         {
-            Msta_WarnOnce( "instance \"%s\" has no pin \"%s\"", pBuf, pSlash + 1 );
+            Msta_WarnOnce( "sdc：实例 \"%s\" 没有引脚 \"%s\"", pBuf, pSlash + 1 );
             return 0;
         }
         *MstaSdcIntArrayAppend( vOut ) = nNet;
@@ -151,28 +151,28 @@ int Msta_SdcResolveNets( MstaDesign *pDes, const char *pTarget, int **ppNets )
    Msta_SdcOptList 和 pValue / ppObjs。
    ===================================================================== */
 
-/* 作废整条约束：告警 "<命令>: <原因>; constraint rejected"，并计入忽略数。
+/* 作废整条约束：告警 "<命令>：<原因>；约束作废"，并计入忽略数。
    命令的所有语法和取值错误都走这里，措辞因此一致。 */
 void Msta_SdcReject( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pFormat, ... )
 {
-    char sReason[400];
+    char sReason[800];
     va_list Args;
     va_start( Args, pFormat );
     vsnprintf( sReason, sizeof(sReason), pFormat, Args );
     va_end( Args );
-    Msta_WarnOnce( "%s: %s; constraint rejected", pCmd->pName, sReason );
+    Msta_WarnOnce( "%s：%s；约束作废", pCmd->pName, sReason );
     p->nCommandsIgnored++;
 }
 
-/* 只提醒、约束照常生效："<命令>: <说明>"。 */
+/* 只提醒、约束照常生效："<命令>：<说明>"。 */
 void Msta_SdcNote( const MstaSdcCmd *pCmd, const char *pFormat, ... )
 {
-    char sText[400];
+    char sText[800];
     va_list Args;
     va_start( Args, pFormat );
     vsnprintf( sText, sizeof(sText), pFormat, Args );
     va_end( Args );
-    Msta_WarnOnce( "%s: %s", pCmd->pName, sText );
+    Msta_WarnOnce( "%s：%s", pCmd->pName, sText );
 }
 
 /* 在本条命令的临时内存上分配 n 个清零的元素（多给一个，n 为 0 也能用）。 */
@@ -228,9 +228,9 @@ static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaS
     if ( pDef->Value != MSTA_SDC_NO_VALUE )
     {
         if ( nPos == 0 )
-        { Msta_SdcReject( p, pCmd, "needs a value" ); return 0; }
+        { Msta_SdcReject( p, pCmd, "缺少数值" ); return 0; }
         if ( pDef->Value == MSTA_SDC_NUMBER && !Msta_SdcIsNumber( ppPos[0] ) )
-        { Msta_SdcReject( p, pCmd, "value \"%s\" is not a number", ppPos[0] ); return 0; }
+        { Msta_SdcReject( p, pCmd, "值 \"%s\" 不是数", ppPos[0] ); return 0; }
         pCmd->pValue = ppPos[0];
         iFirst = 1;
     }
@@ -244,19 +244,19 @@ static int Msta_SdcSplitPositional( MstaSdc *p, const MstaSdcCmdDef *pDef, MstaS
             continue;
         k = Msta_SdcFindOpt( pCmd->pOpts, pPrev, &Edge );
         if ( k >= 0 && pCmd->pOpts[k].Kind == MSTA_SDC_FLAG )
-            Msta_SdcReject( p, pCmd, "\"%s %s\" is not SDC 1.8 syntax (%s takes no value)",
+            Msta_SdcReject( p, pCmd, "\"%s %s\" 不是 SDC 1.8 语法（%s 后面不带值）",
                             pPrev, ppPos[i], pPrev );
         else
-            Msta_SdcReject( p, pCmd, "unexpected value \"%s\"", ppPos[i] );
+            Msta_SdcReject( p, pCmd, "多出了数值 \"%s\"", ppPos[i] );
         return 0;
     }
     pCmd->ppObjs = ppPos + iFirst;
     pCmd->nObjs  = nPos - iFirst;
     if ( pCmd->nObjs < pDef->nMinObjs )
-    { Msta_SdcReject( p, pCmd, "needs an object list" ); return 0; }
+    { Msta_SdcReject( p, pCmd, "缺少对象列表" ); return 0; }
     if ( pDef->nMaxObjs >= 0 && pCmd->nObjs > pDef->nMaxObjs )
     {
-        Msta_SdcReject( p, pCmd, "unexpected argument \"%s\"", pCmd->ppObjs[pDef->nMaxObjs] );
+        Msta_SdcReject( p, pCmd, "多出了参数 \"%s\"", pCmd->ppObjs[pDef->nMaxObjs] );
         return 0;
     }
     return 1;
@@ -312,9 +312,9 @@ int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **ar
         k = Msta_SdcFindOpt( pDef->pOpts, argv[i], &Edge );
         pOpt = k >= 0 ? &pDef->pOpts[k] : NULL;
         if ( pOpt == NULL || ( pOpt->Attr & MSTA_SDC_REJECT ) )
-        { Msta_SdcReject( p, pCmd, "option \"%s\" is not modeled", argv[i] ); return 0; }
+        { Msta_SdcReject( p, pCmd, "选项 \"%s\" 未建模", argv[i] ); return 0; }
         if ( pCmd->pAt[k] > 0 && !( pOpt->Attr & MSTA_SDC_REPEAT ) )
-        { Msta_SdcReject( p, pCmd, "option \"%s\" is given more than once", pOpt->pName ); return 0; }
+        { Msta_SdcReject( p, pCmd, "选项 \"%s\" 写了不止一次", pOpt->pName ); return 0; }
         if ( pCmd->pAt[k] == 0 )
             pCmd->pAt[k] = i;
         pCmd->pEdge[k] = Edge;
@@ -329,19 +329,19 @@ int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **ar
             ppWords = argv + i + 1;
             nWords  = j - i - 1;
             if ( nWords == 0 )
-            { Msta_SdcReject( p, pCmd, "option \"%s\" has an empty object list", argv[i] ); return 0; }
+            { Msta_SdcReject( p, pCmd, "选项 \"%s\" 后面没有对象", argv[i] ); return 0; }
         }
         else
         {
             /* VALUE 和 OBJECTS 取紧跟的下一个参数（它展开出的所有词）。 */
             if ( i + 1 >= argc || Msta_SdcLooksLikeOption( argv[i+1] ) )
-            { Msta_SdcReject( p, pCmd, "option \"%s\" needs a value", argv[i] ); return 0; }
+            { Msta_SdcReject( p, pCmd, "选项 \"%s\" 缺少值", argv[i] ); return 0; }
             for ( j = i + 1; j < argc && pArg[j] == pArg[i+1]; j++ )
                 ;
             ppWords = argv + i + 1;
             nWords  = j - i - 1;
             if ( pOpt->Kind == MSTA_SDC_VALUE && nWords > 1 )
-            { Msta_SdcReject( p, pCmd, "option \"%s\" takes a single value", argv[i] ); return 0; }
+            { Msta_SdcReject( p, pCmd, "选项 \"%s\" 只能带一个值", argv[i] ); return 0; }
             if ( pOpt->Kind == MSTA_SDC_VALUE )
                 pCmd->ppValue[k] = argv[i+1];
             else if ( nWords == 1 && strpbrk( argv[i+1], " \t" ) != NULL )
@@ -356,7 +356,7 @@ int Msta_SdcParseCmd( MstaSdc *p, const MstaSdcCmdDef *pDef, int argc, char **ar
             pCmd->nLists++;
         }
         if ( pOpt->Attr & MSTA_SDC_IGNORE )
-            Msta_SdcNote( pCmd, "option \"%s\" is not modeled; ignored", argv[i] );
+            Msta_SdcNote( pCmd, "选项 \"%s\" 未建模，已忽略", argv[i] );
         /* 跳过刚取走的值或对象（拆开的 Tcl 列表在 argv 里只占一个词） */
         if ( pOpt->Kind != MSTA_SDC_FLAG )
             i = j - 1;
@@ -412,7 +412,7 @@ int Msta_SdcRequire( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pName )
 {
     if ( Msta_SdcHasFlag( pCmd, pName ) )
         return 1;
-    Msta_SdcReject( p, pCmd, "option \"%s\" is required", pName );
+    Msta_SdcReject( p, pCmd, "缺少必需的选项 \"%s\"", pName );
     return 0;
 }
 
@@ -431,18 +431,20 @@ const MstaSdcOpt Msta_SdcMinMaxRiseFallOpts[] = {
     { "-fall", MSTA_SDC_FLAG, 0 },
     { NULL,    MSTA_SDC_FLAG, 0 } };
 
-/* 把 pText 读成数值并检查范围；pWhat 是告警里对它的称呼（如 "-weight"、"value"）。
+/* 把 pText 读成数值并检查范围；pWhat 是告警里对它的称呼（如 "-weight"、"值"）。
    不合格时告警作废并返回 0。 */
 int Msta_SdcGetNumber( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pWhat,
                        const char *pText, int Range, double *pValue )
 {
+    /* 选项名（如 -period）后面空一格再接中文，中文称呼（如 "值"）直接接。 */
+    const char *pSep = ( (unsigned char)pWhat[0] < 0x80 ) ? " " : "";
     if ( !Msta_SdcIsNumber( pText ) )
-    { Msta_SdcReject( p, pCmd, "%s \"%s\" is not a number", pWhat, pText ); return 0; }
+    { Msta_SdcReject( p, pCmd, "%s \"%s\" 不是数", pWhat, pText ); return 0; }
     *pValue = atof( pText );
     if ( Range == MSTA_SDC_POSITIVE && *pValue <= 0.0 )
-    { Msta_SdcReject( p, pCmd, "%s must be positive (got %s)", pWhat, pText ); return 0; }
+    { Msta_SdcReject( p, pCmd, "%s%s必须大于 0（给的是 %s）", pWhat, pSep, pText ); return 0; }
     if ( Range == MSTA_SDC_NONNEG && *pValue < 0.0 )
-    { Msta_SdcReject( p, pCmd, "%s must not be negative (got %s)", pWhat, pText ); return 0; }
+    { Msta_SdcReject( p, pCmd, "%s%s不能为负（给的是 %s）", pWhat, pSep, pText ); return 0; }
     return 1;
 }
 
@@ -509,7 +511,7 @@ int Msta_SdcObjectNets( MstaSdc *p, MstaDesign *pDes, const MstaSdcCmd *pCmd,
     *ppNets = (int *)Msta_SdcArenaKeep( vNets.pData );
     if ( vNets.nSize == 0 )
     {
-        Msta_SdcReject( p, pCmd, "none of the objects was found" );
+        Msta_SdcReject( p, pCmd, "一个对象都没有找到" );
         return -1;
     }
     return vNets.nSize;
@@ -526,14 +528,14 @@ int Msta_SdcObjectClocks( MstaSdc *p, const MstaSdcCmd *pCmd,
     {
         int j = Msta_SdcClockIndexOf( p, Msta_NameId( ppNames[i] ) );
         if ( j < 0 )
-            Msta_SdcNote( pCmd, "unknown clock \"%s\"", ppNames[i] );
+            Msta_SdcNote( pCmd, "找不到时钟 \"%s\"", ppNames[i] );
         else
             pClocks[n++] = j;
     }
     *ppClocks = pClocks;
     if ( n == 0 )
     {
-        Msta_SdcReject( p, pCmd, "none of the clocks was found" );
+        Msta_SdcReject( p, pCmd, "一个时钟都没有找到" );
         return -1;
     }
     return n;
@@ -560,13 +562,13 @@ int Msta_SdcObjectInsts( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, const Msta
                     *MstaSdcIntArrayAppend( &vInsts ) = k;
         }
         else
-            Msta_SdcNote( pCmd, fCellNames ? "unknown instance or cell \"%s\"" : "unknown instance \"%s\"",
+            Msta_SdcNote( pCmd, fCellNames ? "找不到实例或单元 \"%s\"" : "找不到实例 \"%s\"",
                           ppNames[i] );
     }
     *ppInsts = (int *)Msta_SdcArenaKeep( vInsts.pData );
     if ( vInsts.nSize == 0 )
     {
-        Msta_SdcReject( p, pCmd, "none of the objects was found" );
+        Msta_SdcReject( p, pCmd, "一个对象都没有找到" );
         return -1;
     }
     return vInsts.nSize;

@@ -15,18 +15,18 @@ WORK="${ROOT}/build/bench_frontend"
 JSON="${WORK}/netlist.json"
 
 if [[ ! -f "${NETLIST}" ]]; then
-    echo "error: no such netlist: ${NETLIST}" >&2
+    echo "错误：网表不存在：${NETLIST}" >&2
     exit 1
 fi
 mkdir -p "${WORK}"
 
-echo "netlist: ${NETLIST}"
-echo "top    : ${TOP}"
+echo "网表：${NETLIST}"
+echo "顶层：${TOP}"
 
 printf '%-22s' "yosys read+write_json"
 /usr/bin/time -p yosys -q -p "read_verilog ${NETLIST}; write_json ${JSON}" 2>&1 \
     | awk '/^real/{printf "%6.2f s\n", $2}'
-printf '%-22s' "json size"
+printf '%-24s' "JSON 大小"
 ls -la "${JSON}" | awk '{printf "%6.2f MB\n", $5/1048576}'
 
 cat > "${WORK}/from_json.dofile" <<EOF
@@ -48,4 +48,4 @@ printf '%-22s' "msta read_verilog"
     | awk '/^real/{printf "%6.2f s\n", $2}'
 
 echo
-echo "files: ${WORK}"
+echo "文件：${WORK}"

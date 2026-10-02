@@ -470,7 +470,7 @@ static int Msta_SdcEdgeMatches( char RF, int fRises )
         return 1;
     if ( fRises < 0 )
     {
-        Msta_WarnOnce("edge-qualified path exception is not modeled where the edge is unknown; ignored there");
+        Msta_WarnOnce("路径例外的边沿限定（如 -rise_from）在边沿无法确定的地方未建模，已忽略（这些地方例外不生效）");
         return 0;
     }
     return RF == ( fRises ? 'r' : 'f' );
@@ -1111,5 +1111,5 @@ void Msta_SdcPrintClocks( MstaSdc *p, MstaDesign *pDes, FILE *pFile )
                  pClock->fPropagated ? "propagated" : "ideal network" );
     }
     if ( p->vClocks.nSize == 0 )
-        fprintf( pFile, "(no clock -- say create_clock)\n" );
+        fprintf( pFile, "（没有时钟，请先用 create_clock 定义）\n" );
 }

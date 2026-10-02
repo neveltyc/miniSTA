@@ -16,8 +16,8 @@ HVT="${LIB_DIR}/ics55_LLSC_H7CH_typ_tt_1p2_25_nldm.lib"
 
 for f in "${LVT}" "${RVT}" "${HVT}"; do
     if [[ ! -f "${f}" ]]; then
-        echo "error: missing ${f}" >&2
-        echo "       run scripts/fetch_ics55_liberty.sh first" >&2
+        echo "错误：缺少 ${f}" >&2
+        echo "      请先运行 scripts/fetch_ics55_liberty.sh" >&2
         exit 1
     fi
 done
@@ -67,6 +67,6 @@ mv "${OUT}/multi_vt_soc.flat.v" "${OUT}/multi_vt_soc.v"
 
 echo "==> ${OUT}/multi_vt_soc.v"
 for flavor in H7L H7R H7H; do
-    printf '    %s cells: %s instances\n' "${flavor}" \
+    printf '    %s 单元：%s 个实例\n' "${flavor}" \
         "$(grep -oE "[A-Za-z0-9_]+${flavor}" "${OUT}/multi_vt_soc.v" | wc -l | tr -d ' ')"
 done

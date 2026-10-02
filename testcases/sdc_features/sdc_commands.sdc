@@ -1,6 +1,6 @@
 # SDC 1.8 手册 Appendix A 的全部命令各来一条：建模的照常生效，没建模的告警后
 # 忽略，只丢自己那一条。这条用例保证"别家工具导出的约束文件能整份读完"，
-# 日志里不应出现 unknown sdc command。
+# 日志里不应出现"sdc：未知命令"。
 current_instance
 expr 1 + 1
 list a b

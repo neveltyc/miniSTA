@@ -1,6 +1,6 @@
-// Three-stage pipeline used to produce a synthesizable sky130 netlist.
-// Stage 1 registers three combinational results, stage 2 selects between
-// them, and stage 3 inverts the result onto the output port.
+// 三级流水线，用来综合出 sky130 门级网表。
+// 第 1 级寄存三个组合运算结果，第 2 级在它们之间选择，
+// 第 3 级把结果取反后送到输出端口。
 
 module pipe_demo (
     input  wire       clk,

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Hand-calculated clock edge regressions; optionally compare supported models with OpenSTA."""
+"""时钟边沿手算回归：时钟 min/max × rise/fall 对 setup/hold 的影响。
+
+不带参数时检查 build/ 下的日志；带 <msta> <sta> <输出目录> 参数时逐个运行，
+既核对手算值，也与 OpenSTA 对比 setup/hold WNS。
+"""
 from pathlib import Path
 import math
 import os
@@ -40,14 +44,14 @@ def slacks(text):
         elif re.search(rf'^{kind}\s*:\s*没有一条可分析的路径',text,re.M):
             values.append(math.inf)
         else:
-            raise ValueError(f'missing {kind} timing result')
+            raise ValueError(f'日志里没有 {kind} 的时序结果')
     return tuple(values)
 
 if len(sys.argv) == 1:
     for name, values in expected.items():
         text = (root/f'build/testcases_clock_edges_{name}.dofile.log').read_text()
         assert all(close(a,b,1e-6) for a,b in zip(slacks(text),values)), name
-    # Check capture arrival, table result, required and launch insertion directly.
+    # 逐项核对 capture 时钟到达时间、查表得到的 setup 约束、required time 和 launch 端到达时间。
     text = (root/'build/testcases_clock_edges_capture_rise.dofile.log').read_text()
     setup = text.split('===== setup path')[1].split('---------------- 时序汇总')[0]
     for pattern, value in ((r'capture clock: core @ ([-\d.]+)',12),
@@ -63,26 +67,26 @@ if len(sys.argv) == 1:
     assert 'capture clock: derived @ -3.000 ns' in generated
     assert 'capture clock: core' not in generated
     qn = (root/'build/testcases_clock_edges_generated_qn.dofile.log').read_text()
-    assert 'cannot derive sequential source latency' not in qn
+    assert '无法推算经过时序单元的源延迟' not in qn
     assert 'capture clock: derived @ 22.700 ns' in qn
     assert 'capture clock: derived @ 2.700 ns' in qn
     ideal = (root/'build/testcases_clock_edges_generated_ideal.dofile.log').read_text()
     assert 'capture clock: derived @ 12.500 ns' in ideal
     assert 'capture clock: derived @ 2.500 ns' in ideal
     disabled = (root/'build/testcases_clock_edges_generated_disable.dofile.log').read_text()
-    assert 'cannot derive sequential source latency' in disabled
+    assert '无法推算经过时序单元的源延迟' in disabled
     assert 'capture clock: derived @ 20.000 ns' in disabled
     assert 'capture clock: derived @ 0.000 ns' in disabled
     zero = (root/'build/testcases_clock_edges_zero_output.dofile.log').read_text()
     assert '  - setup check (from lib)                        -3.800' in zero
-    print(f'==> clock edge checks passed ({len(expected)} cases)')
+    print(f'==> 时钟边沿检查全部通过（{len(expected)} 个用例）')
 else:
     msta, sta, output = sys.argv[1:]
     out = Path(output)/'clock_edges'
     out.mkdir(parents=True,exist_ok=True)
     for name, values in expected.items():
-        # miniSTA explicitly models ideal annotations and input reference pins differently.
-        # These two cases use hand assertions above, not reference-tool equivalence.
+        # 这两个用例涉及 ideal 标注和输入参考引脚，miniSTA 按自己的方式建模，
+        # 只用上面的手算断言检查，不参与对比。
         if name in ('ideal_edges','reference_pin'): continue
         source = (case/f'{name}.dofile').read_text()
         lib = re.search(r'read_liberty (\w+)\.lib',source)[1]
@@ -101,5 +105,5 @@ else:
                                 for corner in ('max','min'))
         for got, hand, ref in zip(actual,values,reference_slack):
             if not close(got,hand,1e-6) or not close(got,ref,.001):
-                raise SystemExit(f'{name}: miniSTA={actual}, hand={values}, OpenSTA={reference_slack}')
-        print(f'PASS clock edges vs OpenSTA: {name}')
+                raise SystemExit(f'{name}：miniSTA={actual}，手算={values}，OpenSTA={reference_slack}')
+        print(f'通过 时钟边沿与 OpenSTA 对比：{name}')

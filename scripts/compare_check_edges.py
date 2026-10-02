@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Compare independent edge-check fixtures with OpenSTA, including path exceptions."""
+"""把 testcases/check_edges 下的边沿检查用例（含路径例外）逐个与 OpenSTA 对比 setup/hold WNS。
+
+参数：<msta> <sta> <输出目录>，由 compare_sta.sh 调用。
+"""
 from pathlib import Path
 import math
 import os
@@ -27,9 +30,9 @@ for variant in ('normal', 'swapped', 'rise_only', 'data_1d', 'negative', 'cut_ri
     for kind, corner in (('setup', 'max'), ('hold', 'min')):
         match = re.search(rf'^{kind}\s*: WNS\s+([-\d.]+)', mini, re.M)
         if match is None and f'{kind} : 没有一条可分析的路径' not in mini and f'{kind}  : 没有一条可分析的路径' not in mini:
-            raise SystemExit(f'{variant}: missing miniSTA {kind} result')
+            raise SystemExit(f'{variant}：miniSTA 日志里没有 {kind} 的结果')
         actual = float(match.group(1)) if match else math.inf
         expected = float(re.search(rf'worst slack {corner}\s+([-\d.]+|inf)', reference,re.I).group(1))
         if actual != expected and (not math.isfinite(actual) or not math.isfinite(expected) or abs(actual - expected) > .001):
-            raise SystemExit(f'{variant} {kind}: miniSTA={actual}, OpenSTA={expected}')
-    print(f'PASS edge checks vs OpenSTA: {variant}')
+            raise SystemExit(f'{variant} {kind}：miniSTA={actual}，OpenSTA={expected}')
+    print(f'通过 边沿检查与 OpenSTA 对比：{variant}')

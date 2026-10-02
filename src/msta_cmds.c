@@ -43,7 +43,7 @@ MstaApp *Msta_AppStart( void )
     pApp->fQuiet  = s_fQuiet;
     if ( pApp->pOut == NULL )
     {
-        Msta_Error( "cannot write report to \"%s\"\n", s_pOutName );
+        Msta_Error( "无法把报告写到 \"%s\"\n", s_pOutName );
         pApp->pOut = stdout;
     }
     return pApp;
@@ -104,7 +104,7 @@ static void Msta_ResolvePath( const char *pIn, char *pOut, int nOut )
         if ( nDir + nIn + 2 > (size_t)nOut )
         {
             pOut[0] = 0;
-            Msta_Error( "path is too long: \"%s/%s\"\n", s_pScriptDir, pIn );
+            Msta_Error( "路径太长：\"%s/%s\"\n", s_pScriptDir, pIn );
             return;
         }
         memcpy( pOut, s_pScriptDir, nDir );
@@ -133,7 +133,7 @@ static int Msta_CmdReadLiberty( MstaApp *pApp, int argc, char **argv )
     int i, fOk = 1;
     if ( argc < 2 || argc - 1 > MSTA_MAX_FILES_PER_COMMAND )
     {
-        Msta_Error( "usage: read_liberty <file.lib> [more.lib ...]\n" );
+        Msta_Error( "用法：read_liberty <file.lib> [more.lib ...]\n" );
         return 0;
     }
     Msta_AppDropTiming( pApp );
@@ -158,7 +158,7 @@ static int Msta_CmdPrintCell( MstaApp *pApp, int argc, char **argv )
     int i;
     if ( argc < 2 )
     {
-        Msta_Error( "usage: print_cell <cell_name> [...]\n" );
+        Msta_Error( "用法：print_cell <cell_name> [...]\n" );
         return 0;
     }
     for ( i = 1; i < argc; i++ )
@@ -175,7 +175,7 @@ static int Msta_CmdReadVerilog( MstaApp *pApp, int argc, char **argv )
     int i, fOk;
     if ( argc < 2 || argc - 1 > MSTA_MAX_FILES_PER_COMMAND )
     {
-        Msta_Error( "usage: read_verilog <a.v> [b.v ...]  (最多 %d 个文件)\n",
+        Msta_Error( "用法：read_verilog <a.v> [b.v ...]（最多 %d 个文件）\n",
                     MSTA_MAX_FILES_PER_COMMAND );
         return 0;
     }
@@ -189,7 +189,7 @@ static int Msta_CmdReadVerilog( MstaApp *pApp, int argc, char **argv )
               ( pTmp != NULL && pTmp[0] != 0 ) ? pTmp : "/tmp" );
     if ( mkdtemp( sWorkDir ) == NULL )
     {
-        Msta_Error( "read_verilog: cannot create a work directory \"%s\"\n", sWorkDir );
+        Msta_Error( "read_verilog：无法创建工作目录 \"%s\"\n", sWorkDir );
         return 0;
     }
     fOk = Msta_DesignReadVerilog( pApp->pNet, pFiles, argc - 1, sWorkDir, !pApp->fQuiet );
@@ -202,7 +202,7 @@ static int Msta_CmdReadJson( MstaApp *pApp, int argc, char **argv )
     char sPath[512];
     if ( argc < 2 )
     {
-        Msta_Error( "usage: read_json <yosys-write_json-file>\n" );
+        Msta_Error( "用法：read_json <yosys write_json 生成的文件>\n" );
         return 0;
     }
     Msta_AppDropTiming( pApp );
@@ -216,7 +216,7 @@ static int Msta_CmdCurrentDesign( MstaApp *pApp, int argc, char **argv )
     const char *pTop = ( argc > 1 ) ? argv[1] : NULL;
     if ( pApp->pNet->vModules.nSize == 0 )
     {
-        Msta_Error( "current_design: no netlist has been read.\n" );
+        Msta_Error( "current_design：还没有读入网表\n" );
         return 0;
     }
     Msta_AppDropTiming( pApp );
@@ -228,7 +228,7 @@ static int Msta_CmdReportDesign( MstaApp *pApp, int argc, char **argv )
     (void)argc; (void)argv;
     if ( pApp->pNet->vInsts.nSize == 0 )
     {
-        Msta_Error( "report_design: the design is not flattened yet (say current_design).\n" );
+        Msta_Error( "report_design：设计还没有展平（请先执行 current_design）\n" );
         return 0;
     }
     Msta_DesignPrintStats( pApp->pNet, pApp->pOut );
@@ -240,12 +240,12 @@ static int Msta_CmdReadSdc( MstaApp *pApp, int argc, char **argv )
     char sPath[512];
     if ( argc < 2 )
     {
-        Msta_Error( "usage: read_sdc <file.sdc>\n" );
+        Msta_Error( "用法：read_sdc <file.sdc>\n" );
         return 0;
     }
     if ( pApp->pNet->vNets.nSize == 0 )
     {
-        Msta_Error( "read_sdc: flatten the design first (current_design).\n" );
+        Msta_Error( "read_sdc：请先展平设计（current_design）\n" );
         return 0;
     }
     Msta_AppDropTiming( pApp );
@@ -276,7 +276,7 @@ static int Msta_CmdReportChecks( MstaApp *pApp, int argc, char **argv )
     int i;
     if ( pApp->pNet->vNets.nSize == 0 )
     {
-        Msta_Error( "report_checks: flatten the design first (current_design).\n" );
+        Msta_Error( "report_checks：请先展平设计（current_design）\n" );
         return 0;
     }
     for ( i = 1; i < argc; i++ )
@@ -284,11 +284,11 @@ static int Msta_CmdReportChecks( MstaApp *pApp, int argc, char **argv )
         if ( !strcmp(argv[i], "-hold") )   fSetup = 0;
         else if ( !strcmp(argv[i], "-setup") ) fSetup = 1;
         else if ( !strcmp(argv[i], "-max_paths") && i + 1 < argc ) nMaxPaths = atoi( argv[++i] );
-        else Msta_WarnOnce( "report_checks: option \"%s\" is ignored", argv[i] );
+        else Msta_WarnOnce( "report_checks：选项 \"%s\" 不支持，已忽略", argv[i] );
     }
     if ( nMaxPaths < 1 )
     {
-        Msta_WarnOnce( "report_checks: -max_paths must be positive; using 1" );
+        Msta_WarnOnce( "report_checks：-max_paths 必须大于 0；按 1 处理" );
         nMaxPaths = 1;
     }
     if ( !Msta_TimingAnalyze( pTime, !pApp->fQuiet ) )
@@ -366,7 +366,7 @@ int Msta_CmdsRunOne( MstaApp *pApp, int argc, char **argv )
     for ( i = 0; s_vCmds[i].pName; i++ )
         if ( !strcmp( argv[0], s_vCmds[i].pName ) )
             return s_vCmds[i].pFunc( pApp, argc, argv );
-    Msta_Error( "unknown command \"%s\" (try: help)\n", argv[0] );
+    Msta_Error( "未知命令 \"%s\"（可以试试 help）\n", argv[0] );
     return 0;
 }
 

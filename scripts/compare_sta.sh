@@ -21,7 +21,7 @@ TOLERANCE_NS="${TOLERANCE_NS:-0.05}"
 mkdir -p "${OUT}"
 
 if [[ ! -x "${MSTA_BIN}" ]]; then
-    echo "error: msta not found at ${MSTA_BIN}; run make first" >&2
+    echo "错误：找不到 msta（${MSTA_BIN}），请先运行 make" >&2
     exit 1
 fi
 
@@ -81,11 +81,11 @@ compare_value() {
         delta = a - b;
         if (delta < 0) delta = -delta;
         if (delta > tolerance) {
-            printf "FAIL %s: msta=%s reference=%s delta=%.6f ns (limit=%s ns)\n",
+            printf "失败 %s：msta=%s 参考=%s 差值=%.6f ns（容差 %s ns）\n",
                    label, a, b, delta, tolerance;
             exit 1;
         }
-        printf "PASS %s: msta=%s reference=%s delta=%.6f ns\n", label, a, b, delta;
+        printf "通过 %s：msta=%s 参考=%s 差值=%.6f ns\n", label, a, b, delta;
     }'
 }
 
@@ -101,7 +101,7 @@ if [[ -x "${OPENSTA_BIN}" ]]; then
     read -r OPENSTA_SETUP_WNS OPENSTA_SETUP_TNS < <(parse_opensta max "${OUT}/opensta.log")
     read -r OPENSTA_HOLD_WNS OPENSTA_HOLD_TNS < <(parse_opensta min "${OUT}/opensta.log")
 else
-    echo "SKIP: OpenSTA not found (set OPENSTA_BIN to enable)"
+    echo "跳过：没有找到 OpenSTA（设置 OPENSTA_BIN 后启用）"
 fi
 
 echo "==> OpenTimer"
@@ -110,10 +110,11 @@ if [[ -n "${OPENTIMER_BIN:-}" && -x "${OPENTIMER_BIN}" ]]; then
         > "${OUT}/opentimer.log" 2>&1
     read -r OPENTIMER_SETUP_WNS OPENTIMER_HOLD_WNS < <(parse_opentimer "${OUT}/opentimer.log")
 else
-    echo "SKIP: OpenTimer not found (set OPENTIMER_BIN to enable)"
+    echo "跳过：没有找到 OpenTimer（设置 OPENTIMER_BIN 后启用）"
 fi
 
-printf "\n%-12s %14s %14s\n" "tool" "setup WNS" "hold WNS"
+# 一个汉字占 3 字节、显示 2 列，表头第一列宽度多给 2 才能和下面的行对齐。
+printf "\n%-14s %14s %14s\n" "工具" "setup WNS" "hold WNS"
 printf "%-12s %14s %14s\n" msta "${MSTA_SETUP_WNS:-n/a}" "${MSTA_HOLD_WNS:-n/a}"
 if [[ -n "${OPENSTA_SETUP_WNS:-}" ]]; then
     printf "%-12s %14s %14s\n" OpenSTA "${OPENSTA_SETUP_WNS}" "${OPENSTA_HOLD_WNS}"
@@ -121,20 +122,20 @@ fi
 if [[ -n "${OPENTIMER_SETUP_WNS:-}" ]]; then
     printf "%-12s %14s %14s\n" OpenTimer "${OPENTIMER_SETUP_WNS}" "${OPENTIMER_HOLD_WNS}"
 fi
-printf "\nlogs: %s\n" "${OUT}"
+printf "\n日志：%s\n" "${OUT}"
 
 failures=0
 if [[ -n "${OPENSTA_SETUP_WNS:-}" ]]; then
-    compare_value "setup WNS vs OpenSTA" "${MSTA_SETUP_WNS}" "${OPENSTA_SETUP_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
-    compare_value "hold WNS vs OpenSTA" "${MSTA_HOLD_WNS}" "${OPENSTA_HOLD_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
+    compare_value "setup WNS 与 OpenSTA 对比" "${MSTA_SETUP_WNS}" "${OPENSTA_SETUP_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
+    compare_value "hold WNS 与 OpenSTA 对比" "${MSTA_HOLD_WNS}" "${OPENSTA_HOLD_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
 fi
 if [[ -n "${OPENTIMER_SETUP_WNS:-}" ]]; then
-    compare_value "setup WNS vs OpenTimer" "${MSTA_SETUP_WNS}" "${OPENTIMER_SETUP_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
-    compare_value "hold WNS vs OpenTimer" "${MSTA_HOLD_WNS}" "${OPENTIMER_HOLD_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
+    compare_value "setup WNS 与 OpenTimer 对比" "${MSTA_SETUP_WNS}" "${OPENTIMER_SETUP_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
+    compare_value "hold WNS 与 OpenTimer 对比" "${MSTA_HOLD_WNS}" "${OPENTIMER_HOLD_WNS}" "${TOLERANCE_NS}" || failures=$((failures + 1))
 fi
 
 if (( failures > 0 )); then
-    echo "==> compare failed: ${failures} difference(s)" >&2
+    echo "==> 对比失败：${failures} 项超出容差" >&2
     exit 1
 fi
 if [[ -x "${OPENSTA_BIN}" ]]; then
@@ -142,4 +143,4 @@ if [[ -x "${OPENSTA_BIN}" ]]; then
     python3 "${ROOT}/scripts/check_clock_edges.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
     python3 "${ROOT}/scripts/check_nonunate_clock.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
 fi
-echo "==> compare passed"
+echo "==> 对比通过"

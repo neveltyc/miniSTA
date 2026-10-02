@@ -163,7 +163,7 @@ void Msta_ReportChecks( MstaTiming *p, FILE *pFile, int nMaxPaths, int fSetup )
     int i, n = 0;
     if ( p->vChecks.nSize == 0 )
     {
-        fprintf( pFile, "no timing endpoints: is the design flattened and clocks defined?\n" );
+        fprintf( pFile, "没有时序端点：设计展平了吗？时钟定义了吗？\n" );
         return;
     }
     Msta_TimingSortChecks( p, fSetup );
@@ -176,7 +176,7 @@ void Msta_ReportChecks( MstaTiming *p, FILE *pFile, int nMaxPaths, int fSetup )
         Msta_PrintOnePath( p, pCheck, fSetup, pFile );
     }
     if ( n == 0 )
-        fprintf( pFile, "no %s path can be reported (endpoints without constraint?)\n",
+        fprintf( pFile, "没有可报告的 %s 路径（端点都没有约束？）\n",
                  fSetup ? "setup" : "hold" );
 }
 

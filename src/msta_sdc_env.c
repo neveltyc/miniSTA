@@ -48,7 +48,7 @@ static void Msta_SdcSetDrcLimit( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     double Value;
     int i, j, fDesign = 0;
 
-    if ( !Msta_SdcGetNumber( p, pCmd, "limit", pCmd->pValue, MSTA_SDC_POSITIVE, &Value ) )
+    if ( !Msta_SdcGetNumber( p, pCmd, "限值", pCmd->pValue, MSTA_SDC_POSITIVE, &Value ) )
         return;
     if ( nWhich == 0 )
         Value *= p->TimeScalePs;
@@ -56,7 +56,7 @@ static void Msta_SdcSetDrcLimit( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
         Value *= p->CapScaleFf > 0.0 ? p->CapScaleFf : pLib->CapScale;
     for ( i = 0; i < pCmd->nObjs; i++ )
         if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'C' )
-        { Msta_SdcReject( p, pCmd, "clock objects (clock-domain limits) are not modeled" ); return; }
+        { Msta_SdcReject( p, pCmd, "时钟对象（按时钟域设限值）未建模" ); return; }
     /* 先把所有对象都解析成网络，一个都没有时整条作废。 */
     MstaSdcIntArrayInit( &vNets );
     for ( i = 0; i < pCmd->nObjs; i++ )
@@ -70,7 +70,7 @@ static void Msta_SdcSetDrcLimit( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
             int nInst = Msta_DesignFindInstByName( pDes, pObj );
             MstaInst *pInst;
             if ( nInst < 0 )
-            { Msta_SdcNote( pCmd, "unknown instance \"%s\"", pObj ); continue; }
+            { Msta_SdcNote( pCmd, "找不到实例 \"%s\"", pObj ); continue; }
             pInst = MstaInstArrayAt( &pDes->vInsts, nInst );
             for ( j = 0; j < pInst->nPins && j < pInst->pCell->vPins.nSize; j++ )
                 if ( pInst->pNets[j] >= 0 && pInst->pCell->vPins.pData[j].Dir == MSTA_DIR_OUTPUT )
@@ -81,7 +81,7 @@ static void Msta_SdcSetDrcLimit( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     }
     Msta_SdcArenaKeep( vNets.pData );
     if ( !fDesign && vNets.nSize == 0 )
-    { Msta_SdcReject( p, pCmd, "none of the objects was found" ); return; }
+    { Msta_SdcReject( p, pCmd, "一个对象都没有找到" ); return; }
     if ( fDesign )
         Msta_SdcStoreDrcLimit( &p->MaxTransition, &p->MaxFanout, &p->MaxCapacitance,
                                &p->MinCapacitance, nWhich, Value );
@@ -118,7 +118,7 @@ void Msta_SdcSetMinCapacitance( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Mst
 void Msta_SdcSetMaxArea( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
     double Area;
-    if ( Msta_SdcGetNumber( p, pCmd, "area", pCmd->pValue, MSTA_SDC_NONNEG, &Area ) )
+    if ( Msta_SdcGetNumber( p, pCmd, "面积", pCmd->pValue, MSTA_SDC_NONNEG, &Area ) )
         p->MaxArea = Area;
 }
 
@@ -154,8 +154,8 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
     int i, nApplied = 0;
 
     if ( !fCellDelay && !fCellCheck )
-    { Msta_SdcReject( p, pCmd, "-net_delay is not modeled (msta has no net delay)" ); return; }
-    if ( !Msta_SdcGetNumber( p, pCmd, "factor", pCmd->pValue, MSTA_SDC_POSITIVE, &Factor ) )
+    { Msta_SdcReject( p, pCmd, "-net_delay 未建模（msta 不计算线网延迟）" ); return; }
+    if ( !Msta_SdcGetNumber( p, pCmd, "系数", pCmd->pValue, MSTA_SDC_POSITIVE, &Factor ) )
         return;
     /* 分对象只支持实例（get_cells）和时钟（get_clocks）；其他种类的对象在 msta
        的模型里没有对应量，整条作废。 */
@@ -164,7 +164,7 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
         char Kind = Msta_SdcKindOf( pCmd->ppObjs[i] );
         if ( Kind != 0 && Kind != 'C' && Kind != 'I' )
         {
-            Msta_SdcReject( p, pCmd, "object \"%s\" is not modeled (only instances and clocks)",
+            Msta_SdcReject( p, pCmd, "对象 \"%s\" 未建模（只支持实例和时钟）",
                             pCmd->ppObjs[i] );
             return;
         }
@@ -187,12 +187,12 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
         MstaObjDerate *pRec;
         if ( pClock == NULL && nInst < 0 )
         {
-            Msta_SdcNote( pCmd, Msta_SdcKindOf( pObj ) == 'C' ? "unknown clock \"%s\"" : "unknown instance \"%s\"", pObj );
+            Msta_SdcNote( pCmd, Msta_SdcKindOf( pObj ) == 'C' ? "找不到时钟 \"%s\"" : "找不到实例 \"%s\"", pObj );
             continue;
         }
         if ( pClock && Edge != 0 )
-            Msta_SdcNote( pCmd, "-rise/-fall on a clock object is not modeled; "
-                          "the clock tree keeps rise/fall merged" );
+            Msta_SdcNote( pCmd, "时钟对象上的 -rise/-fall 未建模；"
+                          "时钟树不区分上升和下降" );
         pRec = MstaObjDerateArrayAppend( &p->vObjDerate );
         pRec->Kind  = pClock ? 'C' : 'I';
         pRec->Inst  = nInst;
@@ -205,7 +205,7 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
         nApplied++;
     }
     if ( nApplied == 0 )
-        Msta_SdcReject( p, pCmd, "none of the objects was found" );
+        Msta_SdcReject( p, pCmd, "一个对象都没有找到" );
 }
 
 /* 没点名工作条件时用的角：库里 default_operating_conditions 指的那个，没有就取
@@ -268,9 +268,8 @@ static int Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib, const MstaSdcCmd *p
             if ( fWarnNoK &&
                  ( ( Msta_IsSet(v) && pInfo->NomVoltage >= 0.0 && v != pInfo->NomVoltage ) ||
                    ( Msta_IsSet(t) && pInfo->NomTemperature >= 0.0 && t != pInfo->NomTemperature ) ) )
-                Msta_SdcNote( pCmd, "the library has no k_volt/k_temp factor; delay tables are "
-                              "used as read (the requested voltage/temperature is recorded and "
-                              "reported only)" );
+                Msta_SdcNote( pCmd, "库里没有 k_volt/k_temp 系数；"
+                              "延迟表按原值使用（指定的电压/温度只记录并在报告里显示）" );
             continue;
         }
         fHasK = 1;
@@ -282,8 +281,8 @@ static int Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib, const MstaSdcCmd *p
         if ( fMax ) p->KFactorDerateLate = Derate;
         else        p->KFactorDerateEarly = Derate;
         if ( Derate != 1.0 )
-            Msta_SdcNote( pCmd, "K-factor derate %.4f applied (%.3f V / %.1f C); K factors are "
-                          "a linear approximation of the characterized tables",
+            Msta_SdcNote( pCmd, "已按 K 系数把延迟乘以 %.4f（%.3f V / %.1f C）；"
+                          "K 系数只是对特征化表格的线性近似",
                           Derate, Msta_IsSet(v) ? v : 0.0, Msta_IsSet(t) ? t : 0.0 );
     }
     return fHasK;
@@ -345,29 +344,29 @@ void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
     double Volt = 0.0, Temp = 0.0;
 
     if ( pAnalysis && strcasecmp(pAnalysis,"on_chip_variation") == 0 )
-    { Msta_SdcReject( p, pCmd, "-analysis_type on_chip_variation is not modeled" ); return; }
+    { Msta_SdcReject( p, pCmd, "-analysis_type on_chip_variation 未建模" ); return; }
     if ( pAnalysis && strcasecmp(pAnalysis,"single") != 0 && strcasecmp(pAnalysis,"bc_wc") != 0 )
-    { Msta_SdcReject( p, pCmd, "unknown -analysis_type \"%s\"", pAnalysis ); return; }
+    { Msta_SdcReject( p, pCmd, "未知的 -analysis_type \"%s\"", pAnalysis ); return; }
     if ( pAnalysis && strcasecmp(pAnalysis,"single") == 0 &&
          ( pMax != NULL || pMin != NULL || pMaxLibName != NULL || pMinLibName != NULL ) )
-    { Msta_SdcReject( p, pCmd, "-analysis_type single cannot use -max/-min or -max_library/-min_library" ); return; }
+    { Msta_SdcReject( p, pCmd, "-analysis_type single 不能与 -max/-min 或 -max_library/-min_library 同时使用" ); return; }
     if ( ( pVolt && !Msta_SdcGetNumber( p, pCmd, "-voltage", pVolt, MSTA_SDC_POSITIVE, &Volt ) ) ||
          ( pTemp && !Msta_SdcGetNumber( p, pCmd, "-temperature", pTemp, MSTA_SDC_ANY, &Temp ) ) )
         return;
     if ( fMaxLibrary && !Msta_SdcLibraryExists( pLib, nLibraryMax ) )
-    { Msta_SdcReject( p, pCmd, "unknown library \"%s\"", Msta_NameStr(nLibraryMax) ); return; }
+    { Msta_SdcReject( p, pCmd, "找不到库 \"%s\"", Msta_NameStr(nLibraryMax) ); return; }
     if ( fMinLibrary && !Msta_SdcLibraryExists( pLib, nLibraryMin ) )
-    { Msta_SdcReject( p, pCmd, "unknown library \"%s\"", Msta_NameStr(nLibraryMin) ); return; }
+    { Msta_SdcReject( p, pCmd, "找不到库 \"%s\"", Msta_NameStr(nLibraryMin) ); return; }
     if ( pMax == NULL && pMin == NULL && pCmd->nObjs == 1 )
         pMax = pMin = pCmd->ppObjs[0];
     else if ( pCmd->nObjs == 1 )
-    { Msta_SdcReject( p, pCmd, "a condition name cannot be combined with -max/-min" ); return; }
+    { Msta_SdcReject( p, pCmd, "工作条件名不能与 -max/-min 同时使用" ); return; }
     if ( pMax == NULL && pMin == NULL && pVolt == NULL && pTemp == NULL && !fMaxLibrary && !fMinLibrary )
-    { Msta_SdcReject( p, pCmd, "needs a condition name, a library, or -voltage/-temperature" ); return; }
+    { Msta_SdcReject( p, pCmd, "需要工作条件名、库或 -voltage/-temperature" ); return; }
     if ( pMax != NULL && ( pMaxInfo = Msta_LibFindOpCond( pLib, pMax, nLibraryMax, NULL ) ) == NULL )
-    { Msta_SdcReject( p, pCmd, "no library declares operating condition \"%s\"", pMax ); return; }
+    { Msta_SdcReject( p, pCmd, "没有哪个库声明了工作条件 \"%s\"", pMax ); return; }
     if ( pMin != NULL && ( pMinInfo = Msta_LibFindOpCond( pLib, pMin, nLibraryMin, NULL ) ) == NULL )
-    { Msta_SdcReject( p, pCmd, "no library declares operating condition \"%s\"", pMin ); return; }
+    { Msta_SdcReject( p, pCmd, "没有哪个库声明了工作条件 \"%s\"", pMin ); return; }
 
     /* 给出的名字都有效，库与工艺角的改动一起生效。 */
     if ( fMaxLibrary ) p->OpCondLibraryMax = nLibraryMax;
@@ -378,7 +377,7 @@ void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
         if ( !fMaxLibrary )
         {
             if ( Msta_SdcOpCondLibraryCount(pLib,pMax) > 1 )
-                Msta_SdcNote( pCmd, "max corner \"%s\" is in multiple libraries; specify -max_library", pMax );
+                Msta_SdcNote( pCmd, "max 工作条件 \"%s\" 出现在多个库里；请用 -max_library 指定", pMax );
             p->OpCondLibraryMax = pMaxInfo->Name;
         }
     }
@@ -391,7 +390,7 @@ void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
         if ( !fMinLibrary )
         {
             if ( Msta_SdcOpCondLibraryCount(pLib,pMin) > 1 )
-                Msta_SdcNote( pCmd, "min corner \"%s\" is in multiple libraries; specify -min_library", pMin );
+                Msta_SdcNote( pCmd, "min 工作条件 \"%s\" 出现在多个库里；请用 -min_library 指定", pMin );
             p->OpCondLibraryMin = pMinInfo->Name;
         }
     }
@@ -417,8 +416,8 @@ void Msta_SdcSetVoltage( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd
     const char *pMin = Msta_SdcOptValue( pCmd, "-min" );
     double Max, Min;
     if ( pCmd->nObjs > 0 )
-    { Msta_SdcReject( p, pCmd, "per-object voltage is not modeled" ); return; }
-    if ( !Msta_SdcGetNumber( p, pCmd, "voltage", pCmd->pValue, MSTA_SDC_POSITIVE, &Max ) ||
+    { Msta_SdcReject( p, pCmd, "按对象设置电压未建模" ); return; }
+    if ( !Msta_SdcGetNumber( p, pCmd, "电压", pCmd->pValue, MSTA_SDC_POSITIVE, &Max ) ||
          ( pMin && !Msta_SdcGetNumber( p, pCmd, "-min", pMin, MSTA_SDC_POSITIVE, &Min ) ) )
         return;
     p->VoltageMax = Max;
@@ -430,8 +429,8 @@ void Msta_SdcSetVoltage( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd
     {
         double Nominal = MstaLibInfoArrayAt(&pLib->vLibs,0)->NomVoltage;
         if ( Nominal >= 0.0 && fabs(p->VoltageMax - Nominal) > 1e-6 )
-            Msta_SdcNote( pCmd, "%.3f V is recorded, but the library has no k_volt factor; "
-                          "delay tables are used as read (nominal %.3f V)", p->VoltageMax, Nominal );
+            Msta_SdcNote( pCmd, "已记录 %.3f V，但库里没有 k_volt 系数；"
+                          "延迟表按原值使用（标称 %.3f V）", p->VoltageMax, Nominal );
     }
 }
 
@@ -477,9 +476,9 @@ void Msta_SdcSetUnits( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *
     double TimeScale = pTime ? Msta_SdcUnitScale( pTime, 1 ) : 0.0;
     double CapScale  = pCap  ? Msta_SdcUnitScale( pCap, 0 )  : 0.0;
     if ( pTime && TimeScale <= 0.0 )
-    { Msta_SdcReject( p, pCmd, "unsupported time unit \"%s\"", pTime ); return; }
+    { Msta_SdcReject( p, pCmd, "不支持的时间单位 \"%s\"", pTime ); return; }
     if ( pCap && CapScale <= 0.0 )
-    { Msta_SdcReject( p, pCmd, "unsupported capacitance unit \"%s\"", pCap ); return; }
+    { Msta_SdcReject( p, pCmd, "不支持的电容单位 \"%s\"", pCap ); return; }
     if ( pTime ) p->TimeScalePs = TimeScale;
     if ( pCap )  p->CapScaleFf  = CapScale;
 }

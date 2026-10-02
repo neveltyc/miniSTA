@@ -2,10 +2,9 @@
 #
 # 拿 testcases/ 里的真实 sky130 网表跟 OpenSTA 对比。
 #
-# eth_sky130  : 2.5 万实例、三个时钟域。差值在容差内，做断言（msta 不做 CPPR，
-#               偏悲观是预期的）。
-# e902_sky130 : 6.7 千端点，5 ns 时钟下深度违例，关键路径 ~170 级，逐级建模差
-#               累加到几 ns，所以只报告不断言。
+# eth_sky130  : 2.5 万实例、三个时钟域，对 setup WNS 做容差断言（msta 不做 CPPR，
+#               结果偏悲观）。
+# e902_sky130 : 6.7 千端点、关键路径约 170 级，逐级的建模差异会累加，只报告不断言。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,16 +21,17 @@ if [[ -z "${OPENSTA_BIN:-}" ]]; then
 fi
 
 if [[ ! -x "${MSTA_BIN}" ]]; then
-    echo "error: msta not found at ${MSTA_BIN}; run make first" >&2
+    echo "错误：找不到 msta（${MSTA_BIN}），请先运行 make" >&2
     exit 1
 fi
 if [[ ! -x "${OPENSTA_BIN}" ]]; then
-    echo "error: OpenSTA not found at ${OPENSTA_BIN}; set OPENSTA_BIN" >&2
+    echo "错误：找不到 OpenSTA（${OPENSTA_BIN}），请设置 OPENSTA_BIN" >&2
     exit 1
 fi
 
 mkdir -p "${OUT}"
-printf '%-16s %16s %16s %14s %10s\n' "case" "msta setup" "OpenSTA setup" "delta" "status"
+# 一个汉字占 3 字节、显示 2 列，含汉字的列宽按字节数放宽，保证表头和各行对齐。
+printf '%-18s %16s %16s %16s %12s\n' "用例" "msta setup" "OpenSTA setup" "差值" "状态"
 
 failures=0
 run_case() {
@@ -47,12 +47,12 @@ run_case() {
 
     local delta status
     delta="$(awk -v a="${msta_setup}" -v b="${opensta_setup}" 'BEGIN{d=a-b; if(d<0)d=-d; printf "%.6f", d}')"
-    status="$(awk -v d="${delta}" -v t="${TOLERANCE_NS}" 'BEGIN{print (d<=t) ? "ok" : "differs"}')"
-    printf '%-16s %16s %16s %14s %10s\n' "${name}" "${msta_setup}" "${opensta_setup}" "${delta}" "${status}"
-    echo "    hold WNS: msta ${msta_hold}  OpenSTA ${opensta_hold}" >> "${OUT}/summary.txt"
-    echo "    setup WNS: msta ${msta_setup}  OpenSTA ${opensta_setup}  delta ${delta}" >> "${OUT}/summary.txt"
+    status="$(awk -v d="${delta}" -v t="${TOLERANCE_NS}" 'BEGIN{print (d<=t) ? "在容差内" : "超出容差"}')"
+    printf '%-16s %16s %16s %14s %14s\n' "${name}" "${msta_setup}" "${opensta_setup}" "${delta}" "${status}"
+    echo "    hold WNS：msta ${msta_hold}  OpenSTA ${opensta_hold}" >> "${OUT}/summary.txt"
+    echo "    setup WNS：msta ${msta_setup}  OpenSTA ${opensta_setup}  差值 ${delta}" >> "${OUT}/summary.txt"
 
-    if [[ "${name}" == "eth_sky130" && "${status}" != "ok" ]]; then
+    if [[ "${name}" == "eth_sky130" && "${status}" != "在容差内" ]]; then
         failures=$((failures + 1))
     fi
 }
@@ -61,12 +61,12 @@ run_case() {
 run_case eth_sky130  eth_sky130   eth.dofile
 run_case e902_sky130 e902_sky130  e902.dofile
 
-printf '\nlogs: %s\n' "${OUT}"
-echo "note: e902_sky130 is reported only; its ~170 stage paths accumulate"
-echo "      per-stage modelling differences between the two tools."
+printf '\n日志：%s\n' "${OUT}"
+echo "说明：e902_sky130 只报告不断言。它的关键路径约 170 级，两个工具逐级的"
+echo "      建模差异会沿路径累加。"
 
 if (( failures > 0 )); then
-    echo "==> compare failed: eth_sky130 setup WNS delta over ${TOLERANCE_NS} ns" >&2
+    echo "==> 对比失败：eth_sky130 的 setup WNS 差值超过 ${TOLERANCE_NS} ns" >&2
     exit 1
 fi
-echo "==> compare passed"
+echo "==> 对比通过"

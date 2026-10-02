@@ -198,7 +198,7 @@ static MstaCell *TimingCellCorner( MstaTiming *p, MstaCell *pCell, int fMax )
     MstaCell *pCornerCell = Msta_LibCellForCorner(p->pLib,pCell,Library);
     if ( pCell != NULL && Library != MSTA_NO_ID && pCornerCell == pCell &&
          pCell->LibName != Library )
-        Msta_WarnOnce("corner library \"%s\" lacks some design cells; those cells use their default library definitions",
+        Msta_WarnOnce("工艺角库 \"%s\" 缺少设计用到的部分单元；这些单元改用默认库里的定义",
                       Msta_NameStr(Library));
     return pCornerCell;
 }
@@ -210,7 +210,7 @@ static MstaArc *TimingArcById( MstaTiming *p, MstaCell *pCell, MstaId ArcId, int
                                          Msta_SdcOperatingLibrary(p->pSdc,fMax));
     if ( pArc == NULL && pCell != NULL && ArcId >= 0 && ArcId < pCell->vArcs.nSize )
     {
-        Msta_WarnOnce("selected corner library \"%s\" lacks some timing arcs; missing arcs use the default cell definition",
+        Msta_WarnOnce("所选工艺角库 \"%s\" 缺少部分时序弧；缺的弧改用默认单元里的定义",
                       Msta_NameStr(Msta_SdcOperatingLibrary(p->pSdc,fMax)));
         pArc = Msta_CellArcById(pCell,ArcId);
     }
@@ -225,7 +225,7 @@ static MstaArc *TimingCombArc( MstaTiming *p, MstaCell *pCell,
     MstaArc *pArc = Msta_CellCombArc(pCornerCell,InPin,OutPin);
     if ( pArc == NULL && pCornerCell != pCell )
     {
-        Msta_WarnOnce("selected corner library \"%s\" lacks some combinational arcs",
+        Msta_WarnOnce("所选工艺角库 \"%s\" 缺少部分组合弧",
                       Msta_NameStr(Msta_SdcOperatingLibrary(p->pSdc,fMax)));
         pArc = Msta_CellCombArc(pCell,InPin,OutPin);
     }
@@ -606,8 +606,8 @@ static void AttachClockIds( MstaTiming *p )
                     else if ( Sense == MSTA_SENSE_NONUNATE )
                         Polarity = 0;
                     else if ( Sense == MSTA_SENSE_UNKNOWN )
-                        Msta_WarnOnce( "clock path through cell \"%s\" has no timing_sense; "
-                                       "clock polarity is assumed non-inverting",
+                        Msta_WarnOnce( "时钟路径经过的单元 \"%s\" 没有 timing_sense；"
+                                       "按不反相处理时钟极性",
                                        Msta_NameStr(pCell->Name) );
                     if ( !p->pfClockOfNet[ (size_t)c * (size_t)nNets + (size_t)nOut ] )
                     {
@@ -715,7 +715,7 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
         if ( !NetHasClock(p,nMaster,pClock->SourceNet) || !pSrc->fReached )
         {
             pDst->fReached = 0;
-            Msta_WarnOnce("generated clock \"%s\": master clock does not reach its source pin",
+            Msta_WarnOnce("生成时钟 \"%s\"：主时钟到达不了它的源引脚",
                           Msta_NameStr(pClock->Name));
             return;
         }
@@ -784,8 +784,8 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                 pDst->Slew[m][e][EffectiveClkRises(p,nClock,pClock->SourceNet,e)] = 0.0;
         ApplyIdealClockValues(p,pClock->SourceNet,pDst);
     }
-    Msta_WarnOnce("generated clock \"%s\": cannot derive sequential source latency; "
-                  "using annotated source latency and zero propagated slew",
+    Msta_WarnOnce("生成时钟 \"%s\"：无法推算经过时序单元的源延迟；"
+                  "改用标注的源延迟，传播 slew 取 0",
                   Msta_NameStr(pClock->Name));
 }
 
@@ -1023,7 +1023,7 @@ static void BuildTopoOrder( MstaTiming *p )
                 if ( p->pState[nIn] == 1 )
                 {
                     p->nCombLoops++;
-                    Msta_WarnOnce( "combinational loop found at net \"%s\" (analysis breaks it here)",
+                    Msta_WarnOnce( "在网络 \"%s\" 处发现组合环路（分析时在这里断开）",
                                    Msta_NetName( pDes, nNet ) );
                 }
             }
@@ -1270,7 +1270,7 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                         if ( pArc == NULL && Msta_CellHasAsyncArc( pCell, pIn->Name, pOutPin->Name ) )
                             continue;
                         if ( pArc == NULL && !pCell->fBlackBox )
-                            Msta_WarnOnce( "cell \"%s\" has no timing arc from pin \"%s\" to \"%s\"",
+                            Msta_WarnOnce( "单元 \"%s\" 没有从引脚 \"%s\" 到 \"%s\" 的时序弧",
                                            Msta_NameStr(pCell->Name), Msta_NameStr(pIn->Name),
                                            Msta_NameStr(pOutPin->Name) );
                         Sense = pArc ? pArc->Sense : MSTA_SENSE_UNKNOWN;
@@ -1476,8 +1476,8 @@ static void FindClockPairEdges( MstaTiming *p, int nLaunchClock, int fLaunchRise
         }
     }
     if ( fWarned )
-        Msta_WarnOnce( "clock period ratio is too large; the launch/capture edge "
-                       "search is limited to 1000 launch cycles" );
+        Msta_WarnOnce( "时钟周期之比太大；"
+                       "发出/捕获边沿的搜索只看前 1000 个发出周期" );
     if ( p->nClockPairs < MSTA_MAX_CLOCK_PAIRS )
     {
         MstaClockPair *pPair = &p->vClockPairs[p->nClockPairs++];
@@ -2484,8 +2484,8 @@ static void WarnUntimedLatches( MstaTiming *p )
             n++;
     }
     if ( n > 0 )
-        Msta_WarnOnce( "%d latch(es) have an enable that is not a clock net; "
-                       "they are reported as unconstrained", n );
+        Msta_WarnOnce( "%d 个锁存器的使能端不是时钟网络；"
+                       "它们按未约束端点报告", n );
 }
 
 static int IsStartForClock( MstaTiming *p, int nNet, int nClock )
@@ -2652,8 +2652,8 @@ static void CheckDataChecks( MstaTiming *p, int nClock, char *pfDone )
         {
             /* set_data_check 只建模 setup（max 角）；-hold 一侧未实现，遇到时只告警一次、
                不计入结果。 */
-            Msta_WarnOnce( "set_data_check -hold is not modeled; only the setup "
-                           "corner of a data check is checked" );
+            Msta_WarnOnce( "set_data_check：-hold 未建模，"
+                           "已忽略；数据检查只做 setup 检查" );
         }
     }
 
@@ -2951,12 +2951,12 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
 
     if ( p->pDes->vNets.nSize == 0 )
     {
-        Msta_Error( "analyze: the design is not flattened (say current_design).\n" );
+        Msta_Error( "analyze：设计还没有展平（请先执行 current_design）\n" );
         return 0;
     }
     if ( Msta_SdcClockCount( p->pSdc ) == 0 )
     {
-        Msta_Error( "analyze: no clock defined. Say create_clock first.\n" );
+        Msta_Error( "analyze：没有定义时钟，请先用 create_clock 定义\n" );
         return 0;
     }
 
@@ -3016,10 +3016,10 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
         if ( !pfDataCheckDone[i] )
         {
             MstaDataCheck *pCheck = Msta_SdcDataCheckByIndex( p->pSdc, i );
-            Msta_WarnOnce( "set_data_check -from %s -to %s was not checked: both paths must "
-                           "be timed and launched by the same clock (cross-clock data checks "
-                           "are not modeled)", Msta_NameStr(pCheck->FromText),
-                           Msta_NameStr(pCheck->ToText) );
+            Msta_WarnOnce( "set_data_check -from %s -to %s 没有检查："
+                           "两条路径都必须能算出时序，并由同一个时钟发出"
+                           "（跨时钟的数据检查未建模）",
+                           Msta_NameStr(pCheck->FromText), Msta_NameStr(pCheck->ToText) );
         }
     free( pfDataCheckDone );
 
@@ -3058,7 +3058,7 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
                            &p->TotalHoldSlack, &p->nHoldViolations );
     }
     if ( fVerbose )
-        Msta_Info( "analyze: %d registers, %d endpoints, %d nets in topo order, %d clock nets, %d loops\n",
+        Msta_Info( "analyze：寄存器 %d 个，端点 %d 个，拓扑序网络 %d 根，时钟网络 %d 根，组合环路 %d 处\n",
                    p->nRegisters, p->vChecks.nSize, p->nTopoOrder,
                    Msta_TimingClockNetCount( p ), p->nCombLoops );
     /* 设计面积：所有实例的单元面积之和，set_max_area 拿它做检查。 */
@@ -3067,7 +3067,7 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
         p->DesignArea += MstaInstArrayAt( &p->pDes->vInsts, i )->pCell->Area;
     CheckDesignRules( p );
     if ( fVerbose && Msta_SdcHasDrcLimits(p->pSdc) )
-        Msta_Info( "drc: %d max_transition, %d max_capacitance, %d max_fanout violations\n",
+        Msta_Info( "drc：max_transition 违例 %d 处，max_capacitance 违例 %d 处，max_fanout 违例 %d 处\n",
                    p->nDrcTransitionViol, p->nDrcCapacitanceViol, p->nDrcFanoutViol );
     return 1;
 }
@@ -3137,7 +3137,7 @@ int Msta_TimingTracePath( MstaTiming *p, MstaCheck *pCheck, int fMax, int *pnNet
         pnNets[k++] = n;
         if ( nGuard++ > p->pDes->vNets.nSize )
         {
-            Msta_WarnOnce( "path backtrace hit its guard (loop?)" );
+            Msta_WarnOnce( "路径回溯超过了保护上限（有环路？）" );
             break;
         }
         n = pPrev[n];

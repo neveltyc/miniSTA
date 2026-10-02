@@ -31,13 +31,13 @@ namespace eval msta {
     variable aDialectFlag {-quiet}
 
     proc warn {msg} {
-        puts stderr "** Warning: sdc: $msg"
+        puts stderr "** 警告：sdc：$msg"
         incr ::msta::nSkipped
     }
 
     # 只提示、不算"跳过"（例如方言兼容说明）。
     proc note {msg} {
-        puts stderr "** Warning: sdc: $msg"
+        puts stderr "** 警告：sdc：$msg"
     }
 
     # ---------------- get_* -filter：借 Tcl 的 expr 求值 ----------------
@@ -138,7 +138,7 @@ namespace eval msta {
                 set left [lindex $out end]
                 set right [lindex $tokens [expr {$k + 1}]]
                 if {[llength $out] == 0 || $right eq ""} {
-                    return -code error "unexpected match operator"
+                    return -code error "匹配运算符的位置不对"
                 }
                 set out [lrange $out 0 end-1]
                 if {$tok eq "!~"} {
@@ -176,11 +176,11 @@ namespace eval msta {
             default { return -1 }
         }
         if {[catch {set re [translateFilter $expr $attrNames]} msg]} {
-            note "-filter expression is not modeled: $msg"
+            note "-filter 表达式未建模：$msg"
             return -1
         }
         if {![info exists aDesign($table)]} {
-            note "-filter needs the design index, which is only written when the SDC uses -filter; command skipped"
+            note "-filter 需要设计索引，而设计索引只在 SDC 用到 -filter 时才生成；跳过这条命令"
             return -1
         }
         set out {}
@@ -201,7 +201,7 @@ namespace eval msta {
             }
             set rc [filterPass $attrs $re]
             if {$rc < 0} {
-                note "-filter expression uses an attribute that is not modeled; command skipped"
+                note "-filter 表达式用到了未建模的属性；跳过这条命令"
                 return -1
             }
             if {$rc} { lappend out $name }
@@ -235,7 +235,7 @@ namespace eval msta {
             if {$arg eq "-hsc"} {
                 incr i
                 if {[lindex $args $i] ne "/"} {
-                    warn "hierarchy separator \"[lindex $args $i]\" is not modeled; command skipped"
+                    warn "层次分隔符 \"[lindex $args $i]\" 未建模；跳过这条命令"
                     set fUnsupported 1
                 }
                 continue
@@ -254,17 +254,17 @@ namespace eval msta {
                     set filterExpr [lindex $args $i]
                     continue
                 }
-                warn "collection option $arg is not modeled; the command is skipped"
+                warn "集合选项 $arg 未建模；跳过这条命令"
                 set fUnsupported 1
                 incr i
                 continue
             }
             if {[lsearch -exact $aFlagOptions $arg] >= 0} {
-                warn "collection option $arg is not modeled; the command is skipped"
+                warn "集合选项 $arg 未建模；跳过这条命令"
                 set fUnsupported 1
                 continue
             }
-            warn "collection option $arg is not part of SDC 1.8; the command is skipped"
+            warn "集合选项 $arg 不是 SDC 1.8 语法；跳过这条命令"
             set fUnsupported 1
         }
         if {$fUnsupported} { return "\u001eZ0" }
@@ -272,14 +272,14 @@ namespace eval msta {
         if {[llength $names] == 0} { set names [list *] }
         if {$filterExpr ne ""} {
             if {[llength $parts] > 0} {
-                warn "-filter together with -of_objects is not modeled; the command is skipped"
+                warn "-filter 与 -of_objects 同时使用未建模；跳过这条命令"
                 return "\u001eZ0"
             }
             set filtered [filterQuery $kind $names $filterExpr]
             if {$filtered < 0} { return "\u001eZ0" }
             set names $filtered
             if {[llength $names] == 0 && !$quiet} {
-                note "get_* -filter \"$filterExpr\" matched no objects"
+                note "get_* -filter \"$filterExpr\" 没有匹配到任何对象"
             }
         }
         # -quiet 只是压掉"没匹配到对象"的提示，用小写类型标记传给 C。
@@ -296,7 +296,7 @@ namespace eval msta {
         variable aWarnedDialect
         if {[lsearch -exact $aWarnedDialect $what] >= 0} { return }
         lappend aWarnedDialect $what
-        note "$what is not SDC 1.8 syntax; honored as a compatibility extension"
+        note "$what 不是 SDC 1.8 语法，按兼容写法处理"
     }
 
     # 集合标记拆成 {头部 选项}：get_* 是 \x1e<kind><名字...>，
@@ -403,8 +403,8 @@ namespace eval msta {
         variable aCellPins
         variable aQualCells
         variable aQualPins
-        set what [expr {$kind eq "libs" ? "libraries"
-                      : $kind eq "cells" ? "lib cells" : "lib pins"}]
+        set what [expr {$kind eq "libs" ? "库"
+                      : $kind eq "cells" ? "库单元" : "库引脚"}]
         set fRegexp 0
         set fNocase 0
         set patterns {}
@@ -419,13 +419,13 @@ namespace eval msta {
                 "-hsc" {
                     incr i
                     if {[lindex $args $i] ne "/"} {
-                        warn "hierarchy separator \"[lindex $args $i]\" is not modeled; msta uses \"/\""
+                        warn "层次分隔符 \"[lindex $args $i]\" 未建模；msta 只用 \"/\""
                     }
                     continue
                 }
                 "-of_objects" {
                     if {$kind ne "pins"} {
-                        warn "$cmd does not take -of_objects in SDC 1.8; command skipped"
+                        warn "SDC 1.8 里 $cmd 不带 -of_objects；跳过这条命令"
                         return "\u001eZ0"
                     }
                     incr i
@@ -434,7 +434,7 @@ namespace eval msta {
                 }
             }
             if {[string match -* $arg] && ![string match "\u001e*" $arg]} {
-                warn "$cmd option $arg is not modeled (or not in SDC 1.8); the command is skipped"
+                warn "$cmd 的选项 $arg 未建模（或不是 SDC 1.8 语法）；跳过这条命令"
                 return "\u001eZ0"
             }
             foreach item $arg { if {$item ne ""} { lappend patterns $item } }
@@ -459,7 +459,7 @@ namespace eval msta {
                         } elseif {[info exists aCellPins($cell)]} {
                             foreach pin $aCellPins($cell) { lappend pins $pin }
                         } else {
-                            note "$cmd: lib cell \"$cell\" is not in the library"
+                            note "$cmd：库单元 \"$cell\" 不在库里"
                         }
                     }
                 } else {
@@ -482,7 +482,7 @@ namespace eval msta {
             }
         }
         if {[llength $result] == 0} {
-            note "$cmd \"[join $patterns { }]\" matched no $what"
+            note "$cmd \"[join $patterns { }]\" 没有匹配到任何$what"
         }
         set kindChar [expr {$kind eq "libs" ? "L" : $kind eq "cells" ? "B" : "Y"}]
         return "\u001e${kindChar}[join $result \u001f]"
@@ -493,15 +493,15 @@ namespace eval msta {
     proc remove_from_collection {a b} {
         foreach v [list $a $b] {
             if {![string match "\u001e*" $v]} {
-                error "remove_from_collection expects collections"
+                error "remove_from_collection 的两个参数都必须是集合"
             }
         }
         if {[markerKind $b] eq "A"} {
-            warn "remove_from_collection: the right side is an all_* collection, which cannot be enumerated; command skipped"
+            warn "remove_from_collection：右边是 all_* 集合，无法逐个列出；跳过这条命令"
             return "\u001eZ0"
         }
         if {[lindex [splitMarker $b] 1] ne ""} {
-            warn "remove_from_collection: the right side already carries collection options; command skipped"
+            warn "remove_from_collection：右边的集合已经带有集合选项；跳过这条命令"
             return "\u001eZ0"
         }
         set names [markerNames $b]
@@ -534,7 +534,7 @@ namespace eval msta {
                 dialect "$arg"
                 lappend parts no_clocks
             } else {
-                warn "all_$form option $arg is not modeled (or not in SDC 1.8); the command is skipped"
+                warn "all_$form 的选项 $arg 未建模（或不是 SDC 1.8 语法）；跳过这条命令"
                 return "\u001eZ0"
             }
         }
@@ -590,7 +590,7 @@ namespace eval msta {
     proc evalCommand {command path lineNo} {
         set code [catch {uplevel #0 $command} message]
         if {$code != 0} {
-            warn "$path:$lineNo: $message; this command is skipped"
+            warn "$path:$lineNo：$message；跳过这条命令"
         }
     }
 
@@ -608,13 +608,13 @@ namespace eval msta {
             set buffer ""
         }
         if {$buffer ne ""} {
-            warn "$path:$firstLine: incomplete Tcl command at end of file; skipped"
+            warn "$path:$firstLine：文件末尾的 Tcl 命令不完整，已跳过"
         }
     }
 
     proc runFile {path} {
         if {[catch {open $path r} fileHandle]} {
-            warn "cannot read \"$path\": $fileHandle"
+            warn "无法读取 \"$path\"：$fileHandle"
             return
         }
         set text [read $fileHandle]
@@ -652,7 +652,7 @@ proc current_design {args} { return "\u001eAdesign\u001d" }
 # 层次相关的命令：msta 只有一张展平网表，名字始终从顶层解析。
 proc current_instance {args} {
     if {[llength $args] > 0 && [lindex $args 0] ne ""} {
-        msta::warn "current_instance is not modeled; object names are resolved from the top level"
+        msta::warn "current_instance 未建模，已忽略；对象名一律从顶层解析"
     }
     return ""
 }
@@ -660,7 +660,7 @@ proc current_instance {args} {
 proc set_hierarchy_separator {args} {
     set separator [lindex $args 0]
     if {$separator ne "/"} {
-        msta::warn "hierarchy separator \"$separator\" is not modeled; msta uses \"/\""
+        msta::warn "层次分隔符 \"$separator\" 未建模；msta 只用 \"/\""
     }
     return ""
 }
@@ -691,7 +691,7 @@ proc unknown {name args} {
         msta::emit $name {*}$args
         return ""
     }
-    msta::warn "command \"$name\" is not implemented; ignored"
+    msta::warn "命令 \"$name\" 未实现，已忽略"
     return ""
 }
 
@@ -702,7 +702,7 @@ proc source {args} {
 }
 
 if {$argc < 2 || $argc > 4} {
-    puts stderr "usage: sdc_bridge.tcl input.sdc output.json \[lib-index\] \[design-index\]"
+    puts stderr "用法：sdc_bridge.tcl input.sdc output.json \[lib-index\] \[design-index\]"
     exit 2
 }
 set input [file normalize [lindex $argv 0]]
@@ -716,7 +716,7 @@ if {$argc >= 4 && [file readable [lindex $argv 3]]} {
 }
 
 if {![file exists $input]} {
-    puts stderr "** Error: sdc: cannot read \"$input\""
+    puts stderr "** 错误：sdc：无法读取 \"$input\""
     exit 1
 }
 
@@ -724,7 +724,7 @@ cd [file dirname $input]
 msta::runFile $input
 
 if {$msta::nSkipped > 0} {
-    puts stderr "** Warning: sdc \"$input\": $msta::nSkipped command(s) skipped; the remaining constraints are applied"
+    puts stderr "** 警告：sdc \"$input\"：跳过 $msta::nSkipped 条命令，其余约束照常生效"
 }
 msta::write_json $output
 exit 0

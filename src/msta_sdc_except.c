@@ -52,7 +52,7 @@ static int Msta_SdcGetPath( MstaSdc *p, const MstaSdcCmd *pCmd, MstaSdcPath *pPa
             continue;
         if ( pPath->nThru + 1 + pCmd->pListCount[l] > MSTA_SDC_MAX_THRU )
         {
-            Msta_SdcReject( p, pCmd, "more than %d -through objects", MSTA_SDC_MAX_THRU );
+            Msta_SdcReject( p, pCmd, "-through 对象超过 %d 个", MSTA_SDC_MAX_THRU );
             return 0;
         }
         pPath->Thru[pPath->nThru].Text = MSTA_NO_ID;      /* 新的一组从分隔条目开始 */
@@ -126,10 +126,10 @@ static void Msta_SdcSetPathException( MstaSdc *p, int fFalse, MstaSdcCmd *pCmd )
     MstaSdcPath Path;
     if ( !fFalse )
     {
-        if ( !Msta_SdcGetNumber( p, pCmd, "cycle count", pCmd->pValue, MSTA_SDC_POSITIVE, &Cycles ) )
+        if ( !Msta_SdcGetNumber( p, pCmd, "周期数", pCmd->pValue, MSTA_SDC_POSITIVE, &Cycles ) )
             return;
         if ( Cycles != (double)(int)Cycles )
-        { Msta_SdcReject( p, pCmd, "cycle count must be a positive integer (got %s)", pCmd->pValue ); return; }
+        { Msta_SdcReject( p, pCmd, "周期数必须是正整数（给的是 %s）", pCmd->pValue ); return; }
     }
     if ( !Msta_SdcGetPath( p, pCmd, &Path ) )
         return;
@@ -200,7 +200,7 @@ void Msta_SdcSetGroupPath( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcC
     int j, k;
 
     if ( fDefault == ( pName != NULL ) )
-    { Msta_SdcReject( p, pCmd, "needs exactly one of -name and -default" ); return; }
+    { Msta_SdcReject( p, pCmd, "-name 和 -default 必须写且只能写一个" ); return; }
     if ( pWeight && !Msta_SdcGetNumber( p, pCmd, "-weight", pWeight, MSTA_SDC_POSITIVE, &Weight ) )
         return;
     if ( !Msta_SdcGetPath( p, pCmd, &Path ) )
@@ -249,11 +249,11 @@ void Msta_SdcSetDataCheck( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcC
     MstaDataCheck *pCheck;
 
     if ( nFrom == 0 || nTo == 0 )
-    { Msta_SdcReject( p, pCmd, "needs -from and -to" ); return; }
+    { Msta_SdcReject( p, pCmd, "需要 -from 和 -to" ); return; }
     if ( nFrom != 1 || nTo != 1 ||
          Msta_SdcResolveNets( pDes, ppFrom[0], &pFromNets ) != 1 ||
          Msta_SdcResolveNets( pDes, ppTo[0], &pToNets ) != 1 )
-    { Msta_SdcReject( p, pCmd, "-from/-to must each resolve to one net" ); return; }
+    { Msta_SdcReject( p, pCmd, "-from/-to 必须各自对应唯一一个网络" ); return; }
     pCheck = MstaDataCheckArrayAppend( &p->vDataChecks );
     pCheck->FromNet  = pFromNets[0];
     pCheck->ToNet    = pToNets[0];
@@ -274,7 +274,7 @@ void Msta_SdcSetMaxTimeBorrow( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Msta
     MstaBorrowSdc *pRec;
     double Value;
     int *pInsts, nInsts = 1, i;
-    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Value ) )
+    if ( !Msta_SdcGetNumber( p, pCmd, "值", pCmd->pValue, MSTA_SDC_NONNEG, &Value ) )
         return;
     if ( pCmd->nObjs > 0 &&
          ( nInsts = Msta_SdcObjectInsts( p, pDes, pLib, pCmd, pCmd->ppObjs, pCmd->nObjs, 1, &pInsts ) ) < 0 )
@@ -307,7 +307,7 @@ void Msta_SdcSetClockGatingCheck( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, M
     double Setup = MSTA_UNSET, Hold = MSTA_UNSET;
     int *pInsts, nInsts = 1, i;
     if ( pSetup == NULL && pHold == NULL )
-    { Msta_SdcReject( p, pCmd, "needs -setup and/or -hold" ); return; }
+    { Msta_SdcReject( p, pCmd, "至少需要 -setup 或 -hold 之一" ); return; }
     if ( ( pSetup && !Msta_SdcGetNumber( p, pCmd, "-setup", pSetup, MSTA_SDC_ANY, &Setup ) ) ||
          ( pHold  && !Msta_SdcGetNumber( p, pCmd, "-hold",  pHold,  MSTA_SDC_ANY, &Hold ) ) )
         return;

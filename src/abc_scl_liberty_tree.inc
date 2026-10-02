@@ -391,8 +391,8 @@ exit:
     {
         p->pError = (char *)malloc( 1000 );
         assert( p->pError );
-        snprintf( p->pError, 1000, "File \"%s\". Line %6ld. Failed to parse entry \"%.60s\".\n",
-            p->pFileName ? p->pFileName : "(memory)", (long)p->nLines,
+        snprintf( p->pError, 1000, "文件 \"%s\" 第 %ld 行：无法解析条目 \"%.60s\"\n",
+            p->pFileName ? p->pFileName : "(内存)", (long)p->nLines,
             Scl_LibertyReadString(p, Key) );
     }
     return -1;
@@ -450,7 +450,7 @@ static Scl_Tree_t *Scl_LibertyParseString( const char *pFileName, char *pContent
     {
         if ( p->pError )
             Msta_Error( "%s", p->pError );
-        Msta_Error( "Liberty syntax error: the tree is incomplete.\n" );
+        Msta_Error( "Liberty 语法错误：库文件没有完整解析\n" );
     }
     return p;
 }

@@ -46,7 +46,7 @@ int Msta_SplitArgs( char *pLine, char **argv, int nMaxArgs )
 
 void Msta_Log( MstaLogLevel Level, const char *pFormat, ... )
 {
-    static const char *s_pPrefix[] = { "", "** Warning: ", "** Error: " };
+    static const char *s_pPrefix[] = { "", "** 警告：", "** 错误：" };
     va_list pArgs;
     fprintf( stderr, "%s", s_pPrefix[Level] );
     va_start( pArgs, pFormat );
@@ -59,7 +59,7 @@ MstaMsgArray g_vMstaWarnings;
 
 void Msta_WarnOnce( const char *pFormat, ... )
 {
-    char sMsg[512];
+    char sMsg[1024];
     va_list pArgs;
     int i;
     va_start( pArgs, pFormat );
@@ -98,7 +98,7 @@ char *Msta_FileReadAll( const char *pFileName, size_t *pnSize )
 
     if ( pFile == NULL )
     {
-        Msta_Error( "cannot open \"%s\".\n", pFileName );
+        Msta_Error( "无法打开文件 \"%s\"\n", pFileName );
         return NULL;
     }
     fseek( pFile, 0, SEEK_END );

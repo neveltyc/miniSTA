@@ -27,9 +27,9 @@ int main( int argc, char **argv )
             pInline = argv[++i];
         else if ( !strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") )
         {
-            printf( "usage: msta <dofile> | msta -c \"cmd1; cmd2\"\n" );
-            printf( "       msta -q <dofile>        安静模式\n" );
-            printf( "       msta -o out.txt <file>  把报告写到文件\n" );
+            printf( "用法：msta <dofile> | msta -c \"命令1; 命令2\"\n" );
+            printf( "      msta -q <dofile>        安静模式\n" );
+            printf( "      msta -o out.txt <file>  把报告写到文件\n" );
             return 0;
         }
         else if ( !strcmp(argv[i], "-q") )
@@ -42,7 +42,7 @@ int main( int argc, char **argv )
 
     if ( pInline == NULL && pScript == NULL )
     {
-        Msta_Error( "nothing to do. try: msta -c \"help\"\n" );
+        Msta_Error( "没有要执行的命令；可以试试 msta -c \"help\"\n" );
         return 1;
     }
 

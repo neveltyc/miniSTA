@@ -13,7 +13,7 @@ grep -Fq 'capture clock: external @ 50.000 ns' "${LOG}/testcases_sdc_features_ad
 # external/spare 与 core 之间是异步域，跨域的那条 input->register 路径要被排除掉。
 grep -Fq '未约束 0 个   路径例外排除 1 个' "${LOG}/testcases_sdc_features_clock_groups.dofile.log"
 if grep -Fq 'startpoint : inp1' "${LOG}/testcases_sdc_features_clock_groups.dofile.log"; then
-    echo 'clock_groups: cross-domain path from inp1 was not cut' >&2
+    echo 'clock_groups：从 inp1 出发的跨时钟域路径没有被切掉' >&2
     exit 1
 fi
 grep -Eq '^slow[[:space:]]+20\.000' "${LOG}/testcases_sdc_features_generated.dofile.log"
@@ -42,7 +42,7 @@ grep -Fq 'endpoint   : f1' "${LOG}/testcases_sdc_features_same_clock_exception.d
 
 # -setup 只切寄存器的 setup 检查，hold 检查保留。
 if grep -Fq 'setup path (max corner, to register)' "${LOG}/testcases_sdc_features_false_setup.dofile.log"; then
-    echo 'false_setup: register setup path was not cut' >&2
+    echo 'false_setup：寄存器的 setup 路径没有被切掉' >&2
     exit 1
 fi
 grep -Fq 'hold path (min corner, to register)' "${LOG}/testcases_sdc_features_false_setup.dofile.log"
@@ -54,13 +54,13 @@ grep -Fq 'startpoint : inp1' "${LOG}/testcases_sdc_features_path_budget.dofile.l
 grep -Fq 'startpoint : inp2' "${LOG}/testcases_sdc_features_case_disable.dofile.log"
 
 # 前端容错：拼错的命令名、未建模的集合选项各丢自己一条，其余约束照常生效。
-grep -Fq 'collection option -expression is not modeled; the command is skipped' \
+grep -Fq 'sdc：集合选项 -expression 未建模；跳过这条命令' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
-grep -Fq 'unknown sdc command "set_max_transtion" (ignored)' \
+grep -Fq 'sdc：未知命令 "set_max_transtion"，已忽略' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
-grep -Fq 'set_voltage: per-object voltage is not modeled; constraint rejected' \
+grep -Fq 'set_voltage：按对象设置电压未建模；约束作废' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
-grep -Fq '1 command(s) skipped; the remaining constraints are applied' \
+grep -Fq '跳过 1 条命令，其余约束照常生效' \
     "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 grep -Fq 'setup : WNS   19.748 ns' "${LOG}/testcases_sdc_features_tolerant.dofile.log"
 grep -Fq '未约束 0 个' "${LOG}/testcases_sdc_features_tolerant.dofile.log"
@@ -75,15 +75,15 @@ grep -Fq 'setup : WNS   15.684 ns' "${LOG}/testcases_sdc_features_through_edge.d
 grep -Fq 'hold  : WNS    0.265 ns' "${LOG}/testcases_sdc_features_through_edge.dofile.log"
 grep -Fq 'endpoint   : my_cfo' "${LOG}/testcases_sdc_features_through_edge.dofile.log"
 if grep -Fq '未约束 1 个' "${LOG}/testcases_sdc_features_through_edge.dofile.log"; then
-    echo 'through_edge: 端点被整条切掉了（应该换到次优路径）' >&2
+    echo 'through_edge：端点被整条切掉了（应该换到次优路径）' >&2
     exit 1
 fi
 # 最差 setup 路径在 X 上是下降沿，setup 不变；hold 独立选取未被切掉的边沿。
 grep -Fq 'setup : WNS   15.505 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
 grep -Fq 'hold  : WNS    0.477 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
 for edge_case in through_edge through_edge_rise; do
-    if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_${edge_case}.dofile.log"; then
-        echo "through_edge: ${edge_case} 产生了 sdc 告警" >&2
+    if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_${edge_case}.dofile.log"; then
+        echo "through_edge：${edge_case} 产生了 sdc 告警" >&2
         exit 1
     fi
 done
@@ -95,19 +95,19 @@ grep -Fq 'setup : WNS   44.754 ns' "${LOG}/testcases_sdc_features_io_edge_fall_f
 # 库里没有 K 因子时明确告警"表值原样用"。
 grep -Fq '工艺角   : late tt_025C_1v80 [sky130_fd_sc_hd__tt_025C_1v80]（0.950 V / 105.0 C）   early tt_025C_1v80 [sky130_fd_sc_hd__tt_025C_1v80]（0.950 V / 105.0 C）' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
-grep -Fq 'the library has no k_volt/k_temp factor; delay tables are used as read' \
+grep -Fq 'set_operating_conditions：库里没有 k_volt/k_temp 系数；延迟表按原值使用' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
-grep -Fq 'set_voltage: 0.950 V is recorded, but the library has no k_volt factor' \
+grep -Fq 'set_voltage：已记录 0.950 V，但库里没有 k_volt 系数' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'setup : WNS   15.505 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'hold  : WNS    0.465 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
-grep -Fq 'set_operating_conditions: -analysis_type on_chip_variation is not modeled; constraint rejected' \
+grep -Fq 'set_operating_conditions：-analysis_type on_chip_variation 未建模；约束作废' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 
 # 显式库限定必须精确匹配，不能静默改用另一个库里的同名单元。
-grep -Fq 'set_driving_cell: cell "no_such_lib/INVX1" is not in the requested library' \
+grep -Fq 'set_driving_cell：单元 "no_such_lib/INVX1" 不在指定的库里；约束作废' \
     "${LOG}/testcases_sdc_features_bad_driving_library.dofile.log"
-grep -Fq '1 command(s) were not modeled and were ignored' \
+grep -Fq '1 条命令未建模或写错，已忽略' \
     "${LOG}/testcases_sdc_features_bad_driving_library.dofile.log"
 
 # set_data_check：-from 的到达（减去它的出发沿）加 margin 当要求时间，
@@ -115,8 +115,8 @@ grep -Fq '1 command(s) were not modeled and were ignored' \
 grep -Fq '数据检查 : 1 条   setup 最差 -0.995 ns（my_cti -> u_sff/D，margin 0.500）' \
     "${LOG}/testcases_sdc_features_data_check.dofile.log"
 grep -Fq 'setup : WNS   -0.995 ns' "${LOG}/testcases_sdc_features_data_check.dofile.log"
-if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_data_check.dofile.log"; then
-    echo 'data_check: 标准写法不应该产生 sdc 告警' >&2
+if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_data_check.dofile.log"; then
+    echo 'data_check：标准写法不应该产生 sdc 告警' >&2
     exit 1
 fi
 
@@ -139,31 +139,31 @@ grep -Fq '面积  : 1385.1（目标 1000.0，超出 385.1）' \
     "${LOG}/testcases_sdc_features_drc.dofile.log"
 
 # SDC 1.8 手册里的全部命令各来一条：没建模的告警后忽略，只丢自己那一条，
-# 日志里不应出现 unknown sdc command。
-if grep -Fq 'unknown sdc command' "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"; then
-    echo 'sdc_commands: 手册里的命令不应被当成未知命令' >&2
+# 日志里不应出现"未知命令"。
+if grep -Fq 'sdc：未知命令' "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"; then
+    echo 'sdc_commands：手册里的命令不应被当成未知命令' >&2
     exit 1
 fi
-# 过时命令明确不支持：告警里要写出"obsolete"和替代写法。
-for obsolete in 'set_drive" is not modeled by msta: obsolete command (input drive resistance); use set_driving_cell instead' \
-                'set_resistance" is not modeled by msta: obsolete command (net resistance); not modeled' \
-                'set_fanout_load" is not modeled by msta: obsolete command (fanout load units); use set_load instead' \
-                'set_port_fanout_number" is not modeled by msta: obsolete command (fanout load units); use set_load instead' \
-                'set_wire_load_model" is not modeled by msta: obsolete command (wire load models); not modeled'; do
-    grep -Fq "sdc command \"${obsolete}" "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
+# 过时命令明确不支持：告警里要写出"过时命令"和替代写法。
+for obsolete in 'set_drive" 未建模，已忽略：过时命令（输入驱动电阻），请改用 set_driving_cell' \
+                'set_resistance" 未建模，已忽略：过时命令（线网电阻）' \
+                'set_fanout_load" 未建模，已忽略：过时命令（扇出负载单位），请改用 set_load' \
+                'set_port_fanout_number" 未建模，已忽略：过时命令（扇出负载单位），请改用 set_load' \
+                'set_wire_load_model" 未建模，已忽略：过时命令（线负载模型）'; do
+    grep -Fq "sdc：命令 \"${obsolete}" "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
 done
-# 与 STA 无关的命令（多电压域 / 功耗）：明确不支持，告警里说清"不是 STA 约束"。
+# 与 STA 无关的命令（多电压域 / 功耗）：明确不支持，告警里说清"不是时序分析约束"。
 for nonsta in create_voltage_area set_level_shifter_strategy set_level_shifter_threshold \
               set_max_dynamic_power set_max_leakage_power; do
-    grep -Fq "sdc command \"${nonsta}\" is not modeled by msta: not an STA constraint" \
+    grep -Fq "sdc：命令 \"${nonsta}\" 未建模，已忽略：不是时序分析约束" \
         "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
 done
 # 库对象查询：手册里的写法照常执行，查不到对象只提示一句、不算"跳过命令"。
-grep -Fq 'sdc: get_libs "xx" matched no libraries' \
+grep -Fq 'sdc：get_libs "xx" 没有匹配到任何库' \
     "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
-grep -Fq 'sdc: get_lib_cells "xx" matched no lib cells' \
+grep -Fq 'sdc：get_lib_cells "xx" 没有匹配到任何库单元' \
     "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
-grep -Fq 'sdc: get_lib_pins "xx" matched no lib pins' \
+grep -Fq 'sdc：get_lib_pins "xx" 没有匹配到任何库引脚' \
     "${LOG}/testcases_sdc_features_sdc_commands.dofile.log"
 # 其余命令照常生效：面积约束和 setup 汇总都在。
 grep -Fq '面积  : 37.5（目标 100000.0，余量 99962.5）' \
@@ -199,11 +199,11 @@ grep -Fq '寄存器 1613 个' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log
 # 三方库的单元都要真的出现在网表里（综合时按块用了不同阈值库）。
 for flavor in H7L H7R H7H; do
     grep -Fq "${flavor}" "${ROOT}/testcases/multi_vt/netlist/multi_vt_soc.v" \
-        || { echo "multi_vt: netlist 里缺 ${flavor} 单元" >&2; exit 1; }
+        || { echo "multi_vt：netlist 里缺 ${flavor} 单元" >&2; exit 1; }
 done
-# 用 "库名/cell 名" 限定驱动单元的那条用例：能查到 cell，不应有 not in the library 告警。
-if grep -Fq 'set_driving_cell: cell' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"; then
-    echo 'multi_vt: 限定库名的 set_driving_cell 没查到 cell' >&2
+# 用 "库名/cell 名" 限定驱动单元的那条用例：能查到 cell，不应有"不在指定的库里"告警。
+if grep -Fq 'set_driving_cell：单元' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"; then
+    echo 'multi_vt：限定库名的 set_driving_cell 没查到 cell' >&2
     exit 1
 fi
 grep -Fq 'setup : WNS    3.599 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"
@@ -227,8 +227,8 @@ grep -Fq 'capture clock: core @ 10.200 ns' "${LOG}/testcases_sdc_features_ideal_
 grep -Fq 'setup : WNS    8.336 ns' "${LOG}/testcases_sdc_features_ideal_network_value.dofile.log"
 # 标准写法不该产生任何 sdc 告警：三条命令都要被认下来。
 for idea_case in ideal_network ideal_network_tree ideal_network_noprop ideal_network_value; do
-    if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_${idea_case}.dofile.log"; then
-        echo "ideal_network: ${idea_case} 产生了 sdc 告警" >&2
+    if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_${idea_case}.dofile.log"; then
+        echo "ideal_network：${idea_case} 产生了 sdc 告警" >&2
         exit 1
     fi
 done
@@ -245,8 +245,8 @@ grep -Fq 'launch clock : slow @ 0.000 ns' "${LOG}/testcases_sdc_features_clock_a
 grep -Fq 'capture clock: slow @ 50.000 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 grep -Fq 'setup : WNS    4.754 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
 grep -Fq 'hold  : WNS    0.050 ns' "${LOG}/testcases_sdc_features_clock_add.dofile.log"
-if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_clock_add.dofile.log"; then
-    echo 'clock_add: 标准写法不应该产生 sdc 告警' >&2
+if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_clock_add.dofile.log"; then
+    echo 'clock_add：标准写法不应该产生 sdc 告警' >&2
     exit 1
 fi
 
@@ -256,8 +256,8 @@ grep -Fq 'launch clock : slow @ 50.000 ns' "${LOG}/testcases_sdc_features_clock_
 grep -Fq 'capture clock: core @ 60.000 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 grep -Fq 'setup : WNS  -35.246 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
 grep -Fq 'hold  : WNS    0.050 ns' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"
-if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"; then
-    echo 'clock_add_align: 标准写法不应该产生 sdc 告警' >&2
+if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_clock_add_align.dofile.log"; then
+    echo 'clock_add_align：标准写法不应该产生 sdc 告警' >&2
     exit 1
 fi
 
@@ -266,8 +266,8 @@ grep -Fq '  inp1                                           30.000     30.000   (
     "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
 grep -Fq 'setup : WNS   19.748 ns' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
 grep -Fq 'hold  : WNS   -9.820 ns' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"
-if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"; then
-    echo 'input_clock_fall: 标准写法不应该产生 sdc 告警' >&2
+if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_input_clock_fall.dofile.log"; then
+    echo 'input_clock_fall：标准写法不应该产生 sdc 告警' >&2
     exit 1
 fi
 
@@ -291,8 +291,8 @@ grep -Fq '时钟树：网络 3 根，算出插入延迟的 2 根，最深 1 级�
 grep -Fq '寄存器 1 个   端点 2 个   未约束 2 个' \
     "${LOG}/testcases_sdc_features_clock_sense_stop.dofile.log"
 for sense_case in clock_sense clock_sense_positive clock_sense_stop; do
-    if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_${sense_case}.dofile.log"; then
-        echo "clock_sense: ${sense_case} 产生了 sdc 告警" >&2
+    if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_${sense_case}.dofile.log"; then
+        echo "clock_sense：${sense_case} 产生了 sdc 告警" >&2
         exit 1
     fi
 done
@@ -311,12 +311,12 @@ grep -Fq 'setup : WNS   17.496 ns' "${LOG}/testcases_sdc_features_standard_ports
 # 也可以用 Tcl 层集合运算拼出同一组对象（remove_from_collection），结果必须一致。
 grep -Fq 'setup : WNS   17.496 ns' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"
 grep -Fq 'hold  : WNS    0.465 ns' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"
-if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"; then
-    echo 'collection_ops: 集合运算不应产生 sdc 告警' >&2
+if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"; then
+    echo 'collection_ops：集合运算不应产生 sdc 告警' >&2
     exit 1
 fi
-if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_standard_ports.dofile.log"; then
-    echo 'standard_ports: 标准写法不应该产生任何 sdc 告警' >&2
+if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_standard_ports.dofile.log"; then
+    echo 'standard_ports：标准写法不应该产生任何 sdc 告警' >&2
     exit 1
 fi
 # 只看命令本身，注释里提到方言名不算（去掉 # 之后的内容再扫）。
@@ -332,46 +332,46 @@ if [[ -n "${vDialect}" ]]; then
 fi
 
 # 手册里有、msta 没建模的选项：报告后整条命令作废。
-grep -Fq 'collection option -expression is not modeled; the command is skipped' \
+grep -Fq 'sdc：集合选项 -expression 未建模；跳过这条命令' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
-grep -Fq 'set_multicycle_path: option "-start" is not modeled; constraint rejected' \
+grep -Fq 'set_multicycle_path：选项 "-start" 未建模；约束作废' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 # "-max 0.5 -min 0.2" 不是 SDC 1.8 语法（-min/-max 只是开关，值只有一个），整条作废。
-grep -Fq 'set_ideal_latency: "-min 0.2" is not SDC 1.8 syntax (-min takes no value); constraint rejected' \
+grep -Fq 'set_ideal_latency："-min 0.2" 不是 SDC 1.8 语法（-min 后面不带值）；约束作废' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 # 同一根网络上的第二个 create_clock 必须写 -add（不写是替换，msta 不做替换）。
-grep -Fq 'create_clock: the source already has a clock (use -add for another one); constraint rejected' \
+grep -Fq 'create_clock：源对象上已经有时钟（要再加一个请用 -add）；约束作废' \
     "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 grep -Fq 'setup : WNS   17.737 ns' "${LOG}/testcases_sdc_features_sdc_conformance.dofile.log"
 
 # 命令解析规则（docs/sdc.md）：写错的约束整条作废、告警并计入忽略数，
 # 其余约束照常生效。sdc_rules 在 generated.sdc 之后追加了 12 条写错的约束。
 RULES="${LOG}/testcases_sdc_features_sdc_rules.dofile.log"
-for rule in 'set_input_delay: option "-foo" is not modeled; constraint rejected' \
-            'create_clock: option "-name" needs a value; constraint rejected' \
-            'set_output_delay: option "-max" is given more than once; constraint rejected' \
-            'set_multicycle_path: cycle count must be positive (got -2); constraint rejected' \
-            'set_multicycle_path: cycle count must be a positive integer (got 2.5); constraint rejected' \
-            'set_input_delay: "-min 1.0" is not SDC 1.8 syntax (-min takes no value); constraint rejected' \
-            'set_load: unexpected value "0.02"; constraint rejected' \
-            'set_case_analysis: value "2" must be 0, 1, zero or one; constraint rejected' \
-            'set_case_analysis: value "rising" is not modeled (only 0, 1, zero and one); constraint rejected' \
-            'set_load: value must not be negative (got -0.05); constraint rejected' \
-            'set_timing_derate: object collection [get_clocks] is empty; constraint rejected' \
-            'set_timing_derate: object collection [get_cells -of_objects] is empty; constraint rejected' \
-            '12 command(s) were not modeled and were ignored'; do
-    grep -Fq -- "${rule}" "${RULES}" || { echo "sdc_rules: 缺少告警：${rule}" >&2; exit 1; }
+for rule in 'set_input_delay：选项 "-foo" 未建模；约束作废' \
+            'create_clock：选项 "-name" 缺少值；约束作废' \
+            'set_output_delay：选项 "-max" 写了不止一次；约束作废' \
+            'set_multicycle_path：周期数必须大于 0（给的是 -2）；约束作废' \
+            'set_multicycle_path：周期数必须是正整数（给的是 2.5）；约束作废' \
+            'set_input_delay："-min 1.0" 不是 SDC 1.8 语法（-min 后面不带值）；约束作废' \
+            'set_load：多出了数值 "0.02"；约束作废' \
+            'set_case_analysis：值 "2" 必须是 0、1、zero 或 one；约束作废' \
+            'set_case_analysis：值 "rising" 未建模（只支持 0、1、zero 和 one）；约束作废' \
+            'set_load：值不能为负（给的是 -0.05）；约束作废' \
+            'set_timing_derate：对象集合 [get_clocks] 为空；约束作废' \
+            'set_timing_derate：对象集合 [get_cells -of_objects] 为空；约束作废' \
+            '12 条命令未建模或写错，已忽略'; do
+    grep -Fq -- "${rule}" "${RULES}" || { echo "sdc_rules：缺少告警：${rule}" >&2; exit 1; }
 done
 # 负数是值：-2 不应被当成不认识的选项。
-if grep -Fq 'option "-2"' "${RULES}"; then
-    echo 'sdc_rules: 负数被当成了选项' >&2
+if grep -Fq '选项 "-2"' "${RULES}"; then
+    echo 'sdc_rules：负数被当成了选项' >&2
     exit 1
 fi
 # 作废的约束不留下任何影响：时序结果与只读 generated.sdc 的逐行相同
 # （空集合的 derate 若退化成全局系数，到达时间会变）。
 if ! diff <(grep -E 'WNS|arrival time|capture clock' "${LOG}/testcases_sdc_features_generated.dofile.log") \
           <(grep -E 'WNS|arrival time|capture clock' "${RULES}") > /dev/null; then
-    echo 'sdc_rules: 作废的约束影响了时序结果' >&2
+    echo 'sdc_rules：作废的约束影响了时序结果' >&2
     exit 1
 fi
 
@@ -380,7 +380,7 @@ fi
 printf 'set_input_delay 1 -clock c [all_inputs -no_clocks]\n' > "${LOG}/compat_dialect.sdc"
 tclsh "${ROOT}/scripts/sdc_bridge.tcl" "${LOG}/compat_dialect.sdc" "${LOG}/compat_dialect.json" \
     2> "${LOG}/compat_dialect.log"
-grep -Fq -- '-no_clocks is not SDC 1.8 syntax; honored as a compatibility extension' \
+grep -Fq -- 'sdc：-no_clocks 不是 SDC 1.8 语法，按兼容写法处理' \
     "${LOG}/compat_dialect.log"
 grep -Fq 'Ainputs' "${LOG}/compat_dialect.json"
 grep -Fq 'no_clocks' "${LOG}/compat_dialect.json"
@@ -392,7 +392,7 @@ printf 'set_ideal_network -no_propagation [get_pins ct2/Y]\n' > "${LOG}/compat_i
      current_design ideal_demo; read_sdc ideal_network.sdc; \
      read_sdc ${LOG}/compat_ideal_network.sdc; report_clock_tree" ) \
     > "${LOG}/compat_ideal_network.log" 2>&1
-grep -Fq 'set_ideal_network: -no_propagation is not SDC 1.8 syntax; honored as -no_propagate' \
+grep -Fq 'set_ideal_network：-no_propagation 不是 SDC 1.8 语法，按 -no_propagate 处理' \
     "${LOG}/compat_ideal_network.log"
 # 认下来之后行为与 -no_propagate 一致（0.442 ns）；如果被丢掉会是整棵树的 0.584 ns。
 grep -Fq '最大插入延迟 0.442 ns' "${LOG}/compat_ideal_network.log"
@@ -427,8 +427,8 @@ grep -Fq 'setup : WNS   15.684 ns' "${LOG}/testcases_sdc_features_group_path_exc
 grep -Eq '^mux_grp[[:space:]]+1\.00[[:space:]]+2[[:space:]]+15\.684' \
     "${LOG}/testcases_sdc_features_group_path_exception.dofile.log"
 for gp in group_path group_path_default group_path_through group_path_exception; do
-    if grep -Fq 'Warning: sdc' "${LOG}/testcases_sdc_features_${gp}.dofile.log"; then
-        echo "group_path: ${gp} 产生了 sdc 告警" >&2
+    if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_${gp}.dofile.log"; then
+        echo "group_path：${gp} 产生了 sdc 告警" >&2
         exit 1
     fi
 done
@@ -517,4 +517,4 @@ grep -Fq '寄存器 10543 个   端点 13133 个' "${LOG}/testcases_eth_sky130_e
 grep -Fq '时钟树：网络 1270 根' "${LOG}/testcases_eth_sky130_eth.dofile.log"
 grep -Fq 'instances after flatten: 23589' "${LOG}/testcases_e902_sky130_e902.dofile.log"
 grep -Fq '寄存器 2782 个   端点 6724 个' "${LOG}/testcases_e902_sky130_e902.dofile.log"
-echo '==> SDC semantic checks passed'
+echo '==> SDC 语义断言全部通过'

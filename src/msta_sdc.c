@@ -430,7 +430,7 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
             else
             {
                 /* -level_sensitive / -edge_triggered 会筛掉一部分端口，没建模就不能当没看见。 */
-                Msta_WarnOnce( "all_%s option \"%s\" is not modeled; command skipped", pSpec, pOpt );
+                Msta_WarnOnce( "sdc：all_%s 的选项 \"%s\" 未建模；跳过这条命令", pSpec, pOpt );
                 return -1;
             }
         }
@@ -469,7 +469,7 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
             else if ( !strncmp(pOpt,"fall_clock=",11) ) { pFilterClock = pOpt + 11; fFall = 1; }
             else
             {
-                Msta_WarnOnce( "all_registers option \"%s\" is not modeled; command skipped", pOpt );
+                Msta_WarnOnce( "sdc：all_registers 的选项 \"%s\" 未建模；跳过这条命令", pOpt );
                 return -1;
             }
         }
@@ -480,7 +480,7 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
             MstaClock *pClock = Msta_SdcFindClock( pSdc, pFilterClock );
             if ( pClock == NULL )
             {
-                Msta_WarnOnce( "all_registers -clock: unknown clock \"%s\"; command skipped",
+                Msta_WarnOnce( "sdc：all_registers -clock：找不到时钟 \"%s\"；跳过这条命令",
                                pFilterClock );
                 return -1;
             }
@@ -800,7 +800,7 @@ static int Msta_SdcExpandOfObjects( MstaSdc *pSdc, MstaDesign *pDes, char *pOfMa
     nParents = Msta_SdcExpandParents( pSdc, pDes, pOfMarker, &Parents );
     if ( nParents <= 0 )
     {
-        Msta_WarnOnce( "-of_objects could not be resolved; command skipped" );
+        Msta_WarnOnce( "sdc：-of_objects 的对象无法解析；跳过这条命令" );
         Msta_SdcArgListFree( &Parents );
         return -1;
     }
@@ -809,7 +809,7 @@ static int Msta_SdcExpandOfObjects( MstaSdc *pSdc, MstaDesign *pDes, char *pOfMa
         Msta_SdcArgListPush( &Patterns, pCopy, 0, 0 );
     if ( Patterns.nSize == 0 )
     {
-        Msta_WarnOnce( "-of_objects needs a pattern" );
+        Msta_WarnOnce( "sdc：-of_objects 缺少匹配模式" );
         Msta_SdcArgListFree( &Parents );
         return -1;
     }
@@ -856,7 +856,7 @@ static const char *Msta_SdcCollectionName( char Kind )
 static void Msta_SdcEmptyCollection( MJsonValue *pRecord, const char *pWhat, const char *pForm )
 {
     MJsonValue *pName = Msta_JsonAt( pRecord, 0 );
-    Msta_WarnOnce( "%s: object collection [%s%s] is empty; constraint rejected",
+    Msta_WarnOnce( "%s：对象集合 [%s%s] 为空；约束作废",
                    pName ? pName->pStr : "sdc", pWhat, pForm );
 }
 
@@ -881,7 +881,7 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
         {
             if ( Msta_SdcExpandAll( pSdc, pDes, pText + 2, &s_Args ) < 0 )
             {
-                Msta_WarnOnce( "sdc collection \"%s\" is not modeled; command skipped", pText + 2 );
+                Msta_WarnOnce( "sdc：集合 \"%s\" 未建模；跳过这条命令", pText + 2 );
                 return 0;
             }
             if ( s_Args.nSize == nBefore )
@@ -953,7 +953,7 @@ static int Msta_SdcExpandRecord( MJsonValue *pRecord, MstaDesign *pDes, MstaSdc 
                         nMatched++;
                     }
                     if ( nMatched == 0 && !fQuiet )
-                        Msta_WarnOnce("get_clocks pattern \"%s\" matched no clocks",pPart);
+                        Msta_WarnOnce("sdc：get_clocks 的模式 \"%s\" 没有匹配到任何时钟",pPart);
                 }
                 else
                 {
@@ -1060,7 +1060,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     fd = mkstemp( sJsonPath );
     if ( fd < 0 )
     {
-        Msta_Error( "read_sdc: cannot create temporary file\n" );
+        Msta_Error( "read_sdc：无法创建临时文件\n" );
         return 0;
     }
     close( fd );
@@ -1105,7 +1105,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
                     (char *)NULL );
         else
             execlp( "tclsh", "tclsh", s_pBridgePath, pFileName, sJsonPath, (char *)NULL );
-        perror( "read_sdc: cannot run tclsh" );
+        perror( "read_sdc：无法运行 tclsh" );
         _exit( 127 );
     }
     if ( Pid < 0 || waitpid(Pid, &Status, 0) < 0 || !WIFEXITED(Status) || WEXITSTATUS(Status) != 0 )
@@ -1113,7 +1113,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
         unlink( sJsonPath );
         unlink( sIndexPath );
         if ( fHaveDesign ) unlink( sDesignPath );
-        Msta_Error( "read_sdc: Tcl parsing failed for \"%s\"\n", pFileName );
+        Msta_Error( "read_sdc：Tcl 解析 \"%s\" 失败\n", pFileName );
         return 0;
     }
     unlink( sIndexPath );
@@ -1122,7 +1122,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     unlink( sJsonPath );
     if ( pCommands == NULL || pCommands->Kind != MJSON_ARRAY )
     {
-        Msta_Error( "read_sdc: invalid parser output: %s\n", sError );
+        Msta_Error( "read_sdc：解析器输出无效：%s\n", sError );
         Msta_JsonFree( pCommands );
         return 0;
     }
@@ -1133,7 +1133,7 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
         {
             /* 单条命令不能展开就丢掉它；前面的约束仍然有效。 */
             if ( argc < 0 )
-                Msta_WarnOnce( "read_sdc: malformed command %d; skipped", i + 1 );
+                Msta_WarnOnce( "read_sdc：第 %d 条命令格式不对，已跳过", i + 1 );
             p->nCommandsIgnored++;
             continue;
         }
@@ -1142,10 +1142,10 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     Msta_SdcScratchFree();
     Msta_JsonFree( pCommands );
     if ( p->nCommandsIgnored > 0 )
-        Msta_Warn( "sdc \"%s\": %d command(s) were not modeled and were ignored\n",
+        Msta_Warn( "sdc \"%s\"：%d 条命令未建模或写错，已忽略\n",
                    pFileName, p->nCommandsIgnored );
     if ( fVerbose )
-        Msta_Info( "sdc \"%s\": %d commands read, %d ignored, %d clocks, %d exceptions\n",
+        Msta_Info( "sdc \"%s\"：读入命令 %d 条，忽略 %d 条，时钟 %d 个，路径例外 %d 条\n",
                    pFileName, p->nCommandsRead, p->nCommandsIgnored,
                    p->vClocks.nSize, p->vExceptions.nSize );
     return 1;
@@ -1156,19 +1156,19 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
    前八条是明确不支持的过时命令：它们描述老式线负载与驱动电阻模型，已由驱动
    单元和真实负载代替；有对应写法的（set_driving_cell / set_load）告警里写出。 */
 static const struct { const char *pName; const char *pNote; } s_vIgnoredCommands[] = {
-    { "set_drive", "obsolete command (input drive resistance); use set_driving_cell instead" },
-    { "set_resistance", "obsolete command (net resistance); not modeled" },
-    { "set_fanout_load", "obsolete command (fanout load units); use set_load instead" },
-    { "set_port_fanout_number", "obsolete command (fanout load units); use set_load instead" },
-    { "set_wire_load_min_block_size", "obsolete command (wire load models); not modeled" },
-    { "set_wire_load_mode", "obsolete command (wire load models); not modeled" },
-    { "set_wire_load_model", "obsolete command (wire load models); not modeled" },
-    { "set_wire_load_selection_group", "obsolete command (wire load models); not modeled" },
-    { "create_voltage_area", "not an STA constraint (multi-voltage design)" },
-    { "set_level_shifter_strategy", "not an STA constraint (multi-voltage design)" },
-    { "set_level_shifter_threshold", "not an STA constraint (multi-voltage design)" },
-    { "set_max_dynamic_power", "not an STA constraint (power)" },
-    { "set_max_leakage_power", "not an STA constraint (power)" },
+    { "set_drive", "过时命令（输入驱动电阻），请改用 set_driving_cell" },
+    { "set_resistance", "过时命令（线网电阻）" },
+    { "set_fanout_load", "过时命令（扇出负载单位），请改用 set_load" },
+    { "set_port_fanout_number", "过时命令（扇出负载单位），请改用 set_load" },
+    { "set_wire_load_min_block_size", "过时命令（线负载模型）" },
+    { "set_wire_load_mode", "过时命令（线负载模型）" },
+    { "set_wire_load_model", "过时命令（线负载模型）" },
+    { "set_wire_load_selection_group", "过时命令（线负载模型）" },
+    { "create_voltage_area", "不是时序分析约束（多电压设计）" },
+    { "set_level_shifter_strategy", "不是时序分析约束（多电压设计）" },
+    { "set_level_shifter_threshold", "不是时序分析约束（多电压设计）" },
+    { "set_max_dynamic_power", "不是时序分析约束（功耗）" },
+    { "set_max_leakage_power", "不是时序分析约束（功耗）" },
     { NULL, NULL } };
 
 /* 分发表：msta 建模的每条 SDC 命令一行，就是这条命令的语法：
@@ -1238,12 +1238,12 @@ static int Msta_SdcRunOne( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, int argc
     for ( i = 0; s_vIgnoredCommands[i].pName; i++ )
         if ( !strcmp( pCmd, s_vIgnoredCommands[i].pName ) )
         {
-            Msta_WarnOnce( "sdc command \"%s\" is not modeled by msta: %s (ignored)",
+            Msta_WarnOnce( "sdc：命令 \"%s\" 未建模，已忽略：%s",
                            pCmd, s_vIgnoredCommands[i].pNote );
             p->nCommandsIgnored++;
             return 0;
         }
-    Msta_WarnOnce( "unknown sdc command \"%s\" (ignored)", pCmd );
+    Msta_WarnOnce( "sdc：未知命令 \"%s\"，已忽略", pCmd );
     p->nCommandsIgnored++;
     return 0;
 }

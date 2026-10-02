@@ -72,26 +72,26 @@ void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCm
     {
         char Extra;
         if ( sscanf( pWave, "%lf %lf %c", &Rise, &Fall, &Extra ) != 2 )
-        { Msta_SdcReject( p, pCmd, "-waveform needs exactly two edge times" ); return; }
+        { Msta_SdcReject( p, pCmd, "-waveform 必须正好给两个边沿时间" ); return; }
         if ( Rise < 0.0 || Fall <= Rise || Fall >= Period )
-        { Msta_SdcReject( p, pCmd, "-waveform must satisfy 0 <= rise < fall < period" ); return; }
+        { Msta_SdcReject( p, pCmd, "-waveform 必须满足 0 <= 上升沿 < 下降沿 < 周期" ); return; }
     }
     if ( pCmd->nObjs > 1 )
-    { Msta_SdcReject( p, pCmd, "multiple source objects are not modeled" ); return; }
+    { Msta_SdcReject( p, pCmd, "多个源对象未建模" ); return; }
     if ( pName == NULL && pCmd->nObjs == 0 )
-    { Msta_SdcReject( p, pCmd, "needs -name or a source object" ); return; }
+    { Msta_SdcReject( p, pCmd, "需要 -name 或一个源对象" ); return; }
     if ( pName == NULL )
         pName = pCmd->ppObjs[0];
     if ( Msta_SdcFindClock( p, pName ) )
-    { Msta_SdcReject( p, pCmd, "clock \"%s\" already exists", pName ); return; }
+    { Msta_SdcReject( p, pCmd, "时钟 \"%s\" 已经存在", pName ); return; }
     if ( pCmd->nObjs == 1 )
     {
         if ( Msta_SdcResolveNets( pDes, pCmd->ppObjs[0], &pNets ) != 1 )
-        { Msta_SdcReject( p, pCmd, "the source must resolve to one net" ); return; }
+        { Msta_SdcReject( p, pCmd, "源对象必须对应唯一一个网络" ); return; }
         nSource = pNets[0];
         /* 不写 -add 是"换掉这个源上的时钟"，msta 不做替换。 */
         if ( !Msta_SdcHasFlag( pCmd, "-add" ) && Msta_SdcNetHasClock( p, nSource ) )
-        { Msta_SdcReject( p, pCmd, "the source already has a clock (use -add for another one)" ); return; }
+        { Msta_SdcReject( p, pCmd, "源对象上已经有时钟（要再加一个请用 -add）" ); return; }
     }
     pClock = Msta_SdcNewClock( p, pName );
     pClock->Period   = Period * p->TimeScalePs;
@@ -143,7 +143,7 @@ static int Msta_SdcGetRatio( MstaSdc *p, const MstaSdcCmd *pCmd, const char *pNa
     if ( !Msta_SdcGetNumber( p, pCmd, pName, pText, MSTA_SDC_POSITIVE, pRatio ) )
         return 0;
     if ( *pRatio > 1000000.0 || *pRatio != (double)(int)*pRatio )
-    { Msta_SdcReject( p, pCmd, "%s must be a positive integer (got %s)", pName, pText ); return 0; }
+    { Msta_SdcReject( p, pCmd, "%s 必须是正整数（给的是 %s）", pName, pText ); return 0; }
     return 1;
 }
 
@@ -183,33 +183,33 @@ void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, 
         return;
     if ( pEdges != NULL && ( Msta_SdcHasFlag( pCmd, "-divide_by" ) ||
                              Msta_SdcHasFlag( pCmd, "-multiply_by" ) || pDuty != NULL ) )
-    { Msta_SdcReject( p, pCmd, "-edges cannot be combined with -divide_by/-multiply_by/-duty_cycle" ); return; }
+    { Msta_SdcReject( p, pCmd, "-edges 不能与 -divide_by/-multiply_by/-duty_cycle 同时使用" ); return; }
     if ( Msta_SdcHasFlag( pCmd, "-divide_by" ) && Msta_SdcHasFlag( pCmd, "-multiply_by" ) )
-    { Msta_SdcReject( p, pCmd, "-divide_by and -multiply_by cannot be combined" ); return; }
+    { Msta_SdcReject( p, pCmd, "-divide_by 与 -multiply_by 不能同时使用" ); return; }
     if ( !Msta_SdcGetRatio( p, pCmd, "-divide_by", &Div ) ||
          !Msta_SdcGetRatio( p, pCmd, "-multiply_by", &Mult ) )
         return;
     if ( pDuty != NULL && !Msta_SdcGetNumber( p, pCmd, "-duty_cycle", pDuty, MSTA_SDC_ANY, &Duty ) )
         return;
     if ( Duty <= 0.0 || Duty >= 100.0 )
-    { Msta_SdcReject( p, pCmd, "-duty_cycle must be between 0 and 100 (got %s)", pDuty ); return; }
+    { Msta_SdcReject( p, pCmd, "-duty_cycle 必须在 0 到 100 之间（给的是 %s）", pDuty ); return; }
     if ( pShifts != NULL && pEdges == NULL )
-    { Msta_SdcReject( p, pCmd, "-edge_shift needs -edges" ); return; }
+    { Msta_SdcReject( p, pCmd, "-edge_shift 需要和 -edges 一起使用" ); return; }
     /* -edges {e1 e2 e3}：用主时钟的第 e1/e2/e3 个边沿定义新时钟的
        上升沿、下降沿和下一个上升沿。边号从 1 开始数：1 = 首个上升沿，
        2 = 首个下降沿，3 = 第二个上升沿……。 */
     if ( pEdges != NULL )
     {
         if ( Msta_SdcParseNumberList( pEdges, vEdges, 3 ) != 3 )
-        { Msta_SdcReject( p, pCmd, "-edges needs exactly three edge numbers" ); return; }
+        { Msta_SdcReject( p, pCmd, "-edges 必须正好给三个边沿序号" ); return; }
         if ( pShifts != NULL && Msta_SdcParseNumberList( pShifts, vShifts, 3 ) != 3 )
-        { Msta_SdcReject( p, pCmd, "-edge_shift needs as many values as -edges" ); return; }
+        { Msta_SdcReject( p, pCmd, "-edge_shift 的值个数必须与 -edges 相同" ); return; }
         for ( i = 0; i < 3; i++ )
         {
             if ( vEdges[i] < 1.0 || vEdges[i] != (double)(int)vEdges[i] )
-            { Msta_SdcReject( p, pCmd, "-edges values must be positive integers" ); return; }
+            { Msta_SdcReject( p, pCmd, "-edges 的值必须是正整数" ); return; }
             if ( i > 0 && vEdges[i] <= vEdges[i-1] )
-            { Msta_SdcReject( p, pCmd, "-edges values must increase" ); return; }
+            { Msta_SdcReject( p, pCmd, "-edges 的值必须递增" ); return; }
         }
     }
     /* 主时钟：-master_clock 点名，或者 -source 所在网络上的那个时钟。 */
@@ -217,22 +217,22 @@ void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, 
     {
         pMaster = Msta_SdcFindClock( p, pMasterName );
         if ( pMaster == NULL )
-        { Msta_SdcReject( p, pCmd, "unknown master clock \"%s\"", pMasterName ); return; }
+        { Msta_SdcReject( p, pCmd, "找不到主时钟 \"%s\"", pMasterName ); return; }
     }
     else if ( Msta_SdcResolveNets( pDes, pSource, &pNets ) > 0 )
         for ( i = 0; i < p->vClocks.nSize && pMaster == NULL; i++ )
             if ( Msta_SdcClockByIndex(p,i)->SourceNet == pNets[0] )
                 pMaster = Msta_SdcClockByIndex(p,i);
     if ( pMaster == NULL )
-    { Msta_SdcReject( p, pCmd, "no master clock for \"%s\"", pSource ); return; }
+    { Msta_SdcReject( p, pCmd, "\"%s\" 上找不到主时钟", pSource ); return; }
     if ( Msta_SdcResolveNets( pDes, pTarget, &pNets ) != 1 )
-    { Msta_SdcReject( p, pCmd, "the target must resolve to one net" ); return; }
+    { Msta_SdcReject( p, pCmd, "目标必须对应唯一一个网络" ); return; }
     if ( Msta_SdcNetHasClock( p, pNets[0] ) )
-    { Msta_SdcReject( p, pCmd, "the target already has a clock" ); return; }
+    { Msta_SdcReject( p, pCmd, "目标上已经有时钟" ); return; }
     if ( pName == NULL )
         pName = pTarget;
     if ( Msta_SdcFindClock( p, pName ) )
-    { Msta_SdcReject( p, pCmd, "clock \"%s\" already exists", pName ); return; }
+    { Msta_SdcReject( p, pCmd, "时钟 \"%s\" 已经存在", pName ); return; }
     /* Append 可能重新分配 vClocks，先把主时钟的各项值取出来。 */
     {
         double Period = pMaster->Period * Div / Mult;
@@ -245,7 +245,7 @@ void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, 
             Fall = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[1] ) + vShifts[1] * p->TimeScalePs;
             Period = Msta_SdcClockEdgeTime( pMaster, (int)vEdges[2] ) + vShifts[2] * p->TimeScalePs - Rise;
             if ( Period <= 0.0 || Fall <= Rise )
-            { Msta_SdcReject( p, pCmd, "-edges gives a non-positive period" ); return; }
+            { Msta_SdcReject( p, pCmd, "-edges 算出的周期不大于 0" ); return; }
         }
         pClock = Msta_SdcNewClock( p, pName );
         pClock->MasterClock = MasterName;
@@ -286,7 +286,7 @@ void Msta_SdcSetClockUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, M
     if ( nFrom == 0 && nTo == 0 )
     {
         if ( pCmd->nObjs == 0 )
-        { Msta_SdcReject( p, pCmd, "needs a clock list or -from/-to" ); return; }
+        { Msta_SdcReject( p, pCmd, "需要时钟列表或 -from/-to" ); return; }
         nClocks = Msta_SdcObjectClocks( p, pCmd, pCmd->ppObjs, pCmd->nObjs, &pClocks );
         for ( i = 0; i < nClocks; i++ )
         {
@@ -298,7 +298,7 @@ void Msta_SdcSetClockUncertainty( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, M
     }
     /* -from/-to 形式：两组时钟两两之间各记一条；没写的一侧表示任意时钟。 */
     if ( pCmd->nObjs > 0 )
-    { Msta_SdcReject( p, pCmd, "a clock list cannot be combined with -from/-to" ); return; }
+    { Msta_SdcReject( p, pCmd, "时钟列表不能与 -from/-to 同时使用" ); return; }
     if ( nFrom > 0 && ( nFrom = Msta_SdcObjectClocks( p, pCmd, ppFrom, nFrom, &pFrom ) ) < 0 )
         return;
     if ( nTo > 0 && ( nTo = Msta_SdcObjectClocks( p, pCmd, ppTo, nTo, &pTo ) ) < 0 )
@@ -351,7 +351,7 @@ void Msta_SdcSetClockLatency( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
     for ( i = 0; i < pCmd->nObjs; i++ )
         ppNames[nOpt + i] = pCmd->ppObjs[i];
     if ( nOpt + pCmd->nObjs == 0 )
-    { Msta_SdcReject( p, pCmd, "needs a clock list" ); return; }
+    { Msta_SdcReject( p, pCmd, "需要时钟列表" ); return; }
     nClocks = Msta_SdcObjectClocks( p, pCmd, ppNames, nOpt + pCmd->nObjs, &pClocks );
     Msta_SdcMinMaxRiseFall( fMin, fMax, Msta_SdcHasFlag( pCmd, "-rise" ),
                             Msta_SdcHasFlag( pCmd, "-fall" ), Sel );
@@ -397,7 +397,7 @@ void Msta_SdcSetClockTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Ms
 {
     int Sel[2][2], *pClocks, nClocks, i;
     double Slew;
-    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
+    if ( !Msta_SdcGetNumber( p, pCmd, "值", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
         return;
     Msta_SdcCmdMinMaxRiseFall( pCmd, Sel );
     nClocks = Msta_SdcObjectClocks( p, pCmd, pCmd->ppObjs, pCmd->nObjs, &pClocks );
@@ -405,7 +405,7 @@ void Msta_SdcSetClockTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Ms
     {
         MstaClock *pClock = Msta_SdcClockByIndex( p, pClocks[i] );
         if ( pClock->SourceNet < 0 )
-            Msta_SdcNote( pCmd, "virtual clock \"%s\" has no source; ignored", Msta_NameStr(pClock->Name) );
+            Msta_SdcNote( pCmd, "虚拟时钟 \"%s\" 没有源，已忽略", Msta_NameStr(pClock->Name) );
         else
             Msta_SdcStoreMinMaxRiseFall( pClock->Slew, Sel, Slew * p->TimeScalePs );
     }
@@ -432,12 +432,12 @@ void Msta_SdcSetClockSense( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdc
     int *pClocks = NULL, nClocks = 0, *pNets, nNets, i, j;
 
     if ( fPos && fNeg )
-    { Msta_SdcReject( p, pCmd, "-positive and -negative cannot be combined" ); return; }
+    { Msta_SdcReject( p, pCmd, "-positive 与 -negative 不能同时使用" ); return; }
     if ( !fPos && !fNeg && !fStop )
-    { Msta_SdcReject( p, pCmd, "needs -positive, -negative or -stop_propagation" ); return; }
+    { Msta_SdcReject( p, pCmd, "需要 -positive、-negative 或 -stop_propagation" ); return; }
     for ( i = 0; i < pCmd->nObjs; i++ )
         if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'C' )
-        { Msta_SdcReject( p, pCmd, "clock objects are not modeled (use -clock)" ); return; }
+        { Msta_SdcReject( p, pCmd, "时钟对象未建模（请用 -clock）" ); return; }
     if ( nClockNames > 0 &&
          ( nClocks = Msta_SdcObjectClocks( p, pCmd, ppClocks, nClockNames, &pClocks ) ) < 0 )
         return;
@@ -473,7 +473,7 @@ void Msta_SdcSetClockGroups( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSd
 
     if ( !Msta_SdcHasFlag( pCmd, "-asynchronous" ) && !Msta_SdcHasFlag( pCmd, "-logically_exclusive" ) &&
          !Msta_SdcHasFlag( pCmd, "-physically_exclusive" ) )
-    { Msta_SdcReject( p, pCmd, "needs -asynchronous, -logically_exclusive or -physically_exclusive" ); return; }
+    { Msta_SdcReject( p, pCmd, "需要 -asynchronous、-logically_exclusive 或 -physically_exclusive" ); return; }
     /* 每个 -group 是一组；pGroups[时钟] 记它属于第几组（从 1 数）。 */
     for ( l = 0; l < pCmd->nLists; l++ )
     {
@@ -485,7 +485,7 @@ void Msta_SdcSetClockGroups( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSd
             pGroups[pClocks[i]] = nGroups;
     }
     if ( nGroups < 2 )
-    { Msta_SdcReject( p, pCmd, "needs at least two -group lists" ); return; }
+    { Msta_SdcReject( p, pCmd, "至少需要两个 -group 列表" ); return; }
     for ( i = 0; i < p->vClocks.nSize; i++ )
         for ( j = 0; j < p->vClocks.nSize; j++ )
         {

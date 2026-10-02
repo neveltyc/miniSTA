@@ -96,23 +96,23 @@ static void Msta_SdcSetPortDelay( MstaSdc *p, MstaDesign *pDes, int fOutput, Mst
     int RefNet = -1, *pNets, nNets, i;
 
     if ( pClockText && Msta_SdcFindClock( p, pClockText ) == NULL )
-    { Msta_SdcReject( p, pCmd, "unknown clock \"%s\"", pClockText ); return; }
+    { Msta_SdcReject( p, pCmd, "找不到时钟 \"%s\"", pClockText ); return; }
     if ( pReferencePin != NULL )
     {
         char RefKind = Msta_SdcKindOf( pReferencePin );
         if ( ( RefKind != 0 && RefKind != 'G' && RefKind != 'P' ) ||
              Msta_SdcResolveNets( pDes, pReferencePin, &pNets ) != 1 )
-        { Msta_SdcReject( p, pCmd, "-reference_pin must resolve to exactly one pin or port" ); return; }
+        { Msta_SdcReject( p, pCmd, "-reference_pin 必须对应唯一一个引脚或端口" ); return; }
         RefNet = pNets[0];
         if ( fSourceIncluded || fNetworkIncluded )
-            Msta_SdcNote( pCmd, "latency-included flags are ignored with -reference_pin" );
+            Msta_SdcNote( pCmd, "用了 -reference_pin 时 -source_latency_included/-network_latency_included 不起作用，已忽略" );
         fSourceIncluded = fNetworkIncluded = 0;
     }
     /* 不写 -clock 时先记成"未指定"：SDC 允许 create_clock 写在 I/O 约束之后，
        所以真正用哪个时钟留到查询时再按当时只有一个时钟来判定。 */
     if ( pClockText == NULL && pReferencePin == NULL && Msta_SdcClockCount(p) > 1 )
-        Msta_SdcNote( pCmd, "no -clock while there are several clocks; the delay applies "
-                      "only while the design has a single clock" );
+        Msta_SdcNote( pCmd, "没写 -clock，但已有多个时钟；"
+                      "这条延迟只在设计中只有一个时钟时生效" );
     if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
         return;
     for ( i = 0; i < nNets; i++ )
@@ -157,12 +157,12 @@ void Msta_SdcSetLoad( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *p
     int *pNets, nNets, i;
     double Load;
     if ( Msta_SdcHasFlag( pCmd, "-pin_load" ) && Msta_SdcHasFlag( pCmd, "-wire_load" ) )
-    { Msta_SdcReject( p, pCmd, "-pin_load and -wire_load cannot be combined" ); return; }
-    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Load ) )
+    { Msta_SdcReject( p, pCmd, "-pin_load 与 -wire_load 不能同时使用" ); return; }
+    if ( !Msta_SdcGetNumber( p, pCmd, "值", pCmd->pValue, MSTA_SDC_NONNEG, &Load ) )
         return;
     for ( i = 0; fSubtract && i < pCmd->nObjs; i++ )
         if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'P' )
-        { Msta_SdcReject( p, pCmd, "-subtract_pin_load cannot be used on port \"%s\"", pCmd->ppObjs[i] ); return; }
+        { Msta_SdcReject( p, pCmd, "-subtract_pin_load 不能用在端口 \"%s\" 上", pCmd->ppObjs[i] ); return; }
     Load *= p->CapScaleFf > 0.0 ? p->CapScaleFf : pLib->CapScale;
     if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
         return;
@@ -191,7 +191,7 @@ void Msta_SdcSetInputTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Ms
 {
     int Sel[2][2], *pNets, nNets, i;
     double Slew;
-    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
+    if ( !Msta_SdcGetNumber( p, pCmd, "值", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
         return;
     if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
         return;
@@ -256,7 +256,7 @@ void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSd
     }
     pCell = Msta_LibFindCell( pLib, pCellName );
     if ( pCell == NULL )
-    { Msta_SdcReject( p, pCmd, "cell \"%s\" is not in the requested library", pCellName ); return; }
+    { Msta_SdcReject( p, pCmd, "单元 \"%s\" 不在指定的库里", pCellName ); return; }
     for ( k = 0; k < pCell->vArcs.nSize && Slew <= 0.0; k++ )
     {
         MstaArc *pArc = MstaArcArrayAt( &pCell->vArcs, k );
@@ -290,7 +290,7 @@ static int Msta_SdcIdealNets( MstaSdc *p, MstaDesign *pDes, const MstaSdcCmd *pC
     int i;
     for ( i = 0; i < pCmd->nObjs; i++ )
         if ( Msta_SdcKindOf( pCmd->ppObjs[i] ) == 'C' )
-        { Msta_SdcReject( p, pCmd, "clock objects are not modeled" ); return -1; }
+        { Msta_SdcReject( p, pCmd, "时钟对象未建模" ); return -1; }
     return Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, ppNets );
 }
 
@@ -308,7 +308,7 @@ void Msta_SdcSetIdealNetwork( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
     int fNoProp = Msta_SdcHasFlag( pCmd, "-no_propagate" ) || Msta_SdcHasFlag( pCmd, "-no_propagation" );
     int *pNets, nNets, i;
     if ( Msta_SdcHasFlag( pCmd, "-no_propagation" ) )
-        Msta_SdcNote( pCmd, "-no_propagation is not SDC 1.8 syntax; honored as -no_propagate" );
+        Msta_SdcNote( pCmd, "-no_propagation 不是 SDC 1.8 语法，按 -no_propagate 处理" );
     if ( ( nNets = Msta_SdcIdealNets( p, pDes, pCmd, &pNets ) ) < 0 )
         return;
     for ( i = 0; i < nNets; i++ )
@@ -340,7 +340,7 @@ void Msta_SdcSetIdealTransition( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Ms
 {
     int *pNets, nNets, i, Sel[2][2];
     double Slew;
-    if ( !Msta_SdcGetNumber( p, pCmd, "value", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
+    if ( !Msta_SdcGetNumber( p, pCmd, "值", pCmd->pValue, MSTA_SDC_NONNEG, &Slew ) )
         return;
     if ( ( nNets = Msta_SdcIdealNets( p, pDes, pCmd, &pNets ) ) < 0 )
         return;
@@ -380,9 +380,9 @@ void Msta_SdcSetCaseAnalysis( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
         Msta_SdcSetConstNets( p, pDes, pCmd, 2 );
     else if ( !strcmp( pValue, "rise" ) || !strcmp( pValue, "rising" ) ||
               !strcmp( pValue, "fall" ) || !strcmp( pValue, "falling" ) )
-        Msta_SdcReject( p, pCmd, "value \"%s\" is not modeled (only 0, 1, zero and one)", pValue );
+        Msta_SdcReject( p, pCmd, "值 \"%s\" 未建模（只支持 0、1、zero 和 one）", pValue );
     else
-        Msta_SdcReject( p, pCmd, "value \"%s\" must be 0, 1, zero or one", pValue );
+        Msta_SdcReject( p, pCmd, "值 \"%s\" 必须是 0、1、zero 或 one", pValue );
 }
 
 /* set_logic_zero / set_logic_one / set_logic_dc 端口列表 */
@@ -415,7 +415,7 @@ void Msta_SdcSetDisableTiming( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Msta
     const char *pTo   = Msta_SdcOptValue( pCmd, "-to" );
     int *pInsts, nInsts, i;
     if ( pFrom == NULL && pTo == NULL )
-    { Msta_SdcReject( p, pCmd, "needs -from and/or -to" ); return; }
+    { Msta_SdcReject( p, pCmd, "至少需要 -from 或 -to 之一" ); return; }
     if ( ( nInsts = Msta_SdcObjectInsts( p, pDes, pLib, pCmd, pCmd->ppObjs, pCmd->nObjs, 0, &pInsts ) ) < 0 )
         return;
     for ( i = 0; i < nInsts; i++ )
@@ -427,6 +427,6 @@ void Msta_SdcSetDisableTiming( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Msta
         pArc->ToPin = pTo ? Msta_NameId(pTo) : MSTA_NO_ID;
         if ( ( pFrom && Msta_CellPinIndexOf(pInst->pCell,pArc->FromPin) < 0 ) ||
              ( pTo && Msta_CellPinIndexOf(pInst->pCell,pArc->ToPin) < 0 ) )
-            Msta_SdcNote( pCmd, "instance \"%s\" has no matching pins", Msta_InstName(pDes,pInsts[i]) );
+            Msta_SdcNote( pCmd, "实例 \"%s\" 没有匹配的引脚", Msta_InstName(pDes,pInsts[i]) );
     }
 }
