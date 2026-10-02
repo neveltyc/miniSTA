@@ -229,7 +229,7 @@ typedef struct {
     int                  fRises;  /* 参考时钟边沿；pObj->fRises 是数据边沿 */
 } MstaSdcEndpoint;
 
-/* 例外表按 -from 或 -to 名字文本建的哈希索引（原理见 msta_sdc.c 里"例外表索引"那段说明）。 */
+/* 例外表按 -from 或 -to 名字文本建的哈希索引（原理见 msta_sdc_query.c 里"例外表索引"那段说明）。 */
 typedef struct {
     int   *pHead;      /* 桶号 -> 桶里第一条例外号，-1 = 空桶 */
     int   *pNext;      /* 例外号 -> 同一桶里的下一条例外号 */
