@@ -1241,6 +1241,8 @@ static const MstaSdcCmdDef s_vSdcCommands[] = {
     { "set_clock_gating_check",   Msta_SdcClockGatingCheckOpts,    MSTA_SDC_NO_VALUE, 0, -1, Msta_SdcSetClockGatingCheck    },
     { "set_max_time_borrow",      Msta_SdcNoOpts,                  MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetMaxTimeBorrow       },
     { "unset_timing_derate",      Msta_SdcNoOpts,                 MSTA_SDC_NO_VALUE, 0,  0, Msta_SdcUnsetTimingDerate       },
+    { "set_aocv_analysis",        Msta_SdcNoOpts,                 MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetAocvAnalysis        },
+    { "set_cppr",                 Msta_SdcCpprOpts,               MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetCppr                },
     { "set_timing_derate",        Msta_SdcTimingDerateOpts,        MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetTimingDerate        },
     { "set_max_transition",       Msta_SdcDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMaxTransition       },
     { "set_max_fanout",           Msta_SdcDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMaxFanout           },
@@ -1336,6 +1338,7 @@ void Msta_SdcFree( MstaSdc *p )
     MstaClockGatingSdcArrayFree( &p->vClockGating );
     MstaBorrowSdcArrayFree( &p->vBorrow );
     MstaObjDerateArrayFree( &p->vObjDerate );
+    MstaAocvTableArrayFree(&p->vAocv);
     MstaInterClockUncArrayFree( &p->vInterClockUnc );
     free( p );
 }

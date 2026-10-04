@@ -143,5 +143,6 @@ if [[ -x "${OPENSTA_BIN}" ]]; then
     python3 "${ROOT}/scripts/check_clock_edges.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
     python3 "${ROOT}/scripts/check_nonunate_clock.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
     python3 "${ROOT}/scripts/check_ocv.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
+    python3 "${ROOT}/scripts/check_variation.py" "${MSTA_BIN}" "${OPENSTA_BIN}" "${OUT}"
 fi
 echo "==> 对比通过"

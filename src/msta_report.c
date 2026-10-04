@@ -120,6 +120,10 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
             double Arr = ( pSaved ? pSaved[i] : Msta_TimingNetArrival( p, nNets[i], fMax ) )
                        + LaunchShift;
             Msta_PrintPathPoint( p, pFile, nNets[i], Arr, Prev );
+            if ( p->pSdc->fAocv && p->pSdc->vAocv.nSize &&
+                 MstaNetArrayAt(&pDes->vNets,nNets[i])->Driver.InstId>=0 )
+                fprintf(pFile,"    AOCV structural depth: %d\n",
+                        Msta_TimingAocvDataDepth(p,i+1<nCount ? nNets[i+1] : -1,nNets[i]));
             Prev = Arr;
         }
     }
@@ -150,6 +154,9 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
         fprintf( pFile, "  + clock uncertainty                   %10s\n",
                  Msta_NsText( pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
     }
+    if ( p->pSdc->fCppr )
+        fprintf(pFile,"  %s clock reconvergence pessimism       %10s\n",fSetup ? "+" : "-",
+                 Msta_NsText(fSetup ? pCorner->Cppr : -pCorner->Cppr,sBuf[1],sizeof(sBuf[1])));
     fprintf( pFile, "data required time                      %10s\n",
              Msta_NsText( Required, sBuf[0], sizeof(sBuf[0]) ) );
     fprintf( pFile, "slack (%s)                               %10s%s\n",
@@ -363,6 +370,10 @@ void Msta_ReportSummary( MstaTiming *p, FILE *pFile )
                      Msta_NameStr(p->ClkGatingHoldPin), p->ClkGatingHoldValue / 1000.0 );
         fprintf( pFile, "\n" );
     }
+    if ( p->pSdc->fCppr )
+        fprintf(pFile,"CPPR     : enabled (%s)\n",p->pSdc->fCpprSamePin ? "same_pin" : "same_transition");
+    if ( p->pSdc->vAocv.nSize )
+        fprintf(pFile,"AOCV     : depth GBA, %s (%d tables)\n",p->pSdc->fAocv ? "enabled" : "disabled",p->pSdc->vAocv.nSize);
     if ( p->pSdc->fAnalysisSelected || p->pSdc->vObjDerate.nSize )
         fprintf(pFile,"分析模式 : %s\n",p->pSdc->AnalysisType == MSTA_ANALYSIS_OCV ? "on_chip_variation" :
                 p->pSdc->AnalysisType == MSTA_ANALYSIS_SINGLE ? "single" : "bc_wc");

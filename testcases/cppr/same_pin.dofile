@@ -1,0 +1,6 @@
+read_liberty ../ocv/ocv.lib
+read_verilog opposite.v
+current_design ocv
+read_sdc same_pin.sdc
+report_checks -setup -max_paths 5
+report_checks -hold -max_paths 5

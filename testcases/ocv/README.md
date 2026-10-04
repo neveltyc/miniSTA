@@ -1,6 +1,6 @@
 # 基础 OCV 回归
 
-`make test` 运行本目录的 28 个用例，并由 `scripts/check_ocv.py` 断言手算 slack。`make compare` 用本地 OpenSTA 对照其中 27 个用例，容差 0.001 ns；`clock_object` 是 miniSTA 的时钟对象 derate 扩展，OpenSTA 不接受这种对象，只做手算断言。OpenSTA 对照关闭 `sta_crpr_enabled`，因为 miniSTA 当前不计算 CPPR。
+`make test` 运行本目录的 28 个用例，并由 `scripts/check_ocv.py` 断言手算 slack。`make compare` 用本地 OpenSTA 对照其中 27 个用例，容差 0.001 ns；`clock_object` 是 miniSTA 的时钟对象 derate 扩展，OpenSTA 不接受这种对象，只做手算断言。OpenSTA 对照关闭 `sta_crpr_enabled`，以单独验证固定系数 OCV 的结果。
 
 直接运行：
 

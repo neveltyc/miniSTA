@@ -208,6 +208,9 @@ void Msta_SdcSetMaxCapacitance( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, Mst
 void Msta_SdcSetMinCapacitance( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
 void Msta_SdcSetMaxArea( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
 void Msta_SdcUnsetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
+extern const MstaSdcOpt Msta_SdcCpprOpts[];
+void Msta_SdcSetAocvAnalysis( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
+void Msta_SdcSetCppr( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
 void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
 void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );
 void Msta_SdcSetVoltage( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd );

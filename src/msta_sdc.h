@@ -213,6 +213,18 @@ typedef struct {
 } MstaObjDerate;
 MstaArrayDefine( MstaObjDerate, MstaObjDerateArray )
 
+/* 原生 depth-only AOCV，单调表支持保守图分析。 */
+#define MSTA_AOCV_MAX_POINTS 256
+typedef struct {
+    char Kind;                /* G=design, L=library cell, I=instance */
+    MstaId Pattern;
+    int fClock, fRise, fMax;
+    int nPoints;
+    int Depth[MSTA_AOCV_MAX_POINTS];
+    double Factor[MSTA_AOCV_MAX_POINTS];
+} MstaAocvTable;
+MstaArrayDefine( MstaAocvTable, MstaAocvTableArray )
+
 /* 例外匹配用的端点：可打印名字 + 可选的 "实例/引脚" 形式。
    nInst/nPin 为 -1 表示这个端点没有引脚（端口、时钟、纯组合实例）。 */
 typedef struct {
@@ -262,12 +274,16 @@ typedef struct MstaSdc {
     MstaClockGatingSdcArray vClockGating;
     MstaBorrowSdcArray vBorrow;
     MstaObjDerateArray vObjDerate;
+    MstaAocvTableArray vAocv;
+    int fAocv;
     MstaInterClockUncArray vInterClockUnc;
     int                nCommandsRead;
     int                nCommandsIgnored;
     /* 默认 OCV；single / bc_wc 使用与数据相同的捕获时钟角。 */
     MstaAnalysisType   AnalysisType;
     int                fAnalysisSelected;
+    int                fCppr;           /* 缺省关闭，保持已有报告行为 */
+    int                fCpprSamePin;    /* 0=same_transition, 1=same_pin */
     /* 设计规则限制（只有 [current_design] 这种全局写法会记下来）。 */
     double             MaxTransition;   /* ps */
     double             MaxCapacitance;  /* fF */
@@ -387,5 +403,9 @@ double Msta_SdcMaxTimeBorrow( MstaSdc *p, int nInst );
 double Msta_SdcDataDerateInst( MstaSdc *p, int nInst, int fMax, int fRise );
 double Msta_SdcCheckDerateInst( MstaSdc *p, int nInst, int fMax, int fRise );
 double Msta_SdcClockDerateClock( MstaSdc *p, int nClock, int nInst, int fMax, int fRise );
+
+int Msta_AocvRead( MstaSdc *p, const char *pFile, int fVerbose );
+double Msta_AocvFactor( MstaSdc *p, MstaInst *pInst, int fClock, int fRise, int fMax, int Depth );
+void Msta_AocvReport( MstaSdc *p, FILE *pOut );
 
 #endif /* MSTA_SDC_H */

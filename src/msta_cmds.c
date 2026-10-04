@@ -253,6 +253,22 @@ static int Msta_CmdReadSdc( MstaApp *pApp, int argc, char **argv )
     return Msta_SdcReadFile( pApp->pSdc, pApp->pNet, pApp->pLib, sPath, !pApp->fQuiet );
 }
 
+static int Msta_CmdReadAocv( MstaApp *pApp, int argc, char **argv )
+{
+    char Path[1024];
+    if ( argc!=2 ) { Msta_Error("用法：read_aocv file.aocv\n"); return 0; }
+    Msta_ResolvePath(argv[1],Path,sizeof(Path));
+    if ( !Msta_AocvRead(pApp->pSdc,Path,!pApp->fQuiet) ) return 0;
+    Msta_AppDropTiming(pApp);
+    return 1;
+}
+static int Msta_CmdReportAocv( MstaApp *pApp, int argc, char **argv )
+{
+    if ( argc!=1 ) { Msta_Error("用法：report_aocv\n"); return 0; }
+    Msta_AocvReport(pApp->pSdc,pApp->pOut);
+    return 1;
+}
+
 static int Msta_CmdReportClocks( MstaApp *pApp, int argc, char **argv )
 {
     (void)argc; (void)argv;
@@ -330,6 +346,8 @@ static MstaCmd s_vCmds[] = {
     { "read_verilog",   Msta_CmdReadVerilog,  "读入门级 Verilog 网表（内部调用 yosys 转 JSON）" },
     { "read_json",      Msta_CmdReadJson,     "读取 yosys write_json 生成的网表" },
     { "current_design", Msta_CmdCurrentDesign,"指定顶层并把层次展平成一张扁平网表" },
+    { "read_aocv",      Msta_CmdReadAocv,     "读取原生 AOCV 深度表（见 docs/variation.md）" },
+    { "report_aocv",    Msta_CmdReportAocv,   "列出 AOCV 深度表和开关状态" },
     { "read_sdc",       Msta_CmdReadSdc,      "读入 SDC 约束（子集，见 msta_sdc.h）" },
     { "report_clocks",  Msta_CmdReportClocks, "打印已定义的时钟" },
     { "report_checks",  Msta_CmdReportChecks, "按 slack 打印最多 N 个 endpoint 最差路径：-max_paths N [-setup|-hold]" },

@@ -1,0 +1,6 @@
+read_liberty ../ocv/ocv.lib
+read_verilog disjoint.v
+current_design ocv
+read_sdc no_common.sdc
+report_checks -setup -max_paths 5
+report_checks -hold -max_paths 5

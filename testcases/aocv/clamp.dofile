@@ -1,0 +1,7 @@
+read_liberty merge.lib
+read_verilog clamp.v
+current_design ocv
+read_aocv base.aocv
+read_sdc clamp.sdc
+report_checks -setup
+report_checks -hold

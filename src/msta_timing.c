@@ -278,6 +278,7 @@ static MstaArc *RegClkToQArc( MstaTiming *p, MstaCell *pCell,
     if ( Msta_SdcTimingDisabled(p->pSdc,nInst,pReg->ClkPin,OutPin) ) return NULL;
     MstaCell *pCornerCell = TimingCellCorner(p,pCell,fMax);
     int i;
+    *pfClkRises = pReg->fClkRises;
     if ( pReg->QPin == OutPin && pReg->ClkToQArc != MSTA_NO_ID )
         return TimingArcById( p,pCell,pReg->ClkToQArc,fMax );
     for ( i = 0; i < pCornerCell->vArcs.nSize; i++ )
@@ -305,6 +306,27 @@ static double ClockUncertainty( MstaTiming *p, int nLaunchClock, int nCaptureClo
 {
     return Msta_SdcClockUncertainty( p->pSdc, nLaunchClock, nCaptureClock,
                                      fSetup, fLaunchRises, fCaptureRises );
+}
+
+int Msta_TimingAocvDataDepth( MstaTiming *p, int In, int Out )
+{
+    if ( !p->pAocvDataForward || Out<0 || p->pAocvDataBackward[Out]>=1000000000 ||
+         (In>=0 && p->pAocvDataForward[In]>=1000000000) ) return 1;
+    return (In<0 ? 0 : p->pAocvDataForward[In])+1+p->pAocvDataBackward[Out];
+}
+
+/* AOCV uses the full structural context through this arc. Clock and data
+   have independent start/end sets. Missing context falls back to depth 1. */
+static double AocvDelayFactor( MstaTiming *p, int Inst, int Clock, int In, int Out,
+                               int fMax, int Rise, int fClock )
+{
+    int Depth=1, n=p->pDes->vNets.nSize;
+    int *F=p->pAocvDataForward, *B=p->pAocvDataBackward;
+    if ( fClock && Clock>=0 && p->pAocvClockForward )
+    { F=p->pAocvClockForward+(size_t)Clock*n; B=p->pAocvClockBackward+(size_t)Clock*n; }
+    if ( F && B && Out>=0 && B[Out]<1000000000 && (In<0 || F[In]<1000000000) )
+        Depth=(In<0 ? 0 : F[In])+1+B[Out];
+    return Msta_AocvFactor(p->pSdc,InstAt(p,Inst),fClock,Rise,fMax,Depth);
 }
 
 /* 同一个逻辑弧按 min/max 库映射。 */
@@ -725,6 +747,7 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                 int Label = EffectiveClkRises(p,nClock,pClock->SourceNet,e);
                 pDst->Tags[e] |= 1 << Label;
                 pDst->Arrival[m][e][Label] = ClockArrival(pSrc,m,e,-1) + pClock->SourceLatency[m][Label];
+                pDst->Prev[m][e][Label] = (MstaClockPrev){nMaster,pClock->SourceNet,e,ClockTagSelect(pSrc,m,e,-1)};
                 if ( pClock->fPropagated ) pDst->Slew[m][e][Label] = ClockSlew(pSrc,m,e,-1);
             }
         pDst->fReached = 1;
@@ -766,7 +789,9 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                 pDst->Arrival[m][e][Label] = ClockArrival(pSrc,m,fClkRise,-1)
                     + ArcDelayEdge(pArc,Slew,m ? LoadMax : LoadMin,e)
                       * Msta_SdcClockDerateClock(p->pSdc,nMaster,pNet->Driver.InstId,m,fClkRise)
+                      * AocvDelayFactor(p,pNet->Driver.InstId,nMaster,nClkNet,pClock->SourceNet,m,fClkRise,1)
                     + pClock->SourceLatency[m][Label];
+                pDst->Prev[m][e][Label] = (MstaClockPrev){nMaster,nClkNet,fClkRise,ClockTagSelect(pSrc,m,fClkRise,-1)};
                 if ( pClock->fPropagated )
                     pDst->Slew[m][e][Label] = ArcSlewEdge(pArc,Slew,m ? LoadMax : LoadMin,e);
             }
@@ -807,6 +832,7 @@ static void PropagateClocks( MstaTiming *p )
             MstaClockArr *pArr = ClockArrAt(p,c,n);
             pArr->fReached = pArr->nThroughGates = 0;
             pArr->Tags[0] = pArr->Tags[1] = 0;
+            memset(pArr->Prev, -1, sizeof(pArr->Prev));
             for ( m = 0; m < 2; m++ )
                 for ( e = 0; e < 2; e++ )
                     for ( s = 0; s < 2; s++ )
@@ -909,12 +935,14 @@ static void PropagateClocks( MstaTiming *p )
                                 Slew = ClockSlew(pInArr,m,i,s);
                                 if ( !p->pfIdealNet[nNet] )
                                 {
-                                    Cand += ArcDelayEdge(pArc,Slew,Load,e) * Msta_SdcClockDerateClock(p->pSdc,c,pNet->Driver.InstId,m,i);
+                                    Cand += ArcDelayEdge(pArc,Slew,Load,e) * Msta_SdcClockDerateClock(p->pSdc,c,pNet->Driver.InstId,m,i)
+                                          * AocvDelayFactor(p,pNet->Driver.InstId,c,nIn,nNet,m,i,1);
                                     Slew = ArcSlewEdge(pArc,Slew,Load,e);
                                 }
                                 if ( !ClockTagValid(pArr,m,e,Label) || (m ? Cand > pArr->Arrival[m][e][Label] : Cand < pArr->Arrival[m][e][Label]) )
                                 {
                                     pArr->Arrival[m][e][Label] = Cand;
+                                    pArr->Prev[m][e][Label] = (MstaClockPrev){c,nIn,i,s};
                                     pArr->Slew[m][e][Label] = Slew;
                                 }
                                 pArr->Tags[e] |= 1 << Label;
@@ -1038,6 +1066,8 @@ static void BuildTopoOrder( MstaTiming *p )
     free( pStackIdx );
     p->nTopoOrder = nTopo;
 }
+
+#include "msta_aocv_depth.inc"
 
 /* =====================================================================
    6a. 数据到达（前向传播）
@@ -1234,9 +1264,11 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             else
                             {
                                 BestR = Edge + ArcDelayEdge( pArc, ClkSlew, Load, 1 )
-                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,fLocalRise);
+                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,fLocalRise)
+                                              * AocvDelayFactor(p,nDriverInst,-1,-1,nNet,fMax,fLocalRise,0);
                                 BestF = Edge + ArcDelayEdge( pArc, ClkSlew, Load, 0 )
-                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,fLocalRise);
+                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,fLocalRise)
+                                              * AocvDelayFactor(p,nDriverInst,-1,-1,nNet,fMax,fLocalRise,0);
                                 SlewR = ArcSlewEdge( pArc, ClkSlew, Load, 1 );
                                 SlewF = ArcSlewEdge( pArc, ClkSlew, Load, 0 );
                             }
@@ -1301,7 +1333,8 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                                 else
                                 {
                                     Cand = InArr + ArcDelayEdge( pArc, InSlew, Load, e )
-                                                  * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,nInEdge);
+                                                  * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,nInEdge)
+                                                  * AocvDelayFactor(p,nDriverInst,-1,nInNet,nNet,fMax,nInEdge,0);
                                     CandSlew = ArcSlewEdge( pArc, InSlew, Load, e );
                                 }
                                 if ( fMax ? ( Cand > *pBestE ) : ( Cand < *pBestE ) )
@@ -1784,6 +1817,98 @@ static void KeepWorseCandidate( MstaTiming *p, MstaCheck *pBest, MstaCheck *pCan
     FreeCheckPaths( pCandidate );
 }
 
+/* 时钟路径从叶到根保存实际前驱；生成时钟直接接回主时钟路径。 */
+static int TraceClockPath( MstaTiming *p, MstaClockPrev Point, int fMax,
+                           MstaClockPrev *pPath, int nCap )
+{
+    int n = 0;
+    while ( Point.Clock >= 0 && Point.Net >= 0 && n < nCap )
+    {
+        MstaClockArr *pArr = ClockArrAt(p,Point.Clock,Point.Net);
+        if ( !ClockTagValid(pArr,fMax,Point.Edge,Point.Source) ) return 0;
+        pPath[n++] = Point;
+        Point = pArr->Prev[fMax][Point.Edge][Point.Source];
+    }
+    return Point.Net >= 0 ? 0 : n; /* 不截断路径；循环或越界时保守返回 0 */
+}
+
+static int SameClockPoint( MstaClockPrev A, MstaClockPrev B, int fTransition )
+{
+    return A.Clock == B.Clock && A.Net == B.Net &&
+           (!fTransition || (A.Edge == B.Edge && A.Source == B.Source));
+}
+
+/* CPPR 仅补偿实际共用根路径。异沿模式取两种转换 min/max 差的较小值。
+   若反角路径前缀与本角不同，不能用反角摘要冒充同一条物理路径，保守不补偿。 */
+static double ClockCppr( MstaTiming *p, MstaClockPrev Launch, MstaClockPrev Capture, int fSetup )
+{
+    int nCap = p->pDes->vNets.nSize + Msta_SdcClockCount(p->pSdc) + 1;
+    MstaClockPrev *pPaths;
+    int nL, nC, nLO, nCO, i;
+    double Credit = 0;
+    if ( !p->pSdc->fCppr || p->pSdc->AnalysisType != MSTA_ANALYSIS_OCV ||
+         Launch.Clock < 0 || Capture.Clock < 0 || Launch.Net < 0 || Capture.Net < 0 ) return 0;
+    if ( !Msta_SdcClockByIndex(p->pSdc,Launch.Clock)->fPropagated ||
+         !Msta_SdcClockByIndex(p->pSdc,Capture.Clock)->fPropagated ) return 0;
+    pPaths = (MstaClockPrev *)malloc((size_t)nCap * 4 * sizeof(MstaClockPrev));
+    assert(pPaths);
+    MstaClockPrev *L=pPaths, *C=L+nCap, *LO=C+nCap, *CO=LO+nCap;
+    nL=TraceClockPath(p,Launch,fSetup,L,nCap);
+    nC=TraceClockPath(p,Capture,!fSetup,C,nCap);
+    nLO=TraceClockPath(p,Launch,!fSetup,LO,nCap);
+    nCO=TraceClockPath(p,Capture,fSetup,CO,nCap);
+    for ( i=0; i<nL && i<nC && i<nLO && i<nCO; i++ )
+    {
+        MstaClockPrev A=L[nL-1-i], B=C[nC-1-i];
+        if ( (A.Net!=B.Net || (!p->pSdc->fCpprSamePin && A.Edge!=B.Edge)) ||
+             !SameClockPoint(A,LO[nLO-1-i],1) || !SameClockPoint(B,CO[nCO-1-i],1) ) break;
+        /* 与 OpenSTA 的 same_pin 语义一致：取两种转换差值的较小值。 */
+        double DA=fabs(ClockArrival(ClockArrAt(p,A.Clock,A.Net),1,A.Edge,A.Source)
+                      -ClockArrival(ClockArrAt(p,A.Clock,A.Net),0,A.Edge,A.Source));
+        double DB=fabs(ClockArrival(ClockArrAt(p,B.Clock,B.Net),1,B.Edge,B.Source)
+                      -ClockArrival(ClockArrAt(p,B.Clock,B.Net),0,B.Edge,B.Source));
+        Credit=fmin(DA,DB);
+    }
+    free(pPaths);
+    return Credit;
+}
+
+static MstaClockPrev LaunchClockPoint( MstaTiming *p, int nStart, int nClock, int fMax, int Source )
+{
+    MstaNet *pNet=MstaNetArrayAt(&p->pDes->vNets,nStart);
+    MstaClockPrev Point={nClock,-1,Source,Source};
+    if ( pNet->Driver.InstId < 0 )
+    {
+        Point.Net=Msta_SdcPortReferenceNet(p->pSdc,nStart,nClock,0,fMax);
+        Point.Edge=!Msta_SdcPortClockFall(p->pSdc,nStart,nClock,0,fMax);
+        if ( Point.Net < 0 && !Msta_SdcPortSourceLatencyIncluded(p->pSdc,nStart,nClock,0,fMax) )
+            Point.Net=Msta_SdcClockByIndex(p->pSdc,nClock)->SourceNet;
+    }
+    else
+    {
+        MstaInst *pInst=InstAt(p,pNet->Driver.InstId);
+        MstaPin *pOut=MstaPinArrayAt(&pInst->pCell->vPins,pNet->Driver.PinId);
+        int k;
+        for ( k=0; k<pInst->pCell->vRegs.nSize; k++ )
+        {
+            MstaRegCheck *pReg=MstaRegCheckArrayAt(&pInst->pCell->vRegs,k);
+            int Rise;
+            if ( !RegClkToQArc(p,pInst->pCell,pReg,pOut->Name,&Rise,fMax,pNet->Driver.InstId) ) continue;
+            int Net=InstPinNet(p,pNet->Driver.InstId,pReg->ClkPin);
+            if ( NetHasClock(p,nClock,Net) && ClockTagValid(ClockArrAt(p,nClock,Net),fMax,Rise,Source) )
+            { Point.Net=Net; Point.Edge=Rise; break; }
+        }
+    }
+    return Point;
+}
+
+static double PathCppr( MstaTiming *p, int nStart, int nLaunchClock, int nCaptureClock,
+                        int nCaptureNet, int fSetup, int LaunchSource, int CaptureLocal, int CaptureSource )
+{
+    return ClockCppr(p,LaunchClockPoint(p,nStart,nLaunchClock,fSetup,LaunchSource),
+                      (MstaClockPrev){nCaptureClock,nCaptureNet,CaptureLocal,CaptureSource},fSetup);
+}
+
 /* 检查一个异步控制脚的 recovery 或 removal 端点。
    nCaptureClock 是这个时钟脚所在的时钟（同一根网络可以挂多个时钟）。 */
 static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptureClock, int fDataRise )
@@ -1853,6 +1978,12 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
                                           pCorner->pfLaunchRises[nStart],fClkRises) - Check
              : Capture + ClockUncertainty(p,pLaunchClock[nStart],nClock,0,
                                           pCorner->pfLaunchRises[nStart],fClkRises) + Check;
+    double PathDelay = Msta_SdcFindPathDelay(p->pSdc,p->pDes,&From,&To,PathObjects,nPathObjects,pCheck->fRecovery);
+    double Cppr = PathCppr(p,nStart,pLaunchClock[nStart],nClock,nClkNet,pCheck->fRecovery,
+                           pCorner->pfLaunchRises[nStart],pAsync->fClkRises,fClkRises);
+    if ( Msta_IsSet(PathDelay) ) Cppr=0;
+    Required += pCheck->fRecovery ? Cppr : -Cppr;
+    Msta_CheckCorner(pCheck,pCheck->fRecovery)->Cppr=Cppr;
     pCheck->CaptureClock = Msta_SdcClockByIndex(p->pSdc,nClock)->Name;
     if ( pCheck->fRecovery )
     {
@@ -1889,6 +2020,14 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
         pCheck->Hold.CaptureTime = Capture;
         pCheck->Hold.LaunchShift = Shift;
         pCheck->Hold.fChecked = 1;
+    }
+    if ( Msta_IsSet(PathDelay) )
+    {
+        MstaCheckCorner *pResult=Msta_CheckCorner(pCheck,pCheck->fRecovery);
+        pResult->CheckTime=PathDelay;
+        pResult->Required=pResult->LaunchTime+PathDelay;
+        pResult->Slack=pCheck->fRecovery ? pResult->Required-pResult->Arrival
+                                       : pResult->Arrival-pResult->Required;
     }
 }
 
@@ -2049,6 +2188,10 @@ static void EvaluateCheckCorner( MstaTiming *p, MstaCheck *pCheck, int fSetup,
     }
     else
         Required = Capture + Uncertainty + Check;
+    pResult->Cppr = PathCppr(p,nStart,nLaunchClock,nCaptureClock,
+                             pCheck->fToRegister ? nCaptureNet : nPortRef,
+                             fSetup,fLaunchRises,fLocalCapture,fCaptureRises);
+    Required += fSetup ? pResult->Cppr : -pResult->Cppr;
     pResult->LaunchSourceRise = fLaunchRises;
     pResult->CaptureSourceRise = fCaptureRises;
     pResult->fDataRise   = fDataRise;
@@ -2064,6 +2207,7 @@ static void EvaluateCheckCorner( MstaTiming *p, MstaCheck *pCheck, int fSetup,
     pResult->fChecked    = 1;
     if ( Msta_IsSet(PathDelay) )
     {
+        pResult->Cppr = 0; /* 显式路径预算不含捕获时钟，不能补偿 */
         pResult->CheckTime = PathDelay;
         pResult->Required = pResult->LaunchTime + PathDelay;
         pResult->Slack = fSetup ? pResult->Required - pResult->Arrival
@@ -2390,6 +2534,10 @@ static void FreeNetArrays( MstaTiming *p )
     free( p->pTopoOrder );   p->pTopoOrder = NULL;
     free( p->pState );       p->pState = NULL;
     free( p->pStartClass );  p->pStartClass = NULL;
+    free(p->pAocvDataForward); p->pAocvDataForward=NULL;
+    free(p->pAocvDataBackward); p->pAocvDataBackward=NULL;
+    free(p->pAocvClockForward); p->pAocvClockForward=NULL;
+    free(p->pAocvClockBackward); p->pAocvClockBackward=NULL;
 }
 
 static void FreeChecks( MstaTiming *p )
@@ -2696,6 +2844,8 @@ static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, 
                                             p->CornerMax.pfLaunchRises[nStartMax], fClkRises );
             Required = Capture - Uncertainty - Check;
             Slack = Required - (Edge ? p->CornerMax.pArrRise[nEnNet] : p->CornerMax.pArrFall[nEnNet]);
+            Slack += PathCppr(p,nStartMax,nLaunchClock,nClock,nClkNet,1,
+                               p->CornerMax.pfLaunchRises[nStartMax],pGate->fClkRises,fClkRises);
             if ( Slack < p->WorstClkGatingSetupSlack )
             {
                 p->WorstClkGatingSetupSlack = Slack;
@@ -2720,6 +2870,8 @@ static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, 
                                             p->CornerMin.pfLaunchRises[nStartMin], fClkRises );
             Required = Capture + Uncertainty + Check;
             Slack = (Edge ? p->CornerMin.pArrRise[nEnNet] : p->CornerMin.pArrFall[nEnNet]) - Required;
+            Slack += PathCppr(p,nStartMin,nLaunchClock,nClock,nClkNet,0,
+                               p->CornerMin.pfLaunchRises[nStartMin],pGate->fClkRises,fClkRises);
             if ( Slack < p->WorstClkGatingHoldSlack )
             {
                 p->WorstClkGatingHoldSlack = Slack;
@@ -2869,7 +3021,7 @@ static int BuildStartClasses( MstaTiming *p )
     qsort( pOrder, (size_t)nStarts, sizeof(int), CompareStartSignature );
     for ( i = 0; i < nStarts; i++ )
     {
-        if ( i == 0 || CompareStartSignature( &pOrder[i-1], &pOrder[i] ) != 0 )
+        if ( p->pSdc->fCppr || i == 0 || CompareStartSignature( &pOrder[i-1], &pOrder[i] ) != 0 )
             nClasses++;
         p->pStartClass[pOrder[i]] = nClasses - 1;
     }
@@ -2946,6 +3098,8 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
         Msta_Error( "analyze：设计还没有展平（请先执行 current_design）\n" );
         return 0;
     }
+    if ( p->pSdc->fAocv && !p->pSdc->vAocv.nSize )
+        Msta_WarnOnce("AOCV 已开启但尚未读取深度表；未标注弧使用系数 1.0");
     if ( Msta_SdcClockCount( p->pSdc ) == 0 )
     {
         Msta_Error( "analyze：没有定义时钟，请先用 create_clock 定义\n" );
@@ -2965,6 +3119,7 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
     WarnUntimedLatches( p );
     MarkIdealNets( p );                /* 3. 理想网络（set_ideal_network） */
     BuildTopoOrder( p );               /* 4. 拓扑序 */
+    BuildAocvDepths(p);                /* 完整结构深度上下文 */
     PropagateClocks( p );              /* 5. 时钟传播 */
     /* 6. 数据到达与检查 */
     p->nDataChecks = 0;

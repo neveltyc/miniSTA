@@ -59,6 +59,7 @@ get_nets -filter {fanout > 1}
 | `set_clock_groups` | 异步、逻辑互斥、物理互斥时钟组 |
 | `set_clock_uncertainty` | setup/hold 不确定度，可指定时钟对 |
 | `set_timing_derate` | early/late、clock/data、rise/fall、cell delay/cell check 及分对象系数 |
+| `set_aocv_analysis`、`set_cppr` | AOCV/CPPR 开关与 CPPR 模式（miniSTA 扩展） |
 | `unset_timing_derate` | 清除全部 timing derate（OpenSTA 扩展） |
 | `set_operating_conditions` | `-analysis_type single\|bc_wc\|on_chip_variation`，max/min 条件与库 |
 | `set_clock_gating_check`、`set_max_time_borrow` | 时钟门控检查与锁存器借时限制 |
@@ -98,7 +99,7 @@ set_timing_derate -late -cell_check 1.05 [get_cells u_capture]
 
 对象支持 `[get_cells ...]`，以及 miniSTA 已有的 `[get_clocks ...]` 扩展。数据延迟与库检查按实例查；时钟延迟按实例 → 时钟 → 全局查。每个维度只取最后设置的匹配值，实例覆盖全局而非与其相乘；未设置的维度继续沿用默认值。工作条件 K 因子仍与所得 derate 相乘。理想时钟的显式 latency 与 I/O delay 数值不乘 timing derate。
 
-`unset_timing_derate` 清除全局和分对象 timing derate，保留分析模式、工艺角与 K 因子。当前实现为固定系数的基础 OCV；AOCV、POCV/LVF、CPPR、非零 RC/net delay derate 未建模。参考语义见 [OpenSTA 命令文档](https://opensta.readthedocs.io/en/latest/Commands/)。手算与对照用例见 [OCV 用例](../testcases/ocv/README.md)。
+`unset_timing_derate` 清除全局和分对象 timing derate，保留分析模式、工艺角与 K 因子。固定系数 OCV 可与原生深度表 AOCV 和 CPPR 一起使用，见 [AOCV/CPPR](variation.md)。POCV/LVF、距离 AOCV、非零 RC/net delay derate 未建模。参考语义见 [OpenSTA 命令文档](https://opensta.readthedocs.io/en/latest/Commands/)。手算与对照用例见 [OCV 用例](../testcases/ocv/README.md)。
 
 ## I/O、负载与工作条件
 

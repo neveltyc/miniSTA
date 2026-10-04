@@ -1,0 +1,6 @@
+read_liberty ../aocv/merge.lib
+read_verilog reconvergent.v
+current_design ocv
+read_sdc reconvergent.sdc
+report_checks -setup
+report_checks -hold

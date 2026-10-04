@@ -49,6 +49,7 @@ typedef struct {
     int    fDataRise;         /* 获胜路径的数据边沿：1 = rise，0 = fall */
     /* 要求时间的组成成分，报告层直接拿来打印（不让报告层重新推导一遍） */
     double CheckTime, Uncertainty;
+    double Cppr;              /* 公共时钟路径补偿，正数改善 slack */
     double Borrow;            /* set_max_time_borrow 给锁存器放宽的那部分 */
     int    fChecked;          /* 0 = 没约束/被 false path 掉 */
     MstaId LaunchClock;       /* 起点时钟名 nameId */
@@ -92,6 +93,10 @@ static inline MstaCheckCorner *Msta_CheckCorner( MstaCheck *pCheck, int fSetup )
     return fSetup ? &pCheck->Setup : &pCheck->Hold;
 }
 
+typedef struct {
+    int Clock, Net, Edge, Source;
+} MstaClockPrev;
+
 /* 一个时钟在一根时钟网络上的到达与摆率。边沿分两种：本地沿 = 时钟到这根网络上
    是升还是降；源沿 = 它来自时钟源的哪个沿。经过反相器两者相反，经过 non_unate
    单元同一本地沿可能来自两个源沿，所以按 [角][本地沿][源沿] 分开存，各是一条
@@ -99,6 +104,7 @@ static inline MstaCheckCorner *Msta_CheckCorner( MstaCheck *pCheck, int fSetup )
 typedef struct {
     double Arrival[2][2][2]; /* [min/max][本地 fall/rise][源 fall/rise] */
     double Slew[2][2][2];
+    MstaClockPrev Prev[2][2][2]; /* 实际获胜的时钟路径，可跨生成时钟 */
     unsigned char Tags[2];     /* 本地边沿的源标签掩码：1=源 fall，2=源 rise */
     double MaxArrival;        /* ps：max 角最晚那条，仅用于时钟树摘要 */
     double MaxSlew;           /* ps：max 角最大摆率，仅用于 DRC */
@@ -175,6 +181,8 @@ typedef struct MstaTiming {
     int    *pState;            /* DFS 用的 0/1/2 标记 */
     int    *pStartClass;       /* [nNets] 起点分类号，-1 = 不是起点（见 BuildStartClasses） */
     int     nCombLoops;
+    int *pAocvDataForward, *pAocvDataBackward; /* 完整路径的最短结构深度 */
+    int *pAocvClockForward, *pAocvClockBackward; /* [clock][net] */
 
     /* 统计 */
     int     nRegisters;
@@ -225,6 +233,7 @@ MstaPinRef *Msta_TimingNetDriver( MstaTiming *p, int nNet );     /* 无驱动返
 double      Msta_TimingNetArrival( MstaTiming *p, int nNet, int fMax );
 int         Msta_TimingClockNetCount( MstaTiming *p );
 /* 时钟树按时钟分别传播：报告层要按 (时钟, 网络) 取到达与归属。 */
+int         Msta_TimingAocvDataDepth( MstaTiming *p, int In, int Out );
 int         Msta_TimingClockCount( MstaTiming *p );
 int         Msta_TimingNetHasClock( MstaTiming *p, int nClock, int nNet );
 const MstaClockArr *Msta_TimingClockArr( MstaTiming *p, int nClock, int nNet );

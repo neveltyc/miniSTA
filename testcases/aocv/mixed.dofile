@@ -1,0 +1,8 @@
+read_liberty merge.lib
+read_verilog mixed.v
+current_design ocv
+read_aocv base.aocv
+read_sdc mixed.sdc
+report_aocv
+report_checks -setup
+report_checks -hold

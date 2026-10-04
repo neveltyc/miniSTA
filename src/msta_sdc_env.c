@@ -205,6 +205,31 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
         Msta_SdcReject(p,pCmd,"一个对象都没有找到");
 }
 
+void Msta_SdcSetAocvAnalysis( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    double Value;
+    if ( !Msta_SdcGetNumber(p,pCmd,"开关",pCmd->pValue,MSTA_SDC_NONNEG,&Value) ) return;
+    if ( Value!=0 && Value!=1 ) { Msta_SdcReject(p,pCmd,"开关必须为 0 或 1"); return; }
+    p->fAocv=(int)Value;
+}
+
+/* miniSTA 扩展：set_cppr [-mode same_transition|same_pin] 0|1。 */
+const MstaSdcOpt Msta_SdcCpprOpts[] = {
+    { "-mode", MSTA_SDC_VALUE, 0 }, { NULL, MSTA_SDC_FLAG, 0 }
+};
+void Msta_SdcSetCppr( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    const char *pMode = Msta_SdcOptValue(pCmd,"-mode");
+    double Value;
+    if ( !Msta_SdcGetNumber(p,pCmd,"开关",pCmd->pValue,MSTA_SDC_NONNEG,&Value) ) return;
+    if ( Value != 0 && Value != 1 )
+    { Msta_SdcReject(p,pCmd,"开关必须为 0 或 1"); return; }
+    if ( pMode && strcmp(pMode,"same_pin") && strcmp(pMode,"same_transition") )
+    { Msta_SdcReject(p,pCmd,"未知的 CPPR 模式 \"%s\"",pMode); return; }
+    p->fCppr = (int)Value;
+    if ( pMode ) p->fCpprSamePin = !strcmp(pMode,"same_pin");
+}
+
 /* OpenSTA 同名命令：移除全部 timing derate，工作条件 K 因子保留。 */
 void Msta_SdcUnsetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {

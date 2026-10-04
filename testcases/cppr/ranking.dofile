@@ -1,0 +1,6 @@
+read_liberty ../aocv/merge.lib
+read_verilog ranking.v
+current_design ocv
+read_sdc ranking.sdc
+report_checks -setup
+report_checks -hold

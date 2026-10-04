@@ -1,0 +1,9 @@
+# scope pattern path transition corner depth factor
+design * clock rise early 1 0.8
+design * clock rise late 1 1.2
+design * clock fall early 1 0.8
+design * clock fall late 1 1.2
+design * data rise early 1 0.8
+design * data rise late 1 1.2
+design * data fall early 1 0.8
+design * data fall late 1 1.2
