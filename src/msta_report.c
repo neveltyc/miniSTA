@@ -363,6 +363,9 @@ void Msta_ReportSummary( MstaTiming *p, FILE *pFile )
                      Msta_NameStr(p->ClkGatingHoldPin), p->ClkGatingHoldValue / 1000.0 );
         fprintf( pFile, "\n" );
     }
+    if ( p->pSdc->fAnalysisSelected || p->pSdc->vObjDerate.nSize )
+        fprintf(pFile,"分析模式 : %s\n",p->pSdc->AnalysisType == MSTA_ANALYSIS_OCV ? "on_chip_variation" :
+                p->pSdc->AnalysisType == MSTA_ANALYSIS_SINGLE ? "single" : "bc_wc");
     if ( Msta_SdcOpCondSelected(p->pSdc) )
     {
         const char *pName;

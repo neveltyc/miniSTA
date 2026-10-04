@@ -1240,6 +1240,7 @@ static const MstaSdcCmdDef s_vSdcCommands[] = {
     { "set_data_check",           Msta_SdcDataCheckOpts,           MSTA_SDC_NUMBER,   0,  0, Msta_SdcSetDataCheck           },
     { "set_clock_gating_check",   Msta_SdcClockGatingCheckOpts,    MSTA_SDC_NO_VALUE, 0, -1, Msta_SdcSetClockGatingCheck    },
     { "set_max_time_borrow",      Msta_SdcNoOpts,                  MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetMaxTimeBorrow       },
+    { "unset_timing_derate",      Msta_SdcNoOpts,                 MSTA_SDC_NO_VALUE, 0,  0, Msta_SdcUnsetTimingDerate       },
     { "set_timing_derate",        Msta_SdcTimingDerateOpts,        MSTA_SDC_NUMBER,   0, -1, Msta_SdcSetTimingDerate        },
     { "set_max_transition",       Msta_SdcDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMaxTransition       },
     { "set_max_fanout",           Msta_SdcDrcLimitOpts,            MSTA_SDC_NUMBER,   1, -1, Msta_SdcSetMaxFanout           },
@@ -1310,8 +1311,7 @@ MstaSdc *Msta_SdcStart( void )
     p->VoltageMax = p->VoltageMin = MSTA_UNSET;
     p->TempMax = p->TempMin = MSTA_UNSET;
     p->KFactorDerateLate = p->KFactorDerateEarly = 1.0;
-    p->DerateEarly = p->DerateLate = 1.0;
-    p->DerateCheckEarly = p->DerateCheckLate = 1.0;
+    p->AnalysisType = MSTA_ANALYSIS_OCV;
     /* 0 = 还没定：真正读 SDC 时按库的时间单位兜底。 */
     p->TimeScalePs = 0.0;
     return p;

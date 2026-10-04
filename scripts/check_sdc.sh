@@ -132,7 +132,7 @@ grep -Fq 'set_voltage：已记录 0.950 V，但库里没有 k_volt 系数' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'setup : WNS   15.505 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'hold  : WNS    0.465 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
-grep -Fq 'set_operating_conditions：-analysis_type on_chip_variation 未建模；约束作废' \
+grep -Fq '分析模式 : on_chip_variation' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 
 # 显式库限定必须精确匹配，不能静默改用另一个库里的同名单元。
@@ -538,10 +538,10 @@ grep -Eq '^  u2/Y[[:space:]]+0\.046' "${LOG}/testcases_sdc_features_timing_derat
 grep -Eq '^  u3/Y[[:space:]]+0\.200' "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
 grep -Fq '  - setup check (from lib)                        -0.121' \
     "${LOG}/testcases_sdc_features_timing_derate_obj.dofile.log"
-# -rise 只管上升沿：u2 上升沿 ×1.5（0.050 -> 0.075），同一条路径上 f1/Q 下降沿、
-# u3/Y 下降沿仍是全局 1.1（0.290 -> 0.319、0.041 -> 0.045）。
-grep -Eq '^  u2/Y[[:space:]]+0\.075' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
-grep -Eq '^  f1/Q[[:space:]]+0\.319' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
+# -rise 选择弧的输入上升沿：反相器 u2 输出下降，延迟 0.039 ×1.5 = 0.058。
+# f1/Q 的 clk-to-Q 仍使用全局 1.1：0.298 ×1.1 = 0.327。
+grep -Eq '^  u2/Y[[:space:]]+0\.058' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
+grep -Eq '^  f1/Q[[:space:]]+0\.327' "${LOG}/testcases_sdc_features_timing_derate_obj_edge.dofile.log"
 
 # set_load -subtract_pin_load：注解值就是总负载（脚电容不再另加），
 # 与"把注解值减掉脚电容"的写法结果相同。

@@ -71,7 +71,7 @@ report_checks -max_paths 5 -hold
 
 - 使用 Liberty NLDM 表计算单元延迟和转换时间，支持 setup、hold、recovery、removal 及库中可识别的时钟门控检查。
 - 支持时钟树传播、生成时钟、输入和输出延迟、时钟不确定度、路径例外、路径分组、负载与输入驱动等 SDC 子集。具体选项和行为见 [SDC 参考](docs/sdc.md)。
-- 支持单个分析模式下分别指定 max/min 工作条件和 Liberty 库。
+- 支持基础 OCV：独立 early/late、clock/data、rise/fall 与 cell delay/check derate，实例覆盖、max/min 工艺库和 `single` / `bc_wc` / `on_chip_variation` 模式切换。示例见 [OCV 用例](testcases/ocv/README.md)。
 
 miniSTA 使用集中电容表示负载，不读取 SPEF/SDF，也不计算线网 RC 延迟；结果适用于前布局估算。当前不建模 SI、CCS/ECSM、CPPR、多场景分析、锁存器透明期提前出数及部分 SDC 选项。未支持的约束会在读取时给出警告；请检查日志和未约束端点数量，再使用分析结果。实现上的取舍见[设计说明的模型边界](docs/design.md#5-模型边界)。
 

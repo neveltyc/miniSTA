@@ -169,43 +169,45 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
             return;
         }
     }
-    if ( pCmd->nObjs == 0 )
+    /* 每条记录只覆盖明确选择的维度，未设置的 early/late 不参与查表。
+       全局也用记录保存，避免后续 -cell_check 或 -clock 清除数据系数。 */
+    for ( i = 0; i < (pCmd->nObjs ? pCmd->nObjs : 1); i++ )
     {
-        p->fDerateClock = fCellDelay && fClock;
-        p->fDerateData  = fCellDelay && fData;
-        if ( fEarly ) p->DerateEarly = Factor;
-        if ( fLate )  p->DerateLate  = Factor;
-        if ( fCellCheck && fEarly ) p->DerateCheckEarly = Factor;
-        if ( fCellCheck && fLate )  p->DerateCheckLate  = Factor;
-        return;
-    }
-    for ( i = 0; i < pCmd->nObjs; i++ )
-    {
-        const char *pObj = pCmd->ppObjs[i];
-        MstaClock *pClock = Msta_SdcKindOf( pObj ) == 'C' ? Msta_SdcFindClock( p, pObj ) : NULL;
-        int nInst = pClock ? -1 : Msta_DesignFindInstByName( pDes, pObj );
-        MstaObjDerate *pRec;
-        if ( pClock == NULL && nInst < 0 )
+        const char *pObj = pCmd->nObjs ? pCmd->ppObjs[i] : NULL;
+        MstaClock *pClock = pObj && Msta_SdcKindOf(pObj) == 'C' ? Msta_SdcFindClock(p,pObj) : NULL;
+        int nInst = pObj && !pClock ? Msta_DesignFindInstByName(pDes,pObj) : -1;
+        int Check;
+        if ( pObj && !pClock && nInst < 0 )
         {
-            Msta_SdcNote( pCmd, Msta_SdcKindOf( pObj ) == 'C' ? "找不到时钟 \"%s\"" : "找不到实例 \"%s\"", pObj );
+            Msta_SdcNote(pCmd, "找不到对象 \"%s\"", pObj);
             continue;
         }
-        if ( pClock && Edge != 0 )
-            Msta_SdcNote( pCmd, "时钟对象上的 -rise/-fall 未建模；"
-                          "时钟树不区分上升和下降" );
-        pRec = MstaObjDerateArrayAppend( &p->vObjDerate );
-        pRec->Kind  = pClock ? 'C' : 'I';
-        pRec->Inst  = nInst;
-        pRec->Name  = pClock ? pClock->Name : MSTA_NO_ID;
-        pRec->fRise = Edge == 'r';
-        pRec->fFall = Edge == 'f';
-        pRec->fCellCheck = fCellCheck;
-        pRec->Early = fEarly ? Factor : 1.0;
-        pRec->Late  = fLate  ? Factor : 1.0;
+        for ( Check = 0; Check < 2; Check++ )
+        {
+            MstaObjDerate *pRec;
+            if ( Check ? !fCellCheck : !fCellDelay ) continue;
+            pRec = MstaObjDerateArrayAppend(&p->vObjDerate);
+            pRec->Kind = !pObj ? 'G' : pClock ? 'C' : 'I';
+            pRec->Inst = nInst;
+            pRec->Name = pClock ? pClock->Name : MSTA_NO_ID;
+            pRec->fRise = Edge == 'r';
+            pRec->fFall = Edge == 'f';
+            pRec->fCellCheck = Check;
+            pRec->fClock = fClock;
+            pRec->fData = fData;
+            pRec->Early = fEarly ? Factor : MSTA_UNSET;
+            pRec->Late = fLate ? Factor : MSTA_UNSET;
+        }
         nApplied++;
     }
     if ( nApplied == 0 )
-        Msta_SdcReject( p, pCmd, "一个对象都没有找到" );
+        Msta_SdcReject(p,pCmd,"一个对象都没有找到");
+}
+
+/* OpenSTA 同名命令：移除全部 timing derate，工作条件 K 因子保留。 */
+void Msta_SdcUnsetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    p->vObjDerate.nSize = 0;
 }
 
 /* 没点名工作条件时用的角：库里 default_operating_conditions 指的那个，没有就取
@@ -309,11 +311,10 @@ static int Msta_SdcLibraryExists( MstaLib *pLib, MstaId nLibrary )
 }
 
 /* set_operating_conditions [条件名] [-max 条件名] [-min 条件名] [-library 库]
-       [-max_library 库] [-min_library 库] [-analysis_type single|bc_wc]
+       [-max_library 库] [-min_library 库] [-analysis_type single|bc_wc|on_chip_variation]
        [-voltage 电压] [-temperature 温度]
    选择 max/min 两个角的工作条件与对应的 Liberty 库。不写 -max/-min 时，
-   位置参数里的条件名两个角共用。-object_list 不建模；
-   -analysis_type on_chip_variation 不建模。 */
+   位置参数里的条件名两个角共用。-object_list 不建模。 */
 const MstaSdcOpt Msta_SdcOperatingConditionsOpts[] = {
     { "-library",       MSTA_SDC_VALUE, 0               },
     { "-max_library",   MSTA_SDC_VALUE, 0               },
@@ -343,9 +344,8 @@ void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
     MstaLibInfo *pMaxInfo = NULL, *pMinInfo = NULL;
     double Volt = 0.0, Temp = 0.0;
 
-    if ( pAnalysis && strcasecmp(pAnalysis,"on_chip_variation") == 0 )
-    { Msta_SdcReject( p, pCmd, "-analysis_type on_chip_variation 未建模" ); return; }
-    if ( pAnalysis && strcasecmp(pAnalysis,"single") != 0 && strcasecmp(pAnalysis,"bc_wc") != 0 )
+    if ( pAnalysis && strcasecmp(pAnalysis,"single") != 0 && strcasecmp(pAnalysis,"bc_wc") != 0 &&
+         strcasecmp(pAnalysis,"on_chip_variation") != 0 )
     { Msta_SdcReject( p, pCmd, "未知的 -analysis_type \"%s\"", pAnalysis ); return; }
     if ( pAnalysis && strcasecmp(pAnalysis,"single") == 0 &&
          ( pMax != NULL || pMin != NULL || pMaxLibName != NULL || pMinLibName != NULL ) )
@@ -361,7 +361,7 @@ void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
         pMax = pMin = pCmd->ppObjs[0];
     else if ( pCmd->nObjs == 1 )
     { Msta_SdcReject( p, pCmd, "工作条件名不能与 -max/-min 同时使用" ); return; }
-    if ( pMax == NULL && pMin == NULL && pVolt == NULL && pTemp == NULL && !fMaxLibrary && !fMinLibrary )
+    if ( pMax == NULL && pMin == NULL && pVolt == NULL && pTemp == NULL && !fMaxLibrary && !fMinLibrary && !pAnalysis )
     { Msta_SdcReject( p, pCmd, "需要工作条件名、库或 -voltage/-temperature" ); return; }
     if ( pMax != NULL && ( pMaxInfo = Msta_LibFindOpCond( pLib, pMax, nLibraryMax, NULL ) ) == NULL )
     { Msta_SdcReject( p, pCmd, "没有哪个库声明了工作条件 \"%s\"", pMax ); return; }
@@ -369,6 +369,12 @@ void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
     { Msta_SdcReject( p, pCmd, "没有哪个库声明了工作条件 \"%s\"", pMin ); return; }
 
     /* 给出的名字都有效，库与工艺角的改动一起生效。 */
+    if ( pAnalysis )
+    {
+        p->AnalysisType = !strcasecmp(pAnalysis,"on_chip_variation") ? MSTA_ANALYSIS_OCV :
+                          !strcasecmp(pAnalysis,"single") ? MSTA_ANALYSIS_SINGLE : MSTA_ANALYSIS_BC_WC;
+        p->fAnalysisSelected = 1;
+    }
     if ( fMaxLibrary ) p->OpCondLibraryMax = nLibraryMax;
     if ( fMinLibrary ) p->OpCondLibraryMin = nLibraryMin;
     if ( pMaxInfo != NULL )

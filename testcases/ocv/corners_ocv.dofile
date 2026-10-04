@@ -1,0 +1,7 @@
+read_liberty ocv.lib
+read_liberty fast.lib
+read_verilog ocv.v
+current_design ocv
+read_sdc corners_ocv.sdc
+report_checks -setup
+report_checks -hold

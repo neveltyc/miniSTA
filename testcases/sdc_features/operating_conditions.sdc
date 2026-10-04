@@ -9,6 +9,6 @@ set_operating_conditions -analysis_type bc_wc \
     -max tt_025C_1v80 -min tt_025C_1v80
 set_operating_conditions -voltage 0.95 -temperature 105
 set_voltage 0.95
-# -analysis_type on_chip_variation 不支持，这条约束会被拒绝，不会悄悄改按 bc_wc 分析。
+# 切换到 OCV 分析；本例 min/max 使用同一库。
 set_operating_conditions -analysis_type on_chip_variation \
     -max tt_025C_1v80 -min tt_025C_1v80

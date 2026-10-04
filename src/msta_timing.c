@@ -341,8 +341,8 @@ static double CheckTime( MstaTiming *p, const MstaArc *pArc, int nInst,
     pArc = CheckArcForCorner(p,pArc,nInst,fMax);
     if ( pArc == NULL ) return 0.0;
     MstaClockArr *pClkArr = ClockArrAt( p, nClock, nClkNet );
-    /* setup 捕获时钟取 early，hold 取 late；检查表与数据仍取各自分析角。 */
-    ClkSlew = ClockSlew(pClkArr,!fMax,ArcClockRises(pArc),p->CaptureClockTag);
+    /* OCV 捕获时钟与数据取相反角；bc_wc/single 取同角。 */
+    ClkSlew = ClockSlew(pClkArr,Msta_SdcCaptureCorner(p->pSdc,fMax),ArcClockRises(pArc),p->CaptureClockTag);
     DataSlew = fDataRise ? CornerOf(p,fMax)->pSlewRise[nDataNet]
                          : CornerOf(p,fMax)->pSlewFall[nDataNet];
     if ( ClkSlew < 0.0 )
@@ -351,7 +351,7 @@ static double CheckTime( MstaTiming *p, const MstaArc *pArc, int nInst,
         DataSlew = MSTA_DEFAULT_SLEW;
     const MstaTable *pTable = fDataRise ? &pArc->ConstraintRise : &pArc->ConstraintFall;
     return (Msta_TableExists(pTable) ? Msta_TableLookup(pTable, ClkSlew, DataSlew) : 0.0)
-           * Msta_SdcCheckDerateInst(p->pSdc,nInst,fMax);
+           * Msta_SdcCheckDerateInst(p->pSdc,nInst,fMax,fDataRise);
 }
 
 /* =====================================================================
@@ -765,7 +765,7 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                 pDst->Tags[e] |= 1 << Label;
                 pDst->Arrival[m][e][Label] = ClockArrival(pSrc,m,fClkRise,-1)
                     + ArcDelayEdge(pArc,Slew,m ? LoadMax : LoadMin,e)
-                      * Msta_SdcClockDerateClock(p->pSdc,nMaster,m)
+                      * Msta_SdcClockDerateClock(p->pSdc,nMaster,pNet->Driver.InstId,m,fClkRise)
                     + pClock->SourceLatency[m][Label];
                 if ( pClock->fPropagated )
                     pDst->Slew[m][e][Label] = ArcSlewEdge(pArc,Slew,m ? LoadMax : LoadMin,e);
@@ -909,7 +909,7 @@ static void PropagateClocks( MstaTiming *p )
                                 Slew = ClockSlew(pInArr,m,i,s);
                                 if ( !p->pfIdealNet[nNet] )
                                 {
-                                    Cand += ArcDelayEdge(pArc,Slew,Load,e) * Msta_SdcClockDerateClock(p->pSdc,c,m);
+                                    Cand += ArcDelayEdge(pArc,Slew,Load,e) * Msta_SdcClockDerateClock(p->pSdc,c,pNet->Driver.InstId,m,i);
                                     Slew = ArcSlewEdge(pArc,Slew,Load,e);
                                 }
                                 if ( !ClockTagValid(pArr,m,e,Label) || (m ? Cand > pArr->Arrival[m][e][Label] : Cand < pArr->Arrival[m][e][Label]) )
@@ -1234,9 +1234,9 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             else
                             {
                                 BestR = Edge + ArcDelayEdge( pArc, ClkSlew, Load, 1 )
-                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,1);
+                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,fLocalRise);
                                 BestF = Edge + ArcDelayEdge( pArc, ClkSlew, Load, 0 )
-                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,0);
+                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,fLocalRise);
                                 SlewR = ArcSlewEdge( pArc, ClkSlew, Load, 1 );
                                 SlewF = ArcSlewEdge( pArc, ClkSlew, Load, 0 );
                             }
@@ -1282,43 +1282,35 @@ static void PropagateData( MstaTiming *p, int fMax, int nOnlyClock, int nOnlySta
                             double *pSlewBest = e ? &SlewR : &SlewF;
                             int *pPrevBest = e ? &nPrevR : &nPrevF;
                             int *pEdgeBest = e ? &nEdgeR : &nEdgeF;
-                            int nInEdge = CoupledInputEdge( Sense, e );
-                            double InArr, InSlew, Cand, CandSlew;
+                            int Coupled = CoupledInputEdge(Sense,e), nInEdge;
+                            /* non_unate 必须比较完整候选延迟：输入到达较早的边沿
+                               也可能因 slew 或 OCV 系数成为 max 角的获胜路径。 */
+                            for ( nInEdge = 0; nInEdge < 2; nInEdge++ )
+                            {
+                                double InArr, InSlew, Cand, CandSlew;
+                                if ( Coupled >= 0 && nInEdge != Coupled ) continue;
+                                if ( !ArrivalSet(nInEdge ? pArrR[nInNet] : pArrF[nInNet],fMax) ) continue;
 
-                            if ( nInEdge < 0 )
-                            {
-                                /* 非单调（non_unate）或未知：对该分析角取最保守的输入边沿。 */
-                                int fR = ArrivalSet( pArrR[nInNet], fMax );
-                                int fF = ArrivalSet( pArrF[nInNet], fMax );
-                                if ( !fR && !fF )
-                                    continue;
-                                if ( !fF )      nInEdge = 1;
-                                else if ( !fR ) nInEdge = 0;
-                                else            nInEdge = ( fMax ? ( pArrR[nInNet] > pArrF[nInNet] )
-                                                                 : ( pArrR[nInNet] < pArrF[nInNet] ) ) ? 1 : 0;
-                            }
-                            else if ( !ArrivalSet( nInEdge ? pArrR[nInNet] : pArrF[nInNet], fMax ) )
-                                continue;
-
-                            InArr  = nInEdge ? pArrR[nInNet] : pArrF[nInNet];
-                            InSlew = nInEdge ? pSlewR[nInNet] : pSlewF[nInNet];
-                            if ( pArc == NULL || p->pfIdealNet[nNet] )
-                            {
-                                Cand = InArr;               /* 没有弧或理想网络：当 0 延迟 */
-                                CandSlew = InSlew;
-                            }
-                            else
-                            {
-                                Cand = InArr + ArcDelayEdge( pArc, InSlew, Load, e )
-                                              * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,e);
-                                CandSlew = ArcSlewEdge( pArc, InSlew, Load, e );
-                            }
-                            if ( fMax ? ( Cand > *pBestE ) : ( Cand < *pBestE ) )
-                            {
-                                *pBestE = Cand;
-                                *pSlewBest = CandSlew;
-                                *pPrevBest = nInNet;
-                                *pEdgeBest = nInEdge;
+                                InArr  = nInEdge ? pArrR[nInNet] : pArrF[nInNet];
+                                InSlew = nInEdge ? pSlewR[nInNet] : pSlewF[nInNet];
+                                if ( pArc == NULL || p->pfIdealNet[nNet] )
+                                {
+                                    Cand = InArr;               /* 没有弧或理想网络：当 0 延迟 */
+                                    CandSlew = InSlew;
+                                }
+                                else
+                                {
+                                    Cand = InArr + ArcDelayEdge( pArc, InSlew, Load, e )
+                                                  * Msta_SdcDataDerateInst(p->pSdc,nDriverInst,fMax,nInEdge);
+                                    CandSlew = ArcSlewEdge( pArc, InSlew, Load, e );
+                                }
+                                if ( fMax ? ( Cand > *pBestE ) : ( Cand < *pBestE ) )
+                                {
+                                    *pBestE = Cand;
+                                    *pSlewBest = CandSlew;
+                                    *pPrevBest = nInNet;
+                                    *pEdgeBest = nInEdge;
+                                }
                             }
                         }
                     }
@@ -1516,14 +1508,14 @@ static double CaptureEdgeTime( MstaTiming *p, int fToRegister, int nCaptureNet,
         *pnLaunchCycle = k;
     if ( fToRegister )
         Arrival = ( nCaptureClock >= 0 )
-                ? ClockArrival(ClockArrAt(p,nCaptureClock,nCaptureNet),!fSetup,fLocalCapture,fCaptureRises)
+                ? ClockArrival(ClockArrAt(p,nCaptureClock,nCaptureNet),Msta_SdcCaptureCorner(p->pSdc,fSetup),fLocalCapture,fCaptureRises)
                 : 0.0;
     else if ( pCaptureClock )
     {
         if ( nCaptureNet >= 0 )
         {
             MstaClockArr *pRefArr = ClockArrAt(p,nCaptureClock,nCaptureNet);
-            Arrival = ClockArrival(pRefArr,!fSetup,fLocalCapture,fCaptureRises);
+            Arrival = ClockArrival(pRefArr,Msta_SdcCaptureCorner(p->pSdc,fSetup),fLocalCapture,fCaptureRises);
         }
         else
         {
@@ -1532,9 +1524,9 @@ static double CaptureEdgeTime( MstaTiming *p, int fToRegister, int nCaptureNet,
             int fNetworkIncluded = Msta_SdcPortNetworkLatencyIncluded(
                 p->pSdc,nPortNet,nCaptureClock,1,fSetup);
             if ( !fSourceIncluded )
-                Arrival += ClockSourceArrival(p,nCaptureClock,!fSetup,fCaptureRises);
+                Arrival += ClockSourceArrival(p,nCaptureClock,Msta_SdcCaptureCorner(p->pSdc,fSetup),fCaptureRises);
             if ( !pCaptureClock->fPropagated && !fNetworkIncluded )
-                Arrival += pCaptureClock->NetworkLatency[!fSetup][fCaptureRises];
+                Arrival += pCaptureClock->NetworkLatency[Msta_SdcCaptureCorner(p->pSdc,fSetup)][fCaptureRises];
         }
     }
     return Arrival + SourceEdge;
@@ -1819,7 +1811,7 @@ static void CheckAsyncEndpointEdge( MstaTiming *p, MstaCheck *pCheck, int nCaptu
          !ArrivalSet(pArrival[nEndNet],pCheck->fRecovery) ) return;
     /* 捕获沿按当前源边沿标签取；它传不到库定义的本地沿时不查。 */
     fClkRises = p->CaptureClockTag;
-    if ( !ClockTagValid(ClockArrAt(p,nClock,nClkNet),!pCheck->fRecovery,pAsync->fClkRises,fClkRises) ) return;
+    if ( !ClockTagValid(ClockArrAt(p,nClock,nClkNet),Msta_SdcCaptureCorner(p->pSdc,pCheck->fRecovery),pAsync->fClkRises,fClkRises) ) return;
 
     /* 异步控制脚同样接受 set_false_path / set_multicycle_path / set_max_delay：
        recovery 按 setup 处理，removal 按 hold 处理。 */
@@ -2133,16 +2125,16 @@ static void CheckEndpointAttempt( MstaTiming *p, MstaCheck *pCheck, int nCapture
     if ( pCheck->fToRegister )
     {
         MstaClockArr *pClk = ClockArrAt(p,nCaptureClock,nCaptureNet);
-        if ( fSetup && !ClockTagValid(pClk,0,pReg->fClkRises,p->CaptureClockTag) ) fSetup = 0;
-        if ( fHold && !ClockTagValid(pClk,1,pReg->fClkRises,p->CaptureClockTag) ) fHold = 0;
+        if ( fSetup && !ClockTagValid(pClk,Msta_SdcCaptureCorner(p->pSdc,1),pReg->fClkRises,p->CaptureClockTag) ) fSetup = 0;
+        if ( fHold && !ClockTagValid(pClk,Msta_SdcCaptureCorner(p->pSdc,0),pReg->fClkRises,p->CaptureClockTag) ) fHold = 0;
     }
     else
     {
         int RiseMax = !Msta_SdcPortClockFall(p->pSdc,nEndNet,nCaptureClock,1,1);
         int RiseMin = !Msta_SdcPortClockFall(p->pSdc,nEndNet,nCaptureClock,1,0);
-        if ( fSetup && (nOutputRefMax >= 0 ? !ClockTagValid(ClockArrAt(p,nCaptureClock,nOutputRefMax),0,RiseMax,p->CaptureClockTag)
+        if ( fSetup && (nOutputRefMax >= 0 ? !ClockTagValid(ClockArrAt(p,nCaptureClock,nOutputRefMax),Msta_SdcCaptureCorner(p->pSdc,1),RiseMax,p->CaptureClockTag)
                                           : p->CaptureClockTag != RiseMax) ) fSetup = 0;
-        if ( fHold && (nOutputRefMin >= 0 ? !ClockTagValid(ClockArrAt(p,nCaptureClock,nOutputRefMin),1,RiseMin,p->CaptureClockTag)
+        if ( fHold && (nOutputRefMin >= 0 ? !ClockTagValid(ClockArrAt(p,nCaptureClock,nOutputRefMin),Msta_SdcCaptureCorner(p->pSdc,0),RiseMin,p->CaptureClockTag)
                                         : p->CaptureClockTag != RiseMin) ) fHold = 0;
     }
     /* setup 与 hold 相互独立：缺了 min/max 某一侧的约束，不能让另一侧的检查
@@ -2692,7 +2684,7 @@ static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, 
         if ( (fSet || (pGate->SetupArc != MSTA_NO_ID &&
              CheckHasEdge(p, Msta_CellArcById(pInst->pCell,pGate->SetupArc),
                           nInst, 1, Edge))) &&
-             ClockTagValid(pClkArr,0,pGate->fClkRises,fClkRises) &&
+             ClockTagValid(pClkArr,Msta_SdcCaptureCorner(p->pSdc,1),pGate->fClkRises,fClkRises) &&
              ArrivalSet(Edge ? p->CornerMax.pArrRise[nEnNet] : p->CornerMax.pArrFall[nEnNet],1) )
         {
             MstaArc *pArc = ( pGate->SetupArc != MSTA_NO_ID )
@@ -2716,7 +2708,7 @@ static int CheckClockGatingOne( MstaTiming *p, int nInst, MstaGateCheck *pGate, 
         if ( (fSet || (pGate->HoldArc != MSTA_NO_ID &&
              CheckHasEdge(p, Msta_CellArcById(pInst->pCell,pGate->HoldArc),
                           nInst, 0, Edge))) &&
-             ClockTagValid(pClkArr,1,pGate->fClkRises,fClkRises) &&
+             ClockTagValid(pClkArr,Msta_SdcCaptureCorner(p->pSdc,0),pGate->fClkRises,fClkRises) &&
              ArrivalSet(Edge ? p->CornerMin.pArrRise[nEnNet] : p->CornerMin.pArrFall[nEnNet],0) )
         {
             MstaArc *pArc = ( pGate->HoldArc != MSTA_NO_ID )

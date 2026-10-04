@@ -318,8 +318,7 @@ static int Msta_CmdReportClockTree( MstaApp *pApp, int argc, char **argv )
     return 1;
 }
 
-/* 命令表：名字 / 处理函数 / 一句话说明。help 命令直接打印这张表，
-   所以新增命令时只要在这里加一行，文档就自动同步。 */
+/* help 遍历命令表打印说明，帮助文本与命令分发共用数据。 */
 typedef struct {
     const char *pName;
     int (*pFunc)( MstaApp *, int, char ** );

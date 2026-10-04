@@ -243,75 +243,56 @@ double Msta_SdcClockUncertainty( MstaSdc *p, int nLaunchClock, int nCaptureClock
     return fSetup ? pCapture->UncertaintySetup : pCapture->UncertaintyHold;
 }
 
-/* 全局 derate：fMax=1 用 late 系数，fMax=0 用 early 系数。 */
-double Msta_SdcDataDerate( MstaSdc *p, int fMax )
+int Msta_SdcCaptureCorner( MstaSdc *p, int fSetup )
 {
-    if ( !p->fDerateData )
-        return fMax ? p->KFactorDerateLate : p->KFactorDerateEarly;
-    return ( fMax ? p->DerateLate : p->DerateEarly ) *
-           ( fMax ? p->KFactorDerateLate : p->KFactorDerateEarly );
+    return p->AnalysisType == MSTA_ANALYSIS_OCV ? !fSetup : fSetup;
 }
 
-double Msta_SdcClockDerate( MstaSdc *p, int fMax )
-{
-    if ( !p->fDerateClock )
-        return fMax ? p->KFactorDerateLate : p->KFactorDerateEarly;
-    return ( fMax ? p->DerateLate : p->DerateEarly ) *
-           ( fMax ? p->KFactorDerateLate : p->KFactorDerateEarly );
-}
-
-double Msta_SdcCheckDerate( MstaSdc *p, int fMax )
-{
-    return ( fMax ? p->DerateCheckLate : p->DerateCheckEarly ) *
-           ( fMax ? p->KFactorDerateLate : p->KFactorDerateEarly );
-}
-
-/* 分对象 derate 查表：实例上的按实例号比，时钟上的按时钟名比；
-   同一条记录里只写了一个边沿时，另一个边沿不生效。多条形如
-   "同一对象写了两条" 时取最后一个（与后写覆盖先写一致）。 */
+/* 从后往前查当前维度。对象优先于全局；没有设置的维度继续向下查找。 */
 static int Msta_SdcObjDerateValue( MstaSdc *p, char Kind, int nInst, MstaId Name,
-                                   int fCellCheck, int fMax, int fRise, double *pValue )
+                                  int fCellCheck, int fClock, int fMax, int fRise,
+                                  double *pValue )
 {
-    int i, fFound = 0;
-    for ( i = 0; i < p->vObjDerate.nSize; i++ )
+    int i;
+    for ( i = p->vObjDerate.nSize - 1; i >= 0; i-- )
     {
-        MstaObjDerate *pRec = MstaObjDerateArrayAt( &p->vObjDerate, i );
-        if ( pRec->Kind != Kind || pRec->fCellCheck != fCellCheck )
-            continue;
-        if ( Kind == 'I' ? ( pRec->Inst != nInst ) : ( pRec->Name != Name ) )
-            continue;
-        if ( fRise >= 0 && ( ( fRise && pRec->fFall ) || ( !fRise && pRec->fRise ) ) )
-            continue;                       /* 这条记录只管另一个边沿 */
-        *pValue = fMax ? pRec->Late : pRec->Early;
-        fFound = 1;
+        MstaObjDerate *pRec = MstaObjDerateArrayAt(&p->vObjDerate,i);
+        double Value = fMax ? pRec->Late : pRec->Early;
+        if ( pRec->Kind != Kind || pRec->fCellCheck != fCellCheck || !Msta_IsSet(Value) ) continue;
+        if ( fClock ? !pRec->fClock : !pRec->fData ) continue;
+        if ( Kind == 'I' && pRec->Inst != nInst ) continue;
+        if ( Kind == 'C' && pRec->Name != Name ) continue;
+        if ( (fRise && pRec->fFall) || (!fRise && pRec->fRise) ) continue;
+        *pValue = Value;
+        return 1;
     }
-    return fFound;
+    return 0;
+}
+
+static double Msta_SdcDerate( MstaSdc *p, int nInst, int nClock,
+                              int fCheck, int fClock, int fMax, int fRise )
+{
+    double Value = 1.0;
+    MstaClock *pClock = Msta_SdcClockByIndex(p,nClock);
+    if ( !Msta_SdcObjDerateValue(p,'I',nInst,MSTA_NO_ID,fCheck,fClock,fMax,fRise,&Value) &&
+         !(pClock && Msta_SdcObjDerateValue(p,'C',-1,pClock->Name,fCheck,fClock,fMax,fRise,&Value)) )
+        Msta_SdcObjDerateValue(p,'G',-1,MSTA_NO_ID,fCheck,fClock,fMax,fRise,&Value);
+    return Value * (fMax ? p->KFactorDerateLate : p->KFactorDerateEarly);
 }
 
 double Msta_SdcDataDerateInst( MstaSdc *p, int nInst, int fMax, int fRise )
 {
-    double Value;
-    if ( Msta_SdcObjDerateValue( p, 'I', nInst, MSTA_NO_ID, 0, fMax, fRise, &Value ) )
-        return Value * ( fMax ? p->KFactorDerateLate : p->KFactorDerateEarly );
-    return Msta_SdcDataDerate( p, fMax );
+    return Msta_SdcDerate(p,nInst,-1,0,0,fMax,fRise);
 }
 
-double Msta_SdcCheckDerateInst( MstaSdc *p, int nInst, int fMax )
+double Msta_SdcCheckDerateInst( MstaSdc *p, int nInst, int fMax, int fRise )
 {
-    double Value;
-    if ( Msta_SdcObjDerateValue( p, 'I', nInst, MSTA_NO_ID, 1, fMax, -1, &Value ) )
-        return Value * ( fMax ? p->KFactorDerateLate : p->KFactorDerateEarly );
-    return Msta_SdcCheckDerate( p, fMax );
+    return Msta_SdcDerate(p,nInst,-1,1,0,fMax,fRise);
 }
 
-double Msta_SdcClockDerateClock( MstaSdc *p, int nClock, int fMax )
+double Msta_SdcClockDerateClock( MstaSdc *p, int nClock, int nInst, int fMax, int fRise )
 {
-    MstaClock *pClock = Msta_SdcClockByIndex( p, nClock );
-    double Value;
-    if ( pClock != NULL &&
-         Msta_SdcObjDerateValue( p, 'C', -1, pClock->Name, 0, fMax, -1, &Value ) )
-        return Value * ( fMax ? p->KFactorDerateLate : p->KFactorDerateEarly );
-    return Msta_SdcClockDerate( p, fMax );
+    return Msta_SdcDerate(p,nInst,nClock,0,1,fMax,fRise);
 }
 
 int Msta_SdcTimingDisabled( MstaSdc *p, int nInst, MstaId FromPin, MstaId ToPin )

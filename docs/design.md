@@ -53,7 +53,7 @@ dofile / -c 命令串
 
 1. **起点分类**（`BuildStartClasses`）。起点是时序单元输出和带 `set_input_delay` 的输入端口。前向传播在汇聚点只保留最差到达；如果出发沿不同、或命中的 `-from` 例外不同的起点混在一起传，留下的那条可能被例外切掉，或因出发沿不同而并非最差，从而盖住别的候选。因此按"各时钟下的出发相位 + 命中的 `-from` 例外组"给起点分类，同类起点共用一遍传播。
 2. **前向传播**（`PropagateData`）。按 (出发时钟, 起点分类, 出发源边沿标签) 各传一遍：max 角用最坏延迟供 setup，min 角用最好延迟供 hold。每根网络按角和边沿记下前驱，报告据此回溯整条路径。没有后向传播，要求时间直接在端点上算。
-3. **端点检查**（`EvaluateCandidatePaths` → `CheckEndpoint` → `CheckEndpointOne` → `CheckEndpointEdge`）。捕获网络上有几个时钟就各查一遍；每个数据边沿、每个捕获源边沿分别查，保留最差。输出端口按每个时钟各当一次捕获时钟。
+3. **端点检查**（`EvaluateCandidatePaths` → `CheckEndpoint` → `CheckEndpointOne` → `CheckEndpointEdge`）。捕获网络上有几个时钟就各查一遍；每个数据边沿、每个捕获源边沿分别查，保留最差。输出端口按每个时钟各当一次捕获时钟。默认 OCV：setup 的 launch/data 取 max、capture 取 min；hold 相反。single/bc_wc 的 capture 与 data 取同角；统一由 `Msta_SdcCaptureCorner` 选择。
 4. **跨时钟边沿对齐**（`FindClockPairEdges`）。出发和捕获时钟周期不同时，在公共周期里找最紧的一对边沿，结果按时钟对缓存，最多搜 1000 拍。
 5. **次优路径**（`CheckEndpointEdge`、`AddPathExclusions`）。`-through`、`-rise_through` 这类例外只切掉命中的那条路径，不切整个端点。某个角的最差路径被切掉时，把命中的 (网络, 边沿) 加入排除表，重新传播，换到下一条路径，直到每个角都找到未被切掉的路径或没有候选。
 6. **附加检查**。`CheckDataChecks` 处理 `set_data_check`，`CheckClockGating` 处理时钟门控检查，它们的最差 slack 在第 7 步计入 WNS/TNS。
@@ -113,7 +113,7 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 - **用例只写标准 SDC**。`scripts/check_sdc.sh` 会扫描 `testcases/` 下所有 `.sdc`，出现方言拼写（`-no_clocks`、`-quiet`、`unset_path_exceptions`、`-reset_path`）或 `set_clock_uncertainty -setup 0.3 -hold 0.1` 这种"值跟在开关后面"的写法时失败。
 - **正确性优先于功能**。没有建模的命令或选项，宁可告警后忽略或作废整条约束，也不给出一个错误的数。无法用用例核对的实现（例如 K 因子缩放）在告警和文档里写明。
 - **代码风格**。每个函数上方用一行注释说明它做什么；注释解释"是什么、怎么算"，不写选型争论。文件头用 `/**CFile**`、`/**CHeader**` 块说明本文件职责。导出函数以 `Msta_<模块>` 开头，类型以 `Msta` 开头；变量前缀 `p` 指针、`n` 个数或下标、`v` 动态数组、`f` 标志、`s_` 文件内静态变量。
-- **测试**。每个用例目录里一个或多个 `.dofile`；`make test` 运行全部 dofile，再执行 `scripts/check_sdc.sh`、`check_edges.sh`、`check_clock_edges.py`、`check_nonunate_clock.py` 中的断言。加用例时同步加断言。
+- **测试**。每个用例目录里一个或多个 `.dofile`；`make test` 运行全部 dofile，再执行 `scripts/check_sdc.sh`、`check_edges.sh`、`check_clock_edges.py`、`check_nonunate_clock.py`、`check_ocv.py` 中的断言。加用例时同步加断言。
 - **参考工具只用于对比**。`make compare` 系列用本地编译的 OpenSTA、OpenTimer 运行同一组输入（见[参考工具对比](compare_sta.md)）。OpenSTA 按 GPL-3.0 发布，不复制它的代码和测试。
 
 ## 5. 模型边界
@@ -128,3 +128,5 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 - **Liberty 时序弧**。未识别的 `timing_type`（例如 `non_seq_setup_rising`）保留为不使用的弧，读库时告警一次，不参与检查。`non_seq_*` 检查是否成立取决于另一个引脚的状态，需要状态分析才能使用。约束表最多二维。
 - **默认传播时钟**。SDC 默认时钟是理想的，miniSTA 默认沿时序弧传播时钟；具体规则见 [SDC 参考的时钟与时间](sdc.md#时钟与时间)。
 - **跨时钟边沿搜索**。两个时钟的公共周期超过 1000 个出发周期时只搜前 1000 拍，并告警。
+
+OCV 的 derate 记录按全局/实例/时钟、路径类别、延迟/检查、early/late、rise/fall 匹配；未设置的 early/late 存为 `MSTA_UNSET`，查找时跳过。时钟弧按实例 → 时钟 → 全局的优先级查询。单元延迟使用输入边沿，检查值使用数据边沿。non_unate 数据弧对两个输入边沿分别计算完整候选（含 slew 查表与 derate）后取最差，不先按未加弧延迟的输入到达筛选。

@@ -1,7 +1,5 @@
-# -rise/-fall 让分对象 derate 只管一个边沿：u2（反相器）上给 -rise 1.5，
-# 只放大上升沿那一段延迟，下降沿仍然用全局的 1.1。
-# out 的负载取 0.01：最差 setup 路径是 f1/Q 下降、u2/Y 上升的那条，报告里能看到
-# u2 上升沿用的是 1.5。
+# 单元延迟的 -rise/-fall 选择弧的输入边沿（与 OpenSTA 一致）。
+# u2 为反相器，输入上升沿对应输出下降沿；其余维度沿用全局 1.1。
 create_clock -name core -period 50.0 [get_ports tau2015_clk]
 set_input_delay -clock core -max 5.0 [get_ports inp1]
 set_input_delay -clock core -min 0.0 [get_ports inp1]

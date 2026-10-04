@@ -58,7 +58,9 @@ get_nets -filter {fanout > 1}
 | `set_ideal_network`、`set_ideal_latency`、`set_ideal_transition` | 理想网络及其延迟、转换时间 |
 | `set_clock_groups` | 异步、逻辑互斥、物理互斥时钟组 |
 | `set_clock_uncertainty` | setup/hold 不确定度，可指定时钟对 |
-| `set_timing_derate` | early/late、clock/data、cell delay/cell check 及分对象系数 |
+| `set_timing_derate` | early/late、clock/data、rise/fall、cell delay/cell check 及分对象系数 |
+| `unset_timing_derate` | 清除全部 timing derate（OpenSTA 扩展） |
+| `set_operating_conditions` | `-analysis_type single\|bc_wc\|on_chip_variation`，max/min 条件与库 |
 | `set_clock_gating_check`、`set_max_time_borrow` | 时钟门控检查与锁存器借时限制 |
 | `set_units` | 时间和电容单位 |
 
@@ -67,6 +69,36 @@ get_nets -filter {fanout > 1}
 与 SDC 标准不同，miniSTA 默认沿 Liberty 时序弧传播时钟（SDC 默认是理想时钟）；给时钟设了网络延迟（不带 `-source` 的 `set_clock_latency`）后按理想时钟处理。时钟源 slew 的取法：理想时钟只取 `set_clock_transition`；显式 `set_propagated_clock` 的时钟只取源端口的 `set_input_transition`；这两种未给出时都为 0。未显式声明的默认传播时钟依次取输入 slew、`set_clock_transition`、默认 slew。
 
 传播时钟的到达时间和摆率按 min/max × rise/fall 分开保存；反相弧交换输入边沿，launch/capture 使用对应的本地时钟边沿。`create_clock -add` 允许同一源网络上有多个时钟；跨时钟检查会查找最紧的出发和捕获边沿对。`set_ideal_network` 标记的网络不累计时序弧延迟；`-no_propagate` 限制理想属性继续传递。
+
+### OCV 分析
+
+默认分析模式为 `on_chip_variation`。也可以只设置模式，不指定工作条件：
+
+```tcl
+set_operating_conditions -analysis_type on_chip_variation
+set_timing_derate -early -clock 0.90
+set_timing_derate -late  -clock 1.10
+set_timing_derate -early -data  0.95
+set_timing_derate -late  -data  1.05
+set_timing_derate -late -cell_check 1.05 [get_cells u_capture]
+```
+
+| 模式 / 检查 | launch 时钟 | 数据延迟 | capture 时钟 | 库检查值 |
+| --- | --- | --- | --- | --- |
+| OCV setup / recovery | late / max | late / max | early / min | late / max |
+| OCV hold / removal | early / min | early / min | late / max | early / min |
+| single / bc_wc setup | late / max | late / max | late / max | late / max |
+| single / bc_wc hold | early / min | early / min | early / min | early / min |
+
+捕获时钟的角同时决定到达时间与查检查表时使用的时钟 slew；输出 delay 的参考时钟和时钟门控检查也使用相同规则。`single` 选择共享工作条件，`bc_wc` 可分别选择 max/min 库；两者均采用同角 launch/capture。显式设置模式后，后续只设置电压、温度或工作条件会保留模式。
+
+各 derate 默认 1.0，clock/data、early/late、rise/fall、cell delay/check 独立保存。未写 early/late 或 clock/data 时分别设置两者；未指定延迟类别时设置 cell delay（线延迟在本工具中为零）。单独 `-cell_check` 不改变单元延迟；同时指定 `-cell_delay -cell_check` 则两者都设置。系数必须大于零。
+
+单元延迟的 `-rise/-fall` 选择**弧输入边沿**，包括 clk-to-Q 的本地时钟边沿；单元检查选择受约束的数据边沿。这与 OpenSTA 一致，反相器的输入上升沿对应输出下降沿。derate 缩放延迟或检查值，不直接缩放 slew。
+
+对象支持 `[get_cells ...]`，以及 miniSTA 已有的 `[get_clocks ...]` 扩展。数据延迟与库检查按实例查；时钟延迟按实例 → 时钟 → 全局查。每个维度只取最后设置的匹配值，实例覆盖全局而非与其相乘；未设置的维度继续沿用默认值。工作条件 K 因子仍与所得 derate 相乘。理想时钟的显式 latency 与 I/O delay 数值不乘 timing derate。
+
+`unset_timing_derate` 清除全局和分对象 timing derate，保留分析模式、工艺角与 K 因子。当前实现为固定系数的基础 OCV；AOCV、POCV/LVF、CPPR、非零 RC/net delay derate 未建模。参考语义见 [OpenSTA 命令文档](https://opensta.readthedocs.io/en/latest/Commands/)。手算与对照用例见 [OCV 用例](../testcases/ocv/README.md)。
 
 ## I/O、负载与工作条件
 

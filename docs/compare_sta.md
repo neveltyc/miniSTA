@@ -10,6 +10,7 @@
 | | `testcases/check_edges`（17 个） | OpenSTA | 逐个比较 setup/hold WNS，容差 0.001 ns |
 | | `testcases/clock_edges`（27 个中的 25 个） | OpenSTA | 逐个比较 setup/hold WNS，容差 0.001 ns；同时核对手算值 |
 | | `testcases/nonunate_clock`（21 个中的 20 个） | OpenSTA | 逐个比较 setup/hold WNS，容差 0.001 ns；同时核对手算值和获胜边沿 |
+| | `testcases/ocv`（27 个中的 26 个） | OpenSTA | setup/hold WNS，容差 0.001 ns；关闭参考工具 CPPR，与固定系数 OCV 手算值核对 |
 | `make compare-sky130` | `testcases/synth_sky130` | OpenSTA | setup/hold WNS，`TOLERANCE_NS`（默认 0.05 ns） |
 | `make compare-real` | `testcases/eth_sky130`、`testcases/e902_sky130` | OpenSTA | `eth_sky130` 断言 setup WNS，`TOLERANCE_NS`（默认 0.25 ns）；`e902_sky130` 只输出结果 |
 

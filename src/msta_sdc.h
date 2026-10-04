@@ -193,16 +193,23 @@ typedef struct {
 } MstaBorrowSdc;
 MstaArrayDefine( MstaBorrowSdc, MstaBorrowSdcArray )
 
+typedef enum {
+    MSTA_ANALYSIS_OCV = 0,
+    MSTA_ANALYSIS_SINGLE,
+    MSTA_ANALYSIS_BC_WC
+} MstaAnalysisType;
+
 /* ---------------- 分对象的 derate（set_timing_derate 带对象时） ---------------- */
-/* 实例（'I'）或时钟（'C'）上的 derate。分对象的值覆盖全局值，
+/* 全局、实例（'I'）或时钟（'C'）上的 derate。分对象的值覆盖全局值，
    不是相乘；同一条命令可以只用其中一个边沿（-rise/-fall）。 */
 typedef struct {
-    char   Kind;              /* 'I' 实例 / 'C' 时钟 */
+    char   Kind;              /* 'G' 全局 / 'I' 实例 / 'C' 时钟 */
     int    Inst;              /* Kind='I' 的实例号 */
     MstaId Name;              /* Kind='C' 的时钟名 */
     int    fRise, fFall;      /* 只对某个边沿生效；都为 0 = 两个边沿都算 */
-    int    fCellCheck;        /* 这一条是 derate 检查值（-cell_check） */
-    double Early, Late;
+    int    fCellCheck;        /* 检查值，而非单元延迟 */
+    int    fClock, fData;     /* 各自独立的路径类别 */
+    double Early, Late;       /* MSTA_UNSET 表示本条没有设置这一侧 */
 } MstaObjDerate;
 MstaArrayDefine( MstaObjDerate, MstaObjDerateArray )
 
@@ -258,12 +265,9 @@ typedef struct MstaSdc {
     MstaInterClockUncArray vInterClockUnc;
     int                nCommandsRead;
     int                nCommandsIgnored;
-    /* set_timing_derate：全局 OCV 系数，默认 1.0。
-       Early 用在 min（hold）角，Late 用在 max（setup）角。 */
-    double             DerateEarly, DerateLate;
-    double             DerateCheckEarly, DerateCheckLate;
-    int                fDerateClock;   /* 1 = derate 时钟路径上的单元延迟 */
-    int                fDerateData;    /* 1 = derate 数据路径上的单元延迟 */
+    /* 默认 OCV；single / bc_wc 使用与数据相同的捕获时钟角。 */
+    MstaAnalysisType   AnalysisType;
+    int                fAnalysisSelected;
     /* 设计规则限制（只有 [current_design] 这种全局写法会记下来）。 */
     double             MaxTransition;   /* ps */
     double             MaxCapacitance;  /* fF */
@@ -322,10 +326,8 @@ int          Msta_SdcPortSourceLatencyIncluded( MstaSdc *p, int nNet, int nClock
                                                 int fOutput, int fMax );
 int          Msta_SdcPortNetworkLatencyIncluded( MstaSdc *p, int nNet, int nClock,
                                                  int fOutput, int fMax );
-/* set_timing_derate 的全局系数：数据路径 / 时钟路径 / 单元检查项。 */
-double       Msta_SdcDataDerate( MstaSdc *p, int fMax );
-double       Msta_SdcClockDerate( MstaSdc *p, int fMax );
-double       Msta_SdcCheckDerate( MstaSdc *p, int fMax );
+/* 捕获时钟角：OCV 时与数据相反，single/bc_wc 时相同。 */
+int          Msta_SdcCaptureCorner( MstaSdc *p, int fSetup );
 /* 一条检查用的不确定度：先找 -from/-to 的专用条目，再退回捕获时钟的标量值。 */
 double       Msta_SdcClockUncertainty( MstaSdc *p, int nLaunchClock, int nCaptureClock,
                                        int fSetup, int fLaunchRises, int fCaptureRises );
@@ -380,10 +382,10 @@ void Msta_SdcClockGatingValue( MstaSdc *p, int nInst, int fMax,
 /* set_max_time_borrow：这个锁存器允许的借时（ps），没设过返回 0。 */
 double Msta_SdcMaxTimeBorrow( MstaSdc *p, int nInst );
 
-/* 分对象 derate：数据路径按实例查（含 clk-to-Q），时钟路径按时钟查；
-   分对象的值覆盖全局值。fRise = 1/0 指定边沿，-1 表示不分边沿。 */
+/* 分对象 derate：数据路径按实例查（含 clk-to-Q），时钟路径先查实例、再查时钟；
+   分对象的值覆盖全局值。fRise = 1/0：延迟弧输入边沿，检查弧数据边沿。 */
 double Msta_SdcDataDerateInst( MstaSdc *p, int nInst, int fMax, int fRise );
-double Msta_SdcCheckDerateInst( MstaSdc *p, int nInst, int fMax );
-double Msta_SdcClockDerateClock( MstaSdc *p, int nClock, int fMax );
+double Msta_SdcCheckDerateInst( MstaSdc *p, int nInst, int fMax, int fRise );
+double Msta_SdcClockDerateClock( MstaSdc *p, int nClock, int nInst, int fMax, int fRise );
 
 #endif /* MSTA_SDC_H */

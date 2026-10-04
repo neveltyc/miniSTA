@@ -543,7 +543,7 @@ namespace eval msta {
         return "\u001eA${form}\u001d[join $parts \u001f]"
     }
 
-    # 本次运行里 get_* / all_* 等返回过的集合标记。emit 靠它准确认出"这个参数就是
+    # 当前 Tcl 解释器中 get_* / all_* 等返回过的集合标记。emit 靠它准确认出"这个参数就是
     # 一个集合"，而不是"一个列表，里面有集合"：标记里可能有空白（例如
     # -of_objects {u1 u2}），单看文本分不清。
     variable aMarkers
@@ -729,7 +729,7 @@ foreach command {
     set_input_transition set_load set_driving_cell set_false_path
     set_multicycle_path set_max_delay set_min_delay set_case_analysis
     set_disable_timing set_units set_logic_zero set_logic_one set_logic_dc
-    group_path
+    group_path unset_timing_derate
 } {
     interp alias {} $command {} msta::emit $command
 }

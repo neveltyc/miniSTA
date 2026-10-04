@@ -1,0 +1,6 @@
+read_liberty ocv.lib
+read_verilog ocv.v
+current_design ocv
+read_sdc baseline.sdc
+report_checks -setup
+report_checks -hold
