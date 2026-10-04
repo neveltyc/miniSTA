@@ -1,0 +1,6 @@
+read_liberty tied_clock.lib
+read_verilog tied_clock.v
+current_design ocv
+read_sdc tied_clock.sdc
+report_checks -setup
+report_checks -hold

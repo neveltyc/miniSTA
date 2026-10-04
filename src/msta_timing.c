@@ -747,7 +747,7 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                 int Label = EffectiveClkRises(p,nClock,pClock->SourceNet,e);
                 pDst->Tags[e] |= 1 << Label;
                 pDst->Arrival[m][e][Label] = ClockArrival(pSrc,m,e,-1) + pClock->SourceLatency[m][Label];
-                pDst->Prev[m][e][Label] = (MstaClockPrev){nMaster,pClock->SourceNet,e,ClockTagSelect(pSrc,m,e,-1)};
+                pDst->Prev[m][e][Label] = (MstaClockPrev){nMaster,pClock->SourceNet,e,ClockTagSelect(pSrc,m,e,-1),-1,-1};
                 if ( pClock->fPropagated ) pDst->Slew[m][e][Label] = ClockSlew(pSrc,m,e,-1);
             }
         pDst->fReached = 1;
@@ -791,7 +791,7 @@ static void SeedGeneratedClock( MstaTiming *p, int nClock, MstaClock *pClock )
                       * Msta_SdcClockDerateClock(p->pSdc,nMaster,pNet->Driver.InstId,m,fClkRise)
                       * AocvDelayFactor(p,pNet->Driver.InstId,nMaster,nClkNet,pClock->SourceNet,m,fClkRise,1)
                     + pClock->SourceLatency[m][Label];
-                pDst->Prev[m][e][Label] = (MstaClockPrev){nMaster,nClkNet,fClkRise,ClockTagSelect(pSrc,m,fClkRise,-1)};
+                pDst->Prev[m][e][Label] = (MstaClockPrev){nMaster,nClkNet,fClkRise,ClockTagSelect(pSrc,m,fClkRise,-1),pNet->Driver.InstId,Msta_CellPinIndexOf(pCell,pReg->ClkPin)};
                 if ( pClock->fPropagated )
                     pDst->Slew[m][e][Label] = ArcSlewEdge(pArc,Slew,m ? LoadMax : LoadMin,e);
             }
@@ -942,7 +942,7 @@ static void PropagateClocks( MstaTiming *p )
                                 if ( !ClockTagValid(pArr,m,e,Label) || (m ? Cand > pArr->Arrival[m][e][Label] : Cand < pArr->Arrival[m][e][Label]) )
                                 {
                                     pArr->Arrival[m][e][Label] = Cand;
-                                    pArr->Prev[m][e][Label] = (MstaClockPrev){c,nIn,i,s};
+                                    pArr->Prev[m][e][Label] = (MstaClockPrev){c,nIn,i,s,pNet->Driver.InstId,k};
                                     pArr->Slew[m][e][Label] = Slew;
                                 }
                                 pArr->Tags[e] |= 1 << Label;
@@ -1819,22 +1819,28 @@ static void KeepWorseCandidate( MstaTiming *p, MstaCheck *pBest, MstaCheck *pCan
 
 /* 时钟路径从叶到根保存实际前驱；生成时钟直接接回主时钟路径。 */
 static int TraceClockPath( MstaTiming *p, MstaClockPrev Point, int fMax,
-                           MstaClockPrev *pPath, int nCap )
+                           MstaClockPath *pPath, int nGuard )
 {
-    int n = 0;
-    while ( Point.Clock >= 0 && Point.Net >= 0 && n < nCap )
+    pPath->nSize = 0;
+    while ( Point.Clock >= 0 && Point.Net >= 0 && pPath->nSize < nGuard )
     {
+        if ( Point.Clock >= Msta_SdcClockCount(p->pSdc) || Point.Net >= p->pDes->vNets.nSize ) break;
         MstaClockArr *pArr = ClockArrAt(p,Point.Clock,Point.Net);
-        if ( !ClockTagValid(pArr,fMax,Point.Edge,Point.Source) ) return 0;
-        pPath[n++] = Point;
-        Point = pArr->Prev[fMax][Point.Edge][Point.Source];
+        if ( !ClockTagValid(pArr,fMax,Point.Edge,Point.Source) ) break;
+        MstaClockPrev Prev=pArr->Prev[fMax][Point.Edge][Point.Source];
+        /* Point 表示当前节点；入弧身份保存在该节点的 Prev 链接上。 */
+        Point.Inst=Prev.Inst;
+        Point.Pin=Prev.Pin;
+        *MstaClockPathAppend(pPath)=Point;
+        Point=Prev;
     }
-    return Point.Net >= 0 ? 0 : n; /* 不截断路径；循环或越界时保守返回 0 */
+    if ( Point.Net >= 0 ) pPath->nSize=0; /* 无效/循环路径不做部分补偿 */
+    return pPath->nSize;
 }
 
 static int SameClockPoint( MstaClockPrev A, MstaClockPrev B, int fTransition )
 {
-    return A.Clock == B.Clock && A.Net == B.Net &&
+    return A.Clock == B.Clock && A.Net == B.Net && A.Inst == B.Inst && A.Pin == B.Pin &&
            (!fTransition || (A.Edge == B.Edge && A.Source == B.Source));
 }
 
@@ -1843,24 +1849,23 @@ static int SameClockPoint( MstaClockPrev A, MstaClockPrev B, int fTransition )
 static double ClockCppr( MstaTiming *p, MstaClockPrev Launch, MstaClockPrev Capture, int fSetup )
 {
     int nCap = p->pDes->vNets.nSize + Msta_SdcClockCount(p->pSdc) + 1;
-    MstaClockPrev *pPaths;
     int nL, nC, nLO, nCO, i;
     double Credit = 0;
     if ( !p->pSdc->fCppr || p->pSdc->AnalysisType != MSTA_ANALYSIS_OCV ||
          Launch.Clock < 0 || Capture.Clock < 0 || Launch.Net < 0 || Capture.Net < 0 ) return 0;
     if ( !Msta_SdcClockByIndex(p->pSdc,Launch.Clock)->fPropagated ||
          !Msta_SdcClockByIndex(p->pSdc,Capture.Clock)->fPropagated ) return 0;
-    pPaths = (MstaClockPrev *)malloc((size_t)nCap * 4 * sizeof(MstaClockPrev));
-    assert(pPaths);
-    MstaClockPrev *L=pPaths, *C=L+nCap, *LO=C+nCap, *CO=LO+nCap;
-    nL=TraceClockPath(p,Launch,fSetup,L,nCap);
-    nC=TraceClockPath(p,Capture,!fSetup,C,nCap);
-    nLO=TraceClockPath(p,Launch,!fSetup,LO,nCap);
-    nCO=TraceClockPath(p,Capture,fSetup,CO,nCap);
+    nL=TraceClockPath(p,Launch,fSetup,&p->vCpprPaths[0],nCap);
+    nC=TraceClockPath(p,Capture,!fSetup,&p->vCpprPaths[1],nCap);
+    nLO=TraceClockPath(p,Launch,!fSetup,&p->vCpprPaths[2],nCap);
+    nCO=TraceClockPath(p,Capture,fSetup,&p->vCpprPaths[3],nCap);
+    MstaClockPrev *L=p->vCpprPaths[0].pData, *C=p->vCpprPaths[1].pData;
+    MstaClockPrev *LO=p->vCpprPaths[2].pData, *CO=p->vCpprPaths[3].pData;
     for ( i=0; i<nL && i<nC && i<nLO && i<nCO; i++ )
     {
         MstaClockPrev A=L[nL-1-i], B=C[nC-1-i];
-        if ( (A.Net!=B.Net || (!p->pSdc->fCpprSamePin && A.Edge!=B.Edge)) ||
+        if ( (A.Net!=B.Net || A.Inst!=B.Inst || A.Pin!=B.Pin ||
+             (!p->pSdc->fCpprSamePin && A.Edge!=B.Edge)) ||
              !SameClockPoint(A,LO[nLO-1-i],1) || !SameClockPoint(B,CO[nCO-1-i],1) ) break;
         /* 与 OpenSTA 的 same_pin 语义一致：取两种转换差值的较小值。 */
         double DA=fabs(ClockArrival(ClockArrAt(p,A.Clock,A.Net),1,A.Edge,A.Source)
@@ -1869,14 +1874,13 @@ static double ClockCppr( MstaTiming *p, MstaClockPrev Launch, MstaClockPrev Capt
                       -ClockArrival(ClockArrAt(p,B.Clock,B.Net),0,B.Edge,B.Source));
         Credit=fmin(DA,DB);
     }
-    free(pPaths);
     return Credit;
 }
 
 static MstaClockPrev LaunchClockPoint( MstaTiming *p, int nStart, int nClock, int fMax, int Source )
 {
     MstaNet *pNet=MstaNetArrayAt(&p->pDes->vNets,nStart);
-    MstaClockPrev Point={nClock,-1,Source,Source};
+    MstaClockPrev Point={nClock,-1,Source,Source,-1,-1};
     if ( pNet->Driver.InstId < 0 )
     {
         Point.Net=Msta_SdcPortReferenceNet(p->pSdc,nStart,nClock,0,fMax);
@@ -1906,7 +1910,7 @@ static double PathCppr( MstaTiming *p, int nStart, int nLaunchClock, int nCaptur
                         int nCaptureNet, int fSetup, int LaunchSource, int CaptureLocal, int CaptureSource )
 {
     return ClockCppr(p,LaunchClockPoint(p,nStart,nLaunchClock,fSetup,LaunchSource),
-                      (MstaClockPrev){nCaptureClock,nCaptureNet,CaptureLocal,CaptureSource},fSetup);
+                      (MstaClockPrev){nCaptureClock,nCaptureNet,CaptureLocal,CaptureSource,-1,-1},fSetup);
 }
 
 /* 检查一个异步控制脚的 recovery 或 removal 端点。
@@ -2538,6 +2542,7 @@ static void FreeNetArrays( MstaTiming *p )
     free(p->pAocvDataBackward); p->pAocvDataBackward=NULL;
     free(p->pAocvClockForward); p->pAocvClockForward=NULL;
     free(p->pAocvClockBackward); p->pAocvClockBackward=NULL;
+    for ( int i=0; i<4; i++ ) MstaClockPathFree(&p->vCpprPaths[i]);
 }
 
 static void FreeChecks( MstaTiming *p )
@@ -2931,6 +2936,8 @@ static void CheckClockGating( MstaTiming *p, int nClock, int nStartClasses )
 /* qsort 的比较函数没有上下文参数，起点签名经这几个静态变量传进去。 */
 static const int *s_pSortSig, *s_pSortSigBeg, *s_pSortSigLen, *s_pSortPhase;
 static int s_nSortClocks;
+static const int *s_pCpprSig, *s_pCpprIndex;
+static int s_nCpprSig;
 
 /* 比较两个起点的签名：先比每个时钟下的出发相位，再比命中的 -from 例外组列表。 */
 static int CompareStartSignature( const void *pA, const void *pB )
@@ -2942,6 +2949,13 @@ static int CompareStartSignature( const void *pA, const void *pB )
         int y = s_pSortPhase[(size_t)b * s_nSortClocks + k];
         if ( x != y ) return x < y ? -1 : 1;
     }
+    if ( s_pCpprSig )
+        for ( k=0; k<s_nCpprSig; k++ )
+        {
+            int x=s_pCpprSig[(size_t)s_pCpprIndex[a]*s_nCpprSig+k];
+            int y=s_pCpprSig[(size_t)s_pCpprIndex[b]*s_nCpprSig+k];
+            if ( x!=y ) return x<y ? -1 : 1;
+        }
     if ( s_pSortSigLen[a] != s_pSortSigLen[b] )
         return s_pSortSigLen[a] < s_pSortSigLen[b] ? -1 : 1;
     for ( k = 0; k < s_pSortSigLen[a]; k++ )
@@ -2968,6 +2982,8 @@ static int BuildStartClasses( MstaTiming *p )
     int *pOrder = (int *)malloc( (size_t)(nNets + 1) * sizeof(int) );
     int *pSig = NULL;
     int *pPhase = (int *)calloc((size_t)nNets * nClocks, sizeof(int));
+    int *pCpprSig=NULL, *pCpprIndex=NULL;
+    int fCppr=p->pSdc->fCppr && p->pSdc->AnalysisType==MSTA_ANALYSIS_OCV;
     const int *pMatches;
     int nSig = 0, nSigCap = 0, nStarts = 0, nClasses = 0, nMatches, n, i, c;
     assert( pGroups && pBeg && pLen && pOrder && pPhase );
@@ -3013,6 +3029,30 @@ static int BuildStartClasses( MstaTiming *p )
                 + 3 * (p->CornerMin.pnLaunchClock[n] == c ? 1 + p->CornerMin.pfLaunchRises[n] : 0);
         }
     }
+    /* 仅合并所有 clock/corner/source 下 launch 时钟节点均相同的起点。
+       这些起点的 CPPR 对同一 capture 恒等，不需要逐寄存器重复传播。 */
+    s_nCpprSig=nClocks*8; /* 2 corners × 2 source tags × (net, local edge) */
+    if ( fCppr && nStarts )
+    {
+        pCpprSig=malloc((size_t)nStarts*s_nCpprSig*sizeof(int));
+        pCpprIndex=calloc((size_t)nNets,sizeof(int));
+        assert(pCpprSig && pCpprIndex);
+        for ( i=0; i<nStarts; i++ )
+        {
+            n=pOrder[i]; pCpprIndex[n]=i;
+            for ( c=0; c<nClocks; c++ )
+            for ( int Max=0; Max<2; Max++ )
+            for ( int Source=0; Source<2; Source++ )
+            {
+                MstaClockPrev P=LaunchClockPoint(p,n,c,Max,Source);
+                if ( !Msta_SdcClockByIndex(p->pSdc,c)->fPropagated || P.Net<0 ||
+                     !ClockTagValid(ClockArrAt(p,c,P.Net),Max,P.Edge,Source) ) P.Net=P.Edge=-1;
+                size_t At=(size_t)i*s_nCpprSig+c*8+Max*4+Source*2;
+                pCpprSig[At]=P.Net; pCpprSig[At+1]=P.Edge;
+            }
+        }
+    }
+    s_pCpprSig=pCpprSig; s_pCpprIndex=pCpprIndex;
     s_pSortPhase = pPhase;
     s_nSortClocks = nClocks;
     s_pSortSig = pSig;
@@ -3021,10 +3061,12 @@ static int BuildStartClasses( MstaTiming *p )
     qsort( pOrder, (size_t)nStarts, sizeof(int), CompareStartSignature );
     for ( i = 0; i < nStarts; i++ )
     {
-        if ( p->pSdc->fCppr || i == 0 || CompareStartSignature( &pOrder[i-1], &pOrder[i] ) != 0 )
+        if ( i == 0 || CompareStartSignature( &pOrder[i-1], &pOrder[i] ) != 0 )
             nClasses++;
         p->pStartClass[pOrder[i]] = nClasses - 1;
     }
+    free(pCpprSig); free(pCpprIndex);
+    s_pCpprSig=NULL; s_pCpprIndex=NULL;
     free( pPhase );
     free( pSig );
     free( pOrder );
@@ -3130,6 +3172,7 @@ int Msta_TimingAnalyze( MstaTiming *p, int fVerbose )
     p->LaunchClockTag = p->CaptureClockTag = -1;
     /* 各时钟、launch 相位和起点例外分类分别传播，汇聚点不会隐藏其他候选。 */
     nStartClasses = BuildStartClasses(p);
+    p->nStartClasses = nStartClasses;
     pfClassUsed = (char *)malloc((size_t)(nStartClasses + 1));
     assert(pfClassUsed);
     pfDataCheckDone = (char *)calloc((size_t)Msta_SdcDataCheckCount(p->pSdc) + 1, 1);

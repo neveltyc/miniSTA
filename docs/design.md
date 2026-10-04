@@ -131,4 +131,4 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 
 OCV 的 derate 记录按全局/实例/时钟、路径类别、延迟/检查、early/late、rise/fall 匹配；未设置的 early/late 存为 `MSTA_UNSET`，查找时跳过。时钟弧按实例 → 时钟 → 全局的优先级查询。单元延迟使用输入边沿，检查值使用数据边沿。non_unate 数据弧对两个输入边沿分别计算完整候选（含 slew 查表与 derate）后取最差，不先按未加弧延迟的输入到达筛选。
 
-AOCV/CPPR 的输入和模型边界见 [variation.md](variation.md)。`msta_aocv.c` 原子读取单调深度曲线并做对象匹配/插值；`msta_aocv_depth.inc` 求完整弧上下文的最短前后向级数。时钟 `Prev[corner][local][source]` 保存实际前驱，CPPR 回溯根前缀并核对反角路径。开启 CPPR 时起点不再按相位/例外签名合并；否则到达排序可能掩盖补偿后更差的起点。
+AOCV/CPPR 的输入和模型边界见 [variation.md](variation.md)。`msta_aocv.c` 原子读取单调深度曲线并做对象匹配/插值；`msta_aocv_depth.inc` 求完整弧上下文的最短前后向级数。时钟 `Prev[corner][local][source]` 保存实际前驱，CPPR 回溯根前缀并核对反角路径。开启 CPPR 时，起点签名还包含各 clock/corner/source 的 launch net/local edge；不同公共时钟上下文分别传播，相同上下文可合并，避免到达排序掩盖补偿后更差的起点。前驱同时保留 related 输入脚身份，CPPR 回溯向量按真实时钟深度增长并复用。

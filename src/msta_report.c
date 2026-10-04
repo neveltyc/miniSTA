@@ -371,7 +371,8 @@ void Msta_ReportSummary( MstaTiming *p, FILE *pFile )
         fprintf( pFile, "\n" );
     }
     if ( p->pSdc->fCppr )
-        fprintf(pFile,"CPPR     : enabled (%s)\n",p->pSdc->fCpprSamePin ? "same_pin" : "same_transition");
+        fprintf(pFile,"CPPR     : enabled (%s), launch contexts %d\n",
+                p->pSdc->fCpprSamePin ? "same_pin" : "same_transition",p->nStartClasses);
     if ( p->pSdc->vAocv.nSize )
         fprintf(pFile,"AOCV     : depth GBA, %s (%d tables)\n",p->pSdc->fAocv ? "enabled" : "disabled",p->pSdc->vAocv.nSize);
     if ( p->pSdc->fAnalysisSelected || p->pSdc->vObjDerate.nSize )

@@ -24,9 +24,14 @@
 | clamp | 超出最后深度后的边界系数 |
 | data / clock | 路径类别独立，未匹配维度为 1 |
 | scalar | 常量 AOCV 表等价于固定 OCV |
+| priority | 设计/库单元/实例同时匹配，并按未设置边沿回退 |
+| data_check | 中间检查两侧纳入数据深度端点；−4.225, 0 |
+| input_ref / output_ref | I/O 参考引脚纳入时钟深度端点 |
 | cell / instance | 库单元、实例优先级与缺省回退 |
 | disabled | 保留表但关闭分析 |
 | reload | 换表后缓存失效，整套替换 |
 | cppr / multiply | 与 CPPR / 固定 derate 联合使用 |
 
 断言脚本另直接测试导入 API：非整数/溢出/零 depth、NaN/Inf/负系数、超范围 early/late、非单调/重复 depth、额外 distance 列、空表、超长行、过多行都会拒绝整文件，旧表与开关保持不变。也检查边界及插值的数值。
+
+坏表回归另覆盖行中、尾部、注释内的 NUL，失败仍保留旧表与开关。

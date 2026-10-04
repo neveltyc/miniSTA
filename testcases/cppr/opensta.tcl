@@ -4,7 +4,9 @@ proc set_cppr {args} {
     set ::sta_crpr_enabled [lindex $args end]
 }
 set sta_crpr_mode same_transition
-read_liberty $here/../aocv/merge.lib
+set lib $here/../aocv/merge.lib
+if {[info exists ::env(CPPR_LIB)]} {set lib $here/$::env(CPPR_LIB)}
+read_liberty $lib
 read_verilog $here/$::env(CPPR_NETLIST).v
 link_design ocv
 read_sdc $here/$::env(CPPR_CASE).sdc

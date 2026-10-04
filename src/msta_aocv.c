@@ -6,7 +6,25 @@
 #include <ctype.h>
 #include <math.h>
 #include <errno.h>
-#include <limits.h>
+
+/* 有界读行，拒绝嵌入 NUL；fgets+strlen 会把 NUL 后的非法列静默隐藏。 */
+static int AocvReadLine( FILE *pIn, char *Line, size_t Capacity )
+{
+    int C=fgetc(pIn);
+    size_t Length=0;
+    Line[0]=0;
+    if ( C==EOF ) return ferror(pIn) ? -1 : 0;
+    do
+    {
+        if ( C==0 || Length+1>=Capacity )
+        { Line[Length]=0; return -1; }
+        Line[Length++]=(char)C;
+        if ( C=='\n' ) break;
+        C=fgetc(pIn);
+    } while ( C!=EOF );
+    Line[Length]=0;
+    return ferror(pIn) ? -1 : 1;
+}
 
 /* scope pattern clock|data rise|fall early|late depth factor */
 int Msta_AocvRead( MstaSdc *p, const char *pFile, int fVerbose )
@@ -20,12 +38,13 @@ int Msta_AocvRead( MstaSdc *p, const char *pFile, int fVerbose )
     double Factor;
     MstaAocvTableArrayInit(&Tables);
     if ( !pIn ) { Msta_Error("read_aocv：无法读取 %s\n",pFile); return 0; }
-    while ( fgets(Line,sizeof(Line),pIn) )
+    int ReadStatus;
+    while ( (ReadStatus=AocvReadLine(pIn,Line,sizeof(Line)))!=0 )
     {
+        nLine++;
+        if ( ReadStatus<0 ) { fOk=0; break; }
         char *Text=Line, *Comment=strchr(Line,'#');
         MstaAocvTable *pT=NULL;
-        nLine++;
-        if ( !strchr(Line,'\n') && !feof(pIn) ) { fOk=0; break; }
         if ( Comment ) *Comment=0;
         while ( isspace((unsigned char)*Text) ) Text++;
         if ( !*Text ) continue;

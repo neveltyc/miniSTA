@@ -19,8 +19,13 @@
 | source | 源延迟 min/max 差；5.6, −2.3 |
 | io_reference | 输出参考引脚，整条共用路径得到补偿；5.6, −2.3 |
 | same_pin / same_transition | 异沿规则 |
+| shared_contexts | 128 个同源寄存器安全合并为 1 个 launch context；−147.6, 1.7 |
+| input_included | source-latency-included 不同的输入保持不同 CPPR 上下文；7.4, −5.3 |
+| tied_clock | 同网不同 related 输入弧不算公共弧；2.4, −5.5 |
 | ranking | 补偿后重新选择最差起点；4.4, −1.5 |
 | path_budget / async_budget | 本工具既有 launch-relative 预算，无 CPPR；3.8, 0 |
 | reconvergent | 早晚角选择不同前驱，保守保留同一物理根前缀；2, −5.9 |
 
-16 个用例中 13 个与 OpenSTA 对照。`path_budget` / `async_budget` 涉及既有预算语义差异，`reconvergent` 涉及更保守的公共前缀定义，只做手算回归。后者无论分岔后再次经过哪些同名网络，都只补偿根 BUF 的 .8 ns。
+19 个用例中 15 个与 OpenSTA 对照。`path_budget` / `async_budget` 涉及既有预算语义差异，`reconvergent` 涉及更保守的公共前缀定义，只做手算回归。后者无论分岔后再次经过哪些同名网络，都只补偿根 BUF 的 .8 ns。
+
+`tied_clock` 使用两条延迟不同、输入接同一网络的时钟弧，early/late 分别选择不同输入脚。本工具严格核对公共入弧，只做手算回归；本地 OpenSTA 同 pin 模型有额外补偿，模型差异见 [CPPR 算法与边界](../../docs/variation.md#cppr-算法与边界)。

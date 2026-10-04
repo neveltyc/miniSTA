@@ -42,6 +42,18 @@ static void BuildAocvGraphDepth( MstaTiming *p, int Clock, int *F, int *B )
                 if ( NetHasClock(p,Clock,Net) ) B[Net]=0;
             }
         }
+        /* I/O reference pins are also actual clock path endpoints. */
+        for ( int Output=0; Output<2; Output++ )
+        {
+            MstaIoDelayArray *Delays=Output ? &p->pSdc->vOutputDelays : &p->pSdc->vInputDelays;
+            for ( i=0; i<Delays->nSize; i++ )
+            {
+                MstaIoDelay *D=MstaIoDelayArrayAt(Delays,i);
+                if ( D->Clock!=MSTA_NO_ID && D->Clock!=pClock->Name ) continue;
+                if ( Msta_IsSet(D->Max) && NetHasClock(p,Clock,D->RefNetMax) ) B[D->RefNetMax]=0;
+                if ( Msta_IsSet(D->Min) && NetHasClock(p,Clock,D->RefNetMin) ) B[D->RefNetMin]=0;
+            }
+        }
         /* Generated-clock source is a conservative boundary for the master graph. */
         for ( i=0; i<Msta_SdcClockCount(p->pSdc); i++ )
         {
@@ -52,6 +64,13 @@ static void BuildAocvGraphDepth( MstaTiming *p, int Clock, int *F, int *B )
     else
     {
         for ( i=0; i<p->vChecks.nSize; i++ ) B[MstaCheckArrayAt(&p->vChecks,i)->nEndNet]=0;
+        for ( i=0; i<Msta_SdcDataCheckCount(p->pSdc); i++ )
+        {
+            MstaDataCheck *D=Msta_SdcDataCheckByIndex(p->pSdc,i);
+            if ( !D->fSetup ) continue; /* hold 数据检查尚未建模 */
+            if ( D->FromNet>=0 ) B[D->FromNet]=0;
+            if ( D->ToNet>=0 ) B[D->ToNet]=0;
+        }
         for ( i=0; i<p->pDes->vInsts.nSize; i++ )
         {
             MstaInst *I=InstAt(p,i);

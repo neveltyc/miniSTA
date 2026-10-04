@@ -95,7 +95,9 @@ static inline MstaCheckCorner *Msta_CheckCorner( MstaCheck *pCheck, int fSetup )
 
 typedef struct {
     int Clock, Net, Edge, Source;
+    int Inst, Pin;            /* 当前节点入弧的实例与 related 输入脚；-1=源/别名 */
 } MstaClockPrev;
+MstaArrayDefine( MstaClockPrev, MstaClockPath )
 
 /* 一个时钟在一根时钟网络上的到达与摆率。边沿分两种：本地沿 = 时钟到这根网络上
    是升还是降；源沿 = 它来自时钟源的哪个沿。经过反相器两者相反，经过 non_unate
@@ -173,6 +175,8 @@ typedef struct MstaTiming {
     MstaPathExclude vPathExclude[MSTA_MAX_PATH_EXCLUDE];
     int     nPathExclude;
     MstaClockPair vClockPairs[MSTA_MAX_CLOCK_PAIRS];
+    MstaClockPath vCpprPaths[4]; /* 按真实时钟深度增长、重复使用 */
+    int     nStartClasses;
     int     nClockPairs;
     int     LaunchClockTag, CaptureClockTag; /* 当前只看哪个时钟源边沿：0=fall，1=rise；-1=两种都看、取最差 */
 

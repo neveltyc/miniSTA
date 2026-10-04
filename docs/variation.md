@@ -28,7 +28,7 @@ set_cppr -mode same_transition 1
 
 ## AOCV 文件
 
-以下是 **miniSTA 原生文本格式**，不是 PrimeTime/Tempus 私有格式的兼容解析器。每行七列，空行和 `#` 注释允许：
+以下是 **miniSTA 原生文本格式**，不是 PrimeTime/Tempus 私有格式的兼容解析器。每行七列，空行和 `#` 注释允许；不允许嵌入 NUL：
 
 ```text
 # scope   pattern  path  transition  corner  depth  factor
@@ -53,7 +53,7 @@ instance  u_data   data  rise        late    1      1.12
 
 ## 深度定义与 GBA 保守性
 
-每个普通网表单元延迟弧计 1 级，clk-to-Q 计 1 级，理想或未建模为零延迟的弧计 0。输入端口为数据起点，触发器输出为新的数据起点；数据端点包括寄存器检查脚、顶层输出和门控使能脚。时钟端点包括寄存器/异步检查/门控时钟脚，生成时钟源作为主时钟的保守边界。
+每个普通网表单元延迟弧计 1 级，clk-to-Q 计 1 级，理想或未建模为零延迟的弧计 0。输入端口为数据起点，触发器输出为新的数据起点；数据端点包括寄存器检查脚、顶层输出、门控使能脚和受支持的 setup `set_data_check` 两侧。时钟端点包括寄存器/异步检查/门控时钟脚，以及有效 I/O delay 的 `reference_pin`，生成时钟源作为主时钟的保守边界。
 
 对每根网络预计算最短前向级数 F 和最短后向级数 B。普通弧 In→Out 的表索引为 **F[In]+1+B[Out]**；clk-to-Q 的数据索引为 **1+B[Q]**。这是经过当前弧的完整结构路径上下文，不是当前弧在路径中的位置。当前图不按各条路径例外重新收缩；包含未约束起点/端点可能使深度更短、结果更保守。未知上下文使用 depth=1。
 
@@ -65,14 +65,14 @@ instance  u_data   data  rise        late    1      1.12
 
 在 OCV 中，setup 用 late launch、early capture，hold 相反。时钟共用的一段电路无法同时是两个角，因此应移除这个人为的 min/max 延迟差。每条获胜时钟路径按 corner、本地沿和源沿保存真实前驱；生成时钟前驱接回主时钟路径。
 
-CPPR 从根开始比较实际 launch/capture 路径，只补偿相同物理网络的公共前缀。`same_transition` 要求本地沿相同；`same_pin` 允许异沿，并取两种转换的 min/max 差的较小值。数据起点按独立实例分别传播，保证 CPPR 改变 slack 排名后仍能保留正确的获胜起点。输出 reference pin、recovery/removal、门控检查使用同一补偿入口。
+CPPR 从根开始比较实际 launch/capture 路径，只补偿相同物理网络及相同实例/related 输入脚入弧的公共前缀。`same_transition` 要求本地沿相同；`same_pin` 允许异沿，并取两种转换的 min/max 差的较小值。起点签名记录每个时钟、corner、source 标签下的 launch 网络与本地沿，并保留相位/路径例外。只有 CPPR 上下文完全相同的起点可合并传播；不同上下文分别传播，保证补偿后仍能选择正确的最差起点。输出 reference pin、recovery/removal、门控检查使用同一补偿入口。
 
 setup 要求时间增加补偿，hold 要求时间减去补偿；到达时间与原始 capture 时间保持原值。路径报告显示 `clock reconvergence pessimism`；WNS/TNS、违例计数和路径选择均使用补偿后的 slack。
 
 - 只在 `on_chip_variation` 模式启用；single/bc_wc、理想时钟、没有物理公共根路径时补偿为零。
-- 若某角与其反角的公共前缀不同，停止在最后可确认的共同点；不会用另一条物理路径的摘要到达冒充反角延迟。分岔后重新汇聚也不会仅因网络再次相交就增加补偿。因此在复杂 clock reconvergence 上可能比 OpenSTA 更保守。
+- 若某角与其反角的公共前缀不同，停止在最后可确认的共同点；不会用另一条物理路径的摘要到达冒充反角延迟。分岔后重新汇聚也不会仅因网络再次相交就增加补偿。同一网络连接单元不同输入脚时，也不会把不同入弧当作公共弧。因此在复杂 clock reconvergence 和同网不同输入弧上可能比 OpenSTA 更保守。
 - miniSTA 现有 `set_max_delay/set_min_delay` 是相对 launch 的绝对预算，替换 capture/check/skew 关系；此时 CPPR 为零。这个既有语义与 OpenSTA 有差别，`path_budget` 只做本工具手算回归。
-- 开启 CPPR 后增加时钟前驱存储并按起点分别传播，运行时间可能增加。当前仍是图分析，不枚举所有时钟路径做 PBA。
+- 开启 CPPR 后增加时钟前驱与上下文签名存储；按上下文分组传播，回溯向量按实际时钟深度增长并复用。不同上下文很多时运行时间仍可能增加。当前仍是图分析，不枚举所有时钟路径做 PBA。
 
 CPPR 模式与差值规则参考 [OpenSTA 变量文档](https://opensta.readthedocs.io/en/latest/Variables/)。
 
