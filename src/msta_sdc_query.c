@@ -248,7 +248,7 @@ int Msta_SdcCaptureCorner( MstaSdc *p, int fSetup )
     return p->AnalysisType == MSTA_ANALYSIS_OCV ? !fSetup : fSetup;
 }
 
-/* 从后往前查当前维度。对象优先于全局；没有设置的维度继续向下查找。 */
+/* 从后往前查当前维度：未设置的 early/late 或另一个边沿不参与匹配。 */
 static int Msta_SdcObjDerateValue( MstaSdc *p, char Kind, int nInst, MstaId Name,
                                   int fCellCheck, int fClock, int fMax, int fRise,
                                   double *pValue )
@@ -256,43 +256,54 @@ static int Msta_SdcObjDerateValue( MstaSdc *p, char Kind, int nInst, MstaId Name
     int i;
     for ( i = p->vObjDerate.nSize - 1; i >= 0; i-- )
     {
-        MstaObjDerate *pRec = MstaObjDerateArrayAt(&p->vObjDerate,i);
+        MstaObjDerate *pRec = MstaObjDerateArrayAt( &p->vObjDerate, i );
         double Value = fMax ? pRec->Late : pRec->Early;
-        if ( pRec->Kind != Kind || pRec->fCellCheck != fCellCheck || !Msta_IsSet(Value) ) continue;
-        if ( fClock ? !pRec->fClock : !pRec->fData ) continue;
-        if ( Kind == 'I' && pRec->Inst != nInst ) continue;
-        if ( Kind == 'C' && pRec->Name != Name ) continue;
-        if ( (fRise && pRec->fFall) || (!fRise && pRec->fRise) ) continue;
+        if ( pRec->Kind != Kind || pRec->fCellCheck != fCellCheck || !Msta_IsSet( Value ) )
+            continue;
+        if ( fClock ? !pRec->fClock : !pRec->fData )
+            continue;
+        if ( Kind == 'I' && pRec->Inst != nInst )
+            continue;
+        if ( Kind == 'C' && pRec->Name != Name )
+            continue;
+        if ( ( fRise && pRec->fFall ) || ( !fRise && pRec->fRise ) )
+            continue;
         *pValue = Value;
         return 1;
     }
     return 0;
 }
 
+/* 按实例 → 时钟 → 全局回退，最后乘以该角的工作条件 K 因子。 */
 static double Msta_SdcDerate( MstaSdc *p, int nInst, int nClock,
                               int fCheck, int fClock, int fMax, int fRise )
 {
     double Value = 1.0;
-    MstaClock *pClock = Msta_SdcClockByIndex(p,nClock);
-    if ( !Msta_SdcObjDerateValue(p,'I',nInst,MSTA_NO_ID,fCheck,fClock,fMax,fRise,&Value) &&
-         !(pClock && Msta_SdcObjDerateValue(p,'C',-1,pClock->Name,fCheck,fClock,fMax,fRise,&Value)) )
-        Msta_SdcObjDerateValue(p,'G',-1,MSTA_NO_ID,fCheck,fClock,fMax,fRise,&Value);
-    return Value * (fMax ? p->KFactorDerateLate : p->KFactorDerateEarly);
+    MstaClock *pClock = Msta_SdcClockByIndex( p, nClock );
+    int fMatched = Msta_SdcObjDerateValue( p, 'I', nInst, MSTA_NO_ID, fCheck, fClock, fMax, fRise, &Value );
+    if ( !fMatched && pClock )
+        fMatched = Msta_SdcObjDerateValue( p, 'C', -1, pClock->Name, fCheck, fClock, fMax, fRise, &Value );
+    if ( !fMatched )
+        Msta_SdcObjDerateValue( p, 'G', -1, MSTA_NO_ID, fCheck, fClock, fMax, fRise, &Value );
+    return Value * ( fMax ? p->KFactorDerateLate : p->KFactorDerateEarly );
 }
 
+/* 数据路径上的单元延迟，包含 clk-to-Q。 */
 double Msta_SdcDataDerateInst( MstaSdc *p, int nInst, int fMax, int fRise )
 {
-    return Msta_SdcDerate(p,nInst,-1,0,0,fMax,fRise);
+    return Msta_SdcDerate( p, nInst, -1, 0, 0, fMax, fRise );
 }
 
+/* 单元检查值按受约束的数据边沿查询。 */
 double Msta_SdcCheckDerateInst( MstaSdc *p, int nInst, int fMax, int fRise )
 {
-    return Msta_SdcDerate(p,nInst,-1,1,0,fMax,fRise);
+    return Msta_SdcDerate( p, nInst, -1, 1, 0, fMax, fRise );
 }
 
+/* 时钟路径先匹配实例，再匹配时钟对象。 */
 double Msta_SdcClockDerateClock( MstaSdc *p, int nClock, int nInst, int fMax, int fRise )
 {
-    return Msta_SdcDerate(p,nInst,nClock,0,1,fMax,fRise);
+    return Msta_SdcDerate( p, nInst, nClock, 0, 1, fMax, fRise );
 }
 
 int Msta_SdcTimingDisabled( MstaSdc *p, int nInst, MstaId FromPin, MstaId ToPin )

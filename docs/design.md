@@ -113,6 +113,7 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 - **用例只写标准 SDC**。`scripts/check_sdc.sh` 会扫描 `testcases/` 下所有 `.sdc`，出现方言拼写（`-no_clocks`、`-quiet`、`unset_path_exceptions`、`-reset_path`）或 `set_clock_uncertainty -setup 0.3 -hold 0.1` 这种"值跟在开关后面"的写法时失败。
 - **正确性优先于功能**。没有建模的命令或选项，宁可告警后忽略或作废整条约束，也不给出一个错误的数。无法用用例核对的实现（例如 K 因子缩放）在告警和文档里写明。
 - **代码风格**。每个函数上方用一行注释说明它做什么；注释解释"是什么、怎么算"，不写选型争论。文件头用 `/**CFile**`、`/**CHeader**` 块说明本文件职责。导出函数以 `Msta_<模块>` 开头，类型以 `Msta` 开头；变量前缀 `p` 指针、`n` 个数或下标、`v` 动态数组、`f` 标志、`s_` 文件内静态变量。
+- **可读性**。局部变量名称应能说明对象或用途；复杂流程按解析、校验、选择、提交等职责组织辅助函数。维度布局优先用具名结构与枚举表达，重复的深度或边沿判断共用查询函数。注释说明职责和必须保留的不变量。
 - **测试**。每个用例目录里一个或多个 `.dofile`；`make test` 运行全部 dofile，再执行 `scripts/check_sdc.sh`、`check_edges.sh`、`check_clock_edges.py`、`check_nonunate_clock.py`、`check_ocv.py`、`check_variation.py` 中的断言。加用例时同步加断言。
 - **参考工具只用于对比**。`make compare` 系列用本地编译的 OpenSTA、OpenTimer 运行同一组输入（见[参考工具对比](compare_sta.md)）。OpenSTA 按 GPL-3.0 发布，不复制它的代码和测试。
 

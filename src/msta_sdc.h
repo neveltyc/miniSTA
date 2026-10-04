@@ -405,7 +405,7 @@ double Msta_SdcCheckDerateInst( MstaSdc *p, int nInst, int fMax, int fRise );
 double Msta_SdcClockDerateClock( MstaSdc *p, int nClock, int nInst, int fMax, int fRise );
 
 int Msta_AocvRead( MstaSdc *p, const char *pFile, int fVerbose );
-double Msta_AocvFactor( MstaSdc *p, MstaInst *pInst, int fClock, int fRise, int fMax, int Depth );
+double Msta_AocvFactor( MstaSdc *p, MstaInst *pInst, int fClock, int fRise, int fMax, int nDepth );
 void Msta_AocvReport( MstaSdc *p, FILE *pOut );
 
 #endif /* MSTA_SDC_H */

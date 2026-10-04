@@ -42,6 +42,9 @@
 #include "msta_net.h"
 #include "msta_sdc.h"
 
+/* 最短结构深度尚不可达，不能据此查询较深的 AOCV 采样点。 */
+#define MSTA_AOCV_DEPTH_INF 1000000000
+
 typedef struct {
     double Slack;
     int LaunchSourceRise, CaptureSourceRise; /* 获胜路径的时钟源边沿标签 */
@@ -98,6 +101,14 @@ typedef struct {
     int Inst, Pin;            /* 当前节点入弧的实例与 related 输入脚；-1=源/别名 */
 } MstaClockPrev;
 MstaArrayDefine( MstaClockPrev, MstaClockPath )
+
+typedef enum {
+    MSTA_CPPR_LAUNCH_PATH,
+    MSTA_CPPR_CAPTURE_PATH,
+    MSTA_CPPR_OPPOSITE_LAUNCH_PATH,
+    MSTA_CPPR_OPPOSITE_CAPTURE_PATH,
+    MSTA_CPPR_PATH_COUNT
+} MstaCpprPathKind;
 
 /* 一个时钟在一根时钟网络上的到达与摆率。边沿分两种：本地沿 = 时钟到这根网络上
    是升还是降；源沿 = 它来自时钟源的哪个沿。经过反相器两者相反，经过 non_unate
@@ -175,7 +186,7 @@ typedef struct MstaTiming {
     MstaPathExclude vPathExclude[MSTA_MAX_PATH_EXCLUDE];
     int     nPathExclude;
     MstaClockPair vClockPairs[MSTA_MAX_CLOCK_PAIRS];
-    MstaClockPath vCpprPaths[4]; /* 按真实时钟深度增长、重复使用 */
+    MstaClockPath vCpprPaths[MSTA_CPPR_PATH_COUNT]; /* 按真实时钟深度增长、重复使用 */
     int     nStartClasses;
     int     nClockPairs;
     int     LaunchClockTag, CaptureClockTag; /* 当前只看哪个时钟源边沿：0=fall，1=rise；-1=两种都看、取最差 */
@@ -237,7 +248,7 @@ MstaPinRef *Msta_TimingNetDriver( MstaTiming *p, int nNet );     /* 无驱动返
 double      Msta_TimingNetArrival( MstaTiming *p, int nNet, int fMax );
 int         Msta_TimingClockNetCount( MstaTiming *p );
 /* 时钟树按时钟分别传播：报告层要按 (时钟, 网络) 取到达与归属。 */
-int         Msta_TimingAocvDataDepth( MstaTiming *p, int In, int Out );
+int         Msta_TimingAocvDataDepth( MstaTiming *p, int nInNet, int nOutNet );
 int         Msta_TimingClockCount( MstaTiming *p );
 int         Msta_TimingNetHasClock( MstaTiming *p, int nClock, int nNet );
 const MstaClockArr *Msta_TimingClockArr( MstaTiming *p, int nClock, int nNet );

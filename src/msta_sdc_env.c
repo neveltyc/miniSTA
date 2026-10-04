@@ -205,29 +205,50 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
         Msta_SdcReject(p,pCmd,"一个对象都没有找到");
 }
 
-void Msta_SdcSetAocvAnalysis( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+/* 分析开关只接受数值 0/1；出错时由统一 SDC 错误通道作废该命令。 */
+static int Msta_SdcReadAnalysisSwitch( MstaSdc *p, MstaSdcCmd *pCmd, int *pfEnabled )
 {
     double Value;
-    if ( !Msta_SdcGetNumber(p,pCmd,"开关",pCmd->pValue,MSTA_SDC_NONNEG,&Value) ) return;
-    if ( Value!=0 && Value!=1 ) { Msta_SdcReject(p,pCmd,"开关必须为 0 或 1"); return; }
-    p->fAocv=(int)Value;
+    if ( !Msta_SdcGetNumber( p, pCmd, "开关", pCmd->pValue, MSTA_SDC_NONNEG, &Value ) )
+        return 0;
+    if ( Value != 0 && Value != 1 )
+    {
+        Msta_SdcReject( p, pCmd, "开关必须为 0 或 1" );
+        return 0;
+    }
+    *pfEnabled = (int)Value;
+    return 1;
+}
+
+/* 改变 AOCV 分析开关，已读入的深度表仍保留。 */
+void Msta_SdcSetAocvAnalysis( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
+{
+    int fEnabled;
+    if ( Msta_SdcReadAnalysisSwitch( p, pCmd, &fEnabled ) )
+        p->fAocv = fEnabled;
 }
 
 /* miniSTA 扩展：set_cppr [-mode same_transition|same_pin] 0|1。 */
 const MstaSdcOpt Msta_SdcCpprOpts[] = {
-    { "-mode", MSTA_SDC_VALUE, 0 }, { NULL, MSTA_SDC_FLAG, 0 }
+    { "-mode", MSTA_SDC_VALUE, 0 },
+    { NULL,    MSTA_SDC_FLAG,  0 }
 };
+
+/* 开关与可选模式都验证成功后才更新 CPPR 配置。 */
 void Msta_SdcSetCppr( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *pCmd )
 {
-    const char *pMode = Msta_SdcOptValue(pCmd,"-mode");
-    double Value;
-    if ( !Msta_SdcGetNumber(p,pCmd,"开关",pCmd->pValue,MSTA_SDC_NONNEG,&Value) ) return;
-    if ( Value != 0 && Value != 1 )
-    { Msta_SdcReject(p,pCmd,"开关必须为 0 或 1"); return; }
-    if ( pMode && strcmp(pMode,"same_pin") && strcmp(pMode,"same_transition") )
-    { Msta_SdcReject(p,pCmd,"未知的 CPPR 模式 \"%s\"",pMode); return; }
-    p->fCppr = (int)Value;
-    if ( pMode ) p->fCpprSamePin = !strcmp(pMode,"same_pin");
+    const char *pMode = Msta_SdcOptValue( pCmd, "-mode" );
+    int fEnabled;
+    if ( !Msta_SdcReadAnalysisSwitch( p, pCmd, &fEnabled ) )
+        return;
+    if ( pMode && strcmp( pMode, "same_pin" ) && strcmp( pMode, "same_transition" ) )
+    {
+        Msta_SdcReject( p, pCmd, "未知的 CPPR 模式 \"%s\"", pMode );
+        return;
+    }
+    p->fCppr = fEnabled;
+    if ( pMode )
+        p->fCpprSamePin = !strcmp( pMode, "same_pin" );
 }
 
 /* OpenSTA 同名命令：移除全部 timing derate，工作条件 K 因子保留。 */

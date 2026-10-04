@@ -253,19 +253,31 @@ static int Msta_CmdReadSdc( MstaApp *pApp, int argc, char **argv )
     return Msta_SdcReadFile( pApp->pSdc, pApp->pNet, pApp->pLib, sPath, !pApp->fQuiet );
 }
 
+/* 成功换表后丢弃旧时序结果；读表失败仍保留旧模型和缓存。 */
 static int Msta_CmdReadAocv( MstaApp *pApp, int argc, char **argv )
 {
     char Path[1024];
-    if ( argc!=2 ) { Msta_Error("用法：read_aocv file.aocv\n"); return 0; }
-    Msta_ResolvePath(argv[1],Path,sizeof(Path));
-    if ( !Msta_AocvRead(pApp->pSdc,Path,!pApp->fQuiet) ) return 0;
-    Msta_AppDropTiming(pApp);
+    if ( argc != 2 )
+    {
+        Msta_Error( "用法：read_aocv file.aocv\n" );
+        return 0;
+    }
+    Msta_ResolvePath( argv[1], Path, sizeof(Path) );
+    if ( !Msta_AocvRead( pApp->pSdc, Path, !pApp->fQuiet ) )
+        return 0;
+    Msta_AppDropTiming( pApp );
     return 1;
 }
+
+/* 表报告只读配置，不触发时序分析。 */
 static int Msta_CmdReportAocv( MstaApp *pApp, int argc, char **argv )
 {
-    if ( argc!=1 ) { Msta_Error("用法：report_aocv\n"); return 0; }
-    Msta_AocvReport(pApp->pSdc,pApp->pOut);
+    if ( argc != 1 )
+    {
+        Msta_Error( "用法：report_aocv\n" );
+        return 0;
+    }
+    Msta_AocvReport( pApp->pSdc, pApp->pOut );
     return 1;
 }
 

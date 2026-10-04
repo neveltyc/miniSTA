@@ -121,9 +121,12 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
                        + LaunchShift;
             Msta_PrintPathPoint( p, pFile, nNets[i], Arr, Prev );
             if ( p->pSdc->fAocv && p->pSdc->vAocv.nSize &&
-                 MstaNetArrayAt(&pDes->vNets,nNets[i])->Driver.InstId>=0 )
-                fprintf(pFile,"    AOCV structural depth: %d\n",
-                        Msta_TimingAocvDataDepth(p,i+1<nCount ? nNets[i+1] : -1,nNets[i]));
+                 MstaNetArrayAt( &pDes->vNets, nNets[i] )->Driver.InstId >= 0 )
+            {
+                int nInNet = i + 1 < nCount ? nNets[i + 1] : -1;
+                fprintf( pFile, "    AOCV structural depth: %d\n",
+                         Msta_TimingAocvDataDepth( p, nInNet, nNets[i] ) );
+            }
             Prev = Arr;
         }
     }
@@ -155,8 +158,8 @@ static void Msta_PrintOnePath( MstaTiming *p, MstaCheck *pCheck, int fSetup, FIL
                  Msta_NsText( pCorner->Uncertainty, sBuf[1], sizeof(sBuf[1]) ) );
     }
     if ( p->pSdc->fCppr )
-        fprintf(pFile,"  %s clock reconvergence pessimism       %10s\n",fSetup ? "+" : "-",
-                 Msta_NsText(fSetup ? pCorner->Cppr : -pCorner->Cppr,sBuf[1],sizeof(sBuf[1])));
+        fprintf( pFile, "  %s clock reconvergence pessimism       %10s\n", fSetup ? "+" : "-",
+                 Msta_NsText( fSetup ? pCorner->Cppr : -pCorner->Cppr, sBuf[1], sizeof(sBuf[1]) ) );
     fprintf( pFile, "data required time                      %10s\n",
              Msta_NsText( Required, sBuf[0], sizeof(sBuf[0]) ) );
     fprintf( pFile, "slack (%s)                               %10s%s\n",
@@ -371,13 +374,14 @@ void Msta_ReportSummary( MstaTiming *p, FILE *pFile )
         fprintf( pFile, "\n" );
     }
     if ( p->pSdc->fCppr )
-        fprintf(pFile,"CPPR     : enabled (%s), launch contexts %d\n",
-                p->pSdc->fCpprSamePin ? "same_pin" : "same_transition",p->nStartClasses);
+        fprintf( pFile, "CPPR     : enabled (%s), launch contexts %d\n",
+                 p->pSdc->fCpprSamePin ? "same_pin" : "same_transition", p->nStartClasses );
     if ( p->pSdc->vAocv.nSize )
-        fprintf(pFile,"AOCV     : depth GBA, %s (%d tables)\n",p->pSdc->fAocv ? "enabled" : "disabled",p->pSdc->vAocv.nSize);
+        fprintf( pFile, "AOCV     : depth GBA, %s (%d tables)\n",
+                 p->pSdc->fAocv ? "enabled" : "disabled", p->pSdc->vAocv.nSize );
     if ( p->pSdc->fAnalysisSelected || p->pSdc->vObjDerate.nSize )
-        fprintf(pFile,"分析模式 : %s\n",p->pSdc->AnalysisType == MSTA_ANALYSIS_OCV ? "on_chip_variation" :
-                p->pSdc->AnalysisType == MSTA_ANALYSIS_SINGLE ? "single" : "bc_wc");
+        fprintf( pFile, "分析模式 : %s\n", p->pSdc->AnalysisType == MSTA_ANALYSIS_OCV ? "on_chip_variation" :
+                 p->pSdc->AnalysisType == MSTA_ANALYSIS_SINGLE ? "single" : "bc_wc" );
     if ( Msta_SdcOpCondSelected(p->pSdc) )
     {
         const char *pName;
