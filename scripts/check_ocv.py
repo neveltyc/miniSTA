@@ -23,7 +23,7 @@ EXPECTED = {
     'invert': (8.65, -.6), 'nonunate': (6.875, -1.1),
     'ideal': (2.8, -1.1), 'generated': (4.8, -3.1),
     'io_reference': (4.8, -3.1), 'clock_object': (5.5, -2.85),
-    'corners_ocv': (4.5, -3.425), 'corners_bc_wc': (7.5, -.425),
+    'implicit_bc_wc': (7.5, -.425), 'corners_ocv': (4.5, -3.425), 'corners_bc_wc': (7.5, -.425),
 }
 
 

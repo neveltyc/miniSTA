@@ -175,7 +175,8 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
     {
         const char *pObj = pCmd->nObjs ? pCmd->ppObjs[i] : NULL;
         MstaClock *pClock = pObj && Msta_SdcKindOf(pObj) == 'C' ? Msta_SdcFindClock(p,pObj) : NULL;
-        int nInst = pObj && !pClock ? Msta_DesignFindInstByName(pDes,pObj) : -1;
+        int nInst = pObj && !pClock && Msta_SdcKindOf(pObj) != 'C'
+                  ? Msta_DesignFindInstByName(pDes,pObj) : -1;
         int Check;
         if ( pObj && !pClock && nInst < 0 )
         {
@@ -373,6 +374,13 @@ void Msta_SdcSetOperatingConditions( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib
     {
         p->AnalysisType = !strcasecmp(pAnalysis,"on_chip_variation") ? MSTA_ANALYSIS_OCV :
                           !strcasecmp(pAnalysis,"single") ? MSTA_ANALYSIS_SINGLE : MSTA_ANALYSIS_BC_WC;
+        p->fAnalysisSelected = 1;
+    }
+    /* 与 OpenSTA 一致：显式 -min 和 -max、未给模式时选择 bc_wc。
+       仅修改电压、温度或单侧条件不会改变已选择的模式。 */
+    else if ( Msta_SdcOptValue(pCmd,"-min") && Msta_SdcOptValue(pCmd,"-max") )
+    {
+        p->AnalysisType = MSTA_ANALYSIS_BC_WC;
         p->fAnalysisSelected = 1;
     }
     if ( fMaxLibrary ) p->OpCondLibraryMax = nLibraryMax;

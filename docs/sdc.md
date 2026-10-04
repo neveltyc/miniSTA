@@ -90,7 +90,7 @@ set_timing_derate -late -cell_check 1.05 [get_cells u_capture]
 | single / bc_wc setup | late / max | late / max | late / max | late / max |
 | single / bc_wc hold | early / min | early / min | early / min | early / min |
 
-捕获时钟的角同时决定到达时间与查检查表时使用的时钟 slew；输出 delay 的参考时钟和时钟门控检查也使用相同规则。`single` 选择共享工作条件，`bc_wc` 可分别选择 max/min 库；两者均采用同角 launch/capture。显式设置模式后，后续只设置电压、温度或工作条件会保留模式。
+捕获时钟的角同时决定到达时间与查检查表时使用的时钟 slew；输出 delay 的参考时钟和时钟门控检查也使用相同规则。`single` 选择共享工作条件，`bc_wc` 可分别选择 max/min 库；两者均采用同角 launch/capture。后续只设置电压、温度或单侧工作条件会保留模式；同时显式给出 `-min/-max`、但省略 `-analysis_type` 时，按 OpenSTA 语义切换到 bc_wc。
 
 各 derate 默认 1.0，clock/data、early/late、rise/fall、cell delay/check 独立保存。未写 early/late 或 clock/data 时分别设置两者；未指定延迟类别时设置 cell delay（线延迟在本工具中为零）。单独 `-cell_check` 不改变单元延迟；同时指定 `-cell_delay -cell_check` 则两者都设置。系数必须大于零。
 

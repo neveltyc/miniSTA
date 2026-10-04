@@ -1,6 +1,6 @@
 set here [file dirname [file normalize [info script]]]
 set sta_crpr_enabled 0
-if {[string match corners_* $::env(OCV_CASE)]} {
+if {[string match corners_* $::env(OCV_CASE)] || $::env(OCV_CASE) eq "implicit_bc_wc"} {
     read_liberty -max $here/ocv.lib
     read_liberty -min $here/fast.lib
 } else {

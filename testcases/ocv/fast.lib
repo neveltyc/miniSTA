@@ -1,4 +1,6 @@
 library (ocv_fast) {
+  default_operating_conditions : nominal;
+  operating_conditions (nominal) { process : 1; voltage : 1; temperature : 25; }
   delay_model : table_lookup;
   time_unit : "1ns";
   capacitive_load_unit (1,pf);

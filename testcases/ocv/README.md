@@ -1,6 +1,6 @@
 # 基础 OCV 回归
 
-`make test` 运行本目录的 27 个用例，并由 `scripts/check_ocv.py` 断言手算 slack。`make compare` 用本地 OpenSTA 对照其中 26 个用例，容差 0.001 ns；`clock_object` 是 miniSTA 的时钟对象 derate 扩展，OpenSTA 不接受这种对象，只做手算断言。OpenSTA 对照关闭 `sta_crpr_enabled`，因为 miniSTA 当前不计算 CPPR。
+`make test` 运行本目录的 28 个用例，并由 `scripts/check_ocv.py` 断言手算 slack。`make compare` 用本地 OpenSTA 对照其中 27 个用例，容差 0.001 ns；`clock_object` 是 miniSTA 的时钟对象 derate 扩展，OpenSTA 不接受这种对象，只做手算断言。OpenSTA 对照关闭 `sta_crpr_enabled`，因为 miniSTA 当前不计算 CPPR。
 
 直接运行：
 
@@ -40,6 +40,6 @@ python3 scripts/check_ocv.py build/msta vendor/opensta-build/sta build/compare_s
 | nonunate | 两个输入边沿的完整候选比较 |
 | ideal / generated / io_reference | 理想 latency 不缩放、生成时钟继承、输出参考引脚 |
 | clock_object | miniSTA 已有的时钟对象扩展 |
-| corners_ocv / corners_bc_wc | early/late Liberty 库选择与 capture 角 |
+| corners_ocv / corners_bc_wc / implicit_bc_wc | early/late Liberty 库选择与 capture 角 |
 
 参考 [OpenSTA 文档](https://opensta.readthedocs.io/en/latest/Commands/) 与本地 OpenSTA 的 `sdc/Sdc.tcl`、`sdc/Sdc.cc`、`search/Search.cc` 中的语义。支持范围与边界见 [SDC 参考](../../docs/sdc.md#ocv-分析)。
