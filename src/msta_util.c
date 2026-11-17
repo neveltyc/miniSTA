@@ -19,7 +19,7 @@ int Msta_SplitArgs( char *pLine, char **argv, int nMaxArgs )
     char *p = pLine;
     while ( *p && argc < nMaxArgs )
     {
-        while ( *p == ' ' || *p == '\t' || *p == '\r' ) p++;
+        while ( *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' ) p++;
         if ( *p == 0 || *p == '#' )
             break;
         if ( *p == '"' )
@@ -32,9 +32,13 @@ int Msta_SplitArgs( char *pLine, char **argv, int nMaxArgs )
         else
         {
             char *pStart = p;
-            while ( *p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '#' ) p++;
+            int fComment;
+            while ( *p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && *p != '#' ) p++;
+            fComment = ( *p == '#' );
             if ( *p ) *p++ = 0;
             argv[argc++] = pStart;
+            if ( fComment )
+                break;
         }
     }
     return argc;

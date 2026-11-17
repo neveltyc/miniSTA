@@ -17,6 +17,7 @@
 
 #include "msta_types.h"
 #include "msta_lib.h"
+#include "msta_plugin.h"
 
 struct MstaDesign;
 struct MstaSdc;
@@ -27,6 +28,9 @@ typedef struct {
     struct MstaDesign *pNet;
     struct MstaSdc    *pSdc;
     struct MstaTiming *pTime;
+    MstaPluginSet      Plugins;
+    MstaWireOps        CustomWireOps;
+    MstaElmoreConfig   ElmoreCfg;
     FILE              *pOut;      /* 报告输出，默认 stdout */
     int                fQuiet;    /* 少打印 */
 } MstaApp;

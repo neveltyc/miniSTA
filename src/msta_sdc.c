@@ -82,6 +82,8 @@ char *Msta_SdcArena( const char *pFormat, ... )
 
 static void Msta_SdcArgListPush( MstaSdcArgList *pL, char *pText, char Kind, char fQuiet )
 {
+    if ( Kind != 0 || fQuiet != 0 )
+        pText = Msta_SdcArena( "%s", pText );
     if ( pL->nSize == pL->nCap )
     {
         pL->nCap = pL->nCap ? 2 * pL->nCap : 64;
@@ -208,21 +210,47 @@ static char *Msta_SdcNextOption( char **ppText )
     return p;
 }
 
-/* 集合减法（remove_from_collection）：minus= 后面跟名字或模式，命中就跳过。
-   一条集合标记里可能挂多条，按 \x1f 分隔。 */
-#define MSTA_SDC_MAX_MINUS 64
-static int Msta_SdcCollectMinus( char *pOptions, const char **pMinus )
+/* 集合减法与 -of_objects 解析：按 '=' 数目动态分配数组，同时收齐 minus= 与 of=（不设条数上限）。 */
+static int Msta_SdcCountChar( const char *pText, char c )
 {
     int n = 0;
+    if ( pText == NULL )
+        return 0;
+    for ( ; *pText; pText++ )
+        if ( *pText == c )
+            n++;
+    return n;
+}
+
+static void Msta_SdcParseMarkerOptions( char *pOptions, const char ***pppMinus, int *pnMinus,
+                                        char **ppOf )
+{
+    int nCap = Msta_SdcCountChar( pOptions, '=' );
+    const char **ppMinus = nCap > 0
+        ? (const char **)Msta_SdcArenaKeep( malloc( (size_t)nCap * sizeof(const char *) ) )
+        : NULL;
     char *pText = pOptions;
+    int n = 0;
+    assert( nCap == 0 || ppMinus != NULL );
+    if ( ppOf ) *ppOf = NULL;
     while ( pText != NULL )
     {
         char *pOpt = Msta_SdcNextOption( &pText );
         if ( pOpt == NULL )
             break;
-        if ( !strncmp(pOpt,"minus=",6) && n < MSTA_SDC_MAX_MINUS )
-            pMinus[n++] = pOpt + 6;
+        if ( !strncmp(pOpt,"minus=",6) && n < nCap )
+            ppMinus[n++] = pOpt + 6;
+        else if ( ppOf != NULL && !strncmp(pOpt,"of=",3) )
+            *ppOf = pOpt + 3;
     }
+    *pppMinus = ppMinus;
+    *pnMinus  = n;
+}
+
+static int Msta_SdcCollectMinus( char *pOptions, const char ***pppMinus )
+{
+    int n = 0;
+    Msta_SdcParseMarkerOptions( pOptions, pppMinus, &n, NULL );
     return n;
 }
 
@@ -252,6 +280,8 @@ static int Msta_SdcPortHasClockDelay( MstaSdc *p, int nNet, char *pClock, int fO
     MstaIoDelayArray *pArr = fOutput ? &p->vOutputDelays : &p->vInputDelays;
     MstaClock *pNamed = pClock ? Msta_SdcFindClock(p,pClock) : NULL;
     int i;
+    if ( pClock != NULL && pNamed == NULL )
+        return 0;
     for ( i = 0; i < pArr->nSize; i++ )
     {
         MstaIoDelay *pEntry = MstaIoDelayArrayAt(pArr,i);
@@ -287,8 +317,8 @@ static int Msta_SdcClockArcSense( MstaDesign *pDes, MstaInst *pInst, MstaArc *pA
    （+1/-1，反相缓冲器与 set_clock_sense 都会翻）。规则与 msta_timing.c 的
    AttachClockIds 一致：从时钟源网络沿组合弧前推，遇到时序单元、-stop_propagation
    或本时钟派生的生成时钟源就停（生成时钟源不算在树上）。调用方负责把两个数组清零。 */
-static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *pClock,
-                                   char *pfOnNet, char *pPolarity )
+void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *pClock,
+                            char *pfOnNet, char *pPolarity )
 {
     int nNets = pDes->vNets.nSize;
     int *pQueue, nQueue = 0, q;
@@ -306,6 +336,8 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
     {
         MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, pQueue[q] );
         int i, Stop = 0, c = Msta_SdcClockIndexOf(pSdc,pClock->Name);
+        if ( pQueue[q] != pClock->SourceNet && ( pNet->fConst || pNet->fCaseValue ) )
+            continue;
         (void)Msta_SdcClockSense(pSdc,pQueue[q],c,&Stop);
         for ( i = 0; i < pSdc->vClocks.nSize; i++ )
             if ( pSdc->vClocks.pData[i].MasterClock == pClock->Name &&
@@ -323,28 +355,39 @@ static void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *p
             for ( k = 0; k < pLoad->nPins && k < pCell->vPins.nSize; k++ )
             {
                 MstaPin *pOutPin = MstaPinArrayAt( &pCell->vPins, k );
-                MstaArc *pArc;
-                int nOut = pLoad->pNets[k];
-                int Pol = pPolarity[pQueue[q]];
-                int nSet, fStop = 0, Sense, Joined;
+                MstaNet *pOutNet;
+                int nOut = pLoad->pNets[k], a;
+                int PolSum = 0, fArcHit = 0;
+                int nSet, fStop = 0, Joined;
                 if ( pOutPin->Dir != MSTA_DIR_OUTPUT || nOut < 0 )
                     continue;
-                pArc = Msta_CellCombArc( pCell, pInPin->Name, pOutPin->Name );
-                if ( pArc == NULL )
+                pOutNet = MstaNetArrayAt( &pDes->vNets, nOut );
+                if ( pOutNet->fConst || pOutNet->fCaseValue )
                     continue;
                 if ( Msta_SdcTimingDisabled( pSdc, pRef->InstId, pInPin->Name, pOutPin->Name ) )
                     continue;
-                Sense = Msta_SdcClockArcSense(pDes,pLoad,pArc);
-                if ( Sense < 0 ) continue;
-                if ( Sense == MSTA_SENSE_NEGATIVE ) Pol = -Pol;
-                else if ( Sense == MSTA_SENSE_NONUNATE ) Pol = 0;
+                for ( a = 0; a < pCell->vArcs.nSize; a++ )
+                {
+                    MstaArc *pArc = MstaArcArrayAt( &pCell->vArcs, a );
+                    int Pol = pPolarity[pQueue[q]], Sense;
+                    if ( pArc->InPin != pInPin->Name || pArc->OutPin != pOutPin->Name ||
+                         !Msta_ArcIsComb( pCell, pArc ) )
+                        continue;
+                    Sense = Msta_SdcClockArcSense( pDes, pLoad, pArc );
+                    if ( Sense < 0 ) continue;
+                    if ( Sense == MSTA_SENSE_NEGATIVE ) Pol = -Pol;
+                    else if ( Sense == MSTA_SENSE_NONUNATE ) Pol = 0;
+                    if ( !fArcHit ) { PolSum = Pol; fArcHit = 1; }
+                    else if ( PolSum != Pol ) PolSum = 0;
+                }
+                if ( !fArcHit ) continue;
                 nSet = Msta_SdcClockSense( pSdc, nOut, Msta_SdcClockIndexOf(pSdc,pClock->Name),
                                            &fStop );
                 if ( nSet != 0 )
-                    Pol = nSet;
+                    PolSum = nSet;
                 /* 合并极性：set_clock_sense 的显式值优先；否则首次到达取本路极性，
                    另一条路径带着不同极性再到达时记 0（non-unate，正反相都可能）。 */
-                Joined = nSet ? nSet : (!pfOnNet[nOut] || pPolarity[nOut] == Pol ? Pol : 0);
+                Joined = nSet ? nSet : (!pfOnNet[nOut] || pPolarity[nOut] == PolSum ? PolSum : 0);
                 if ( !pfOnNet[nOut] || pPolarity[nOut] != Joined )
                 {
                     pfOnNet[nOut] = 1;
@@ -395,11 +438,9 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
 {
     char *pOptions = strchr(pSpec,'\035');
     int i, j;
-    const char *pMinus[MSTA_SDC_MAX_MINUS];
+    const char **pMinus = NULL;
     int nMinus = 0;
     if ( pOptions ) *pOptions++ = 0;
-    if ( pOptions != NULL )
-        nMinus = Msta_SdcCollectMinus( pOptions, pMinus );
 
     if ( !strcmp(pSpec,"design") )
     {
@@ -408,6 +449,8 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
     }
     if ( !strcmp(pSpec,"all_clocks") )
     {
+        if ( pOptions != NULL )
+            nMinus = Msta_SdcCollectMinus( pOptions, &pMinus );
         for ( j = 0; j < pSdc->vClocks.nSize; j++ )
         {
             if ( Msta_SdcIsMinus(Msta_NameStr(Msta_SdcClockByIndex(pSdc,j)->Name),pMinus,nMinus) )
@@ -421,17 +464,28 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
     {
         int fInput = !strcmp(pSpec,"inputs");
         int fNoClocks = 0;
-        char *pClock = NULL, *pOpt = pOptions;
-        while ( (pOpt = Msta_SdcNextOption(&pOptions)) != NULL )
+        char *pClock = NULL, *pOpt;
+        if ( pOptions != NULL )
         {
-            if ( !strncmp(pOpt,"minus=",6) ) continue;      /* 集合减法，见上面 */
-            if ( !strncmp(pOpt,"clock=",6) ) pClock = pOpt + 6;
-            else if ( !strcmp(pOpt,"no_clocks") ) fNoClocks = 1;
-            else
+            int nCap = Msta_SdcCountChar( pOptions, '=' );
+            pMinus = nCap > 0
+                   ? (const char **)Msta_SdcArenaKeep( malloc( (size_t)nCap * sizeof(const char *) ) )
+                   : NULL;
+            while ( (pOpt = Msta_SdcNextOption(&pOptions)) != NULL )
             {
-                /* -level_sensitive / -edge_triggered 会筛掉一部分端口，没建模就不能当没看见。 */
-                Msta_WarnOnce( "sdc：all_%s 的选项 \"%s\" 未建模；跳过这条命令", pSpec, pOpt );
-                return -1;
+                if ( !strncmp(pOpt,"minus=",6) )
+                {
+                    if ( pMinus != NULL && nMinus < nCap )
+                        pMinus[nMinus++] = pOpt + 6;
+                }
+                else if ( !strncmp(pOpt,"clock=",6) ) pClock = pOpt + 6;
+                else if ( !strcmp(pOpt,"no_clocks") ) fNoClocks = 1;
+                else
+                {
+                    /* -level_sensitive / -edge_triggered 会筛掉一部分端口，没建模就不能当没看见。 */
+                    Msta_WarnOnce( "sdc：all_%s 的选项 \"%s\" 未建模；跳过这条命令", pSpec, pOpt );
+                    return -1;
+                }
             }
         }
         for ( j = 0; j < pDes->vNets.nSize; j++ )
@@ -452,25 +506,36 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
     if ( !strcmp(pSpec,"registers") )
     {
         enum { REG_CELLS, REG_DATA, REG_CLOCK, REG_ASYNC, REG_OUTPUT } Kind = REG_CELLS;
-        char *pOpt = pOptions;
+        char *pOpt;
         const char *pFilterClock = NULL;
         int fRise = 0, fFall = 0, fFiltered = 0;
         char *pfOnNet = NULL, *pPolarity = NULL;
-        while ( (pOpt = Msta_SdcNextOption(&pOptions)) != NULL )
+        if ( pOptions != NULL )
         {
-            if      ( !strncmp(pOpt,"minus=",6) )   continue;
-            else if ( !strcmp(pOpt,"cells") )       Kind = REG_CELLS;
-            else if ( !strcmp(pOpt,"data_pins") )   Kind = REG_DATA;
-            else if ( !strcmp(pOpt,"clock_pins") )  Kind = REG_CLOCK;
-            else if ( !strcmp(pOpt,"async_pins") )  Kind = REG_ASYNC;
-            else if ( !strcmp(pOpt,"output_pins") ) Kind = REG_OUTPUT;
-            else if ( !strncmp(pOpt,"clock=",6) )      pFilterClock = pOpt + 6;
-            else if ( !strncmp(pOpt,"rise_clock=",11) ) { pFilterClock = pOpt + 11; fRise = 1; }
-            else if ( !strncmp(pOpt,"fall_clock=",11) ) { pFilterClock = pOpt + 11; fFall = 1; }
-            else
+            int nCap = Msta_SdcCountChar( pOptions, '=' );
+            pMinus = nCap > 0
+                   ? (const char **)Msta_SdcArenaKeep( malloc( (size_t)nCap * sizeof(const char *) ) )
+                   : NULL;
+            while ( (pOpt = Msta_SdcNextOption(&pOptions)) != NULL )
             {
-                Msta_WarnOnce( "sdc：all_registers 的选项 \"%s\" 未建模；跳过这条命令", pOpt );
-                return -1;
+                if ( !strncmp(pOpt,"minus=",6) )
+                {
+                    if ( pMinus != NULL && nMinus < nCap )
+                        pMinus[nMinus++] = pOpt + 6;
+                }
+                else if ( !strcmp(pOpt,"cells") )       Kind = REG_CELLS;
+                else if ( !strcmp(pOpt,"data_pins") )   Kind = REG_DATA;
+                else if ( !strcmp(pOpt,"clock_pins") )  Kind = REG_CLOCK;
+                else if ( !strcmp(pOpt,"async_pins") )  Kind = REG_ASYNC;
+                else if ( !strcmp(pOpt,"output_pins") ) Kind = REG_OUTPUT;
+                else if ( !strncmp(pOpt,"clock=",6) )      pFilterClock = pOpt + 6;
+                else if ( !strncmp(pOpt,"rise_clock=",11) ) { pFilterClock = pOpt + 11; fRise = 1; }
+                else if ( !strncmp(pOpt,"fall_clock=",11) ) { pFilterClock = pOpt + 11; fFall = 1; }
+                else
+                {
+                    Msta_WarnOnce( "sdc：all_registers 的选项 \"%s\" 未建模；跳过这条命令", pOpt );
+                    return -1;
+                }
             }
         }
         /* -clock/-rise_clock/-fall_clock：按时钟树过滤（时钟树在解析期就能走出来，
@@ -514,7 +579,9 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
                     MstaAsyncCheck *pAsync = MstaAsyncCheckArrayAt( &pCell->vAsync, k );
                     char *pName = Msta_SdcArena( "%s/%s", Msta_InstName(pDes,i),
                                                  Msta_NameStr(pAsync->AsyncPin) );
-                    Msta_SdcArgListPush( pL, pName, 'N', 0 );
+                    if ( Msta_SdcIsMinus( pName, pMinus, nMinus ) )
+                        continue;
+                    Msta_SdcArgListPush( pL, pName, 'G', 0 );
                 }
                 continue;
             }
@@ -526,7 +593,9 @@ static int Msta_SdcExpandAll( MstaSdc *pSdc, MstaDesign *pDes, char *pSpec,
                                                    : pReg->QPin;
                 char *pName = Msta_SdcArena( "%s/%s", Msta_InstName(pDes,i),
                                              Msta_NameStr(Pin) );
-                Msta_SdcArgListPush( pL, pName, 'N', 0 );
+                if ( Msta_SdcIsMinus( pName, pMinus, nMinus ) )
+                    continue;
+                Msta_SdcArgListPush( pL, pName, 'G', 0 );
             }
         }
         free( pfOnNet );
@@ -586,14 +655,12 @@ static int Msta_SdcExpandParents( MstaSdc *pSdc, MstaDesign *pDes, char *pMarker
         char *pPart;
         if ( pOptions != NULL )
         {
-            /* 父集合自己也是 -of_objects（或者带 minus=）：递归展开它。 */
-            char *pOf = NULL, *pOpt;
-            const char *pMinusParent[MSTA_SDC_MAX_MINUS];
-            int nMinusParent;
+            /* 父集合自己也是 -of_objects（或者带 minus=）：单遍扫描选项并递归展开。 */
+            char *pOf = NULL;
+            const char **pMinusParent = NULL;
+            int nMinusParent = 0;
             *pOptions++ = 0;
-            nMinusParent = Msta_SdcCollectMinus( pOptions, pMinusParent );
-            for ( pOpt = strtok(pOptions,"\037"); pOpt != NULL; pOpt = strtok(NULL,"\037") )
-                if ( !strncmp(pOpt,"of=",3) ) pOf = pOpt + 3;
+            Msta_SdcParseMarkerOptions( pOptions, &pMinusParent, &nMinusParent, &pOf );
             if ( pOf != NULL )
             {
                 Msta_SdcUnescapeMarker( pOf );
@@ -892,7 +959,7 @@ static int Msta_SdcExpandWord( MJsonValue *pRecord, char *pText, MstaDesign *pDe
         char Kind = (char)toupper( (unsigned char)pText[1] );
         int  fQuiet = islower( (unsigned char)pText[1] ) ? 1 : 0;
         char *pPart = pText + 2;
-        const char *pMinus[MSTA_SDC_MAX_MINUS];
+        const char **pMinus = NULL;
         int nMinus = 0;
         char *pOf = NULL;
         /* P/N/C/I/G 是网表对象（G 是引脚，与网络分开以便 -of_objects 推关系），
@@ -901,16 +968,12 @@ static int Msta_SdcExpandWord( MJsonValue *pRecord, char *pText, MstaDesign *pDe
              Kind != 'L' && Kind != 'B' && Kind != 'Y' )
             return -1;
         {
-            /* 选项区在 \x1d 之后（minus= 与 of= 都在这里）。 */
+            /* 选项区在 \x1d 之后（minus= 与 of= 都在这里），单遍读取。 */
             char *pOptions = strchr( pPart, '\035' );
             if ( pOptions != NULL )
             {
-                char *pOpt;
                 *pOptions++ = 0;
-                nMinus = Msta_SdcCollectMinus( pOptions, pMinus );
-                for ( pOpt = strtok(pOptions,"\037"); pOpt != NULL; pOpt = strtok(NULL,"\037") )
-                    if ( !strncmp(pOpt,"of=",3) )
-                        pOf = pOpt + 3;
+                Msta_SdcParseMarkerOptions( pOptions, &pMinus, &nMinus, &pOf );
             }
         }
         /* -of_objects：按对象关系现推（父对象本身可能还是集合）。 */
@@ -938,12 +1001,64 @@ static int Msta_SdcExpandWord( MJsonValue *pRecord, char *pText, MstaDesign *pDe
                 {
                     char *pName = (char *)Msta_NameStr(Msta_SdcClockByIndex(pSdc,j)->Name);
                     if ( !Msta_SdcGlobMatch(pPart,pName) ) continue;
+                    nMatched++;
                     if ( Msta_SdcIsMinus(pName,pMinus,nMinus) ) continue;
                     Msta_SdcArgListPush( &s_Args, pName, Kind, (char)fQuiet );
-                    nMatched++;
                 }
                 if ( nMatched == 0 && !fQuiet )
                     Msta_WarnOnce("sdc：get_clocks 的模式 \"%s\" 没有匹配到任何时钟",pPart);
+            }
+            else if ( nMinus > 0 && strpbrk(pPart,"*?") &&
+                      ( Kind == 'P' || Kind == 'N' || Kind == 'I' || Kind == 'G' ) )
+            {
+                int j, k, nMatched = 0;
+                if ( Kind == 'P' || Kind == 'N' )
+                {
+                    for ( j = 0; j < pDes->vNets.nSize; j++ )
+                    {
+                        MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, j );
+                        const char *pName = Msta_NetName( pDes, j );
+                        if ( Kind == 'P' && !pNet->fTopPort ) continue;
+                        if ( pNet->fConst ) continue;
+                        if ( !Msta_SdcGlobMatch( pPart, pName ) ) continue;
+                        nMatched++;
+                        if ( Msta_SdcIsMinus( pName, pMinus, nMinus ) ) continue;
+                        Msta_SdcArgListPush( &s_Args, (char *)pName, Kind, (char)fQuiet );
+                    }
+                }
+                else if ( Kind == 'I' )
+                {
+                    for ( j = 0; j < pDes->vInsts.nSize; j++ )
+                    {
+                        const char *pName = Msta_InstName( pDes, j );
+                        if ( !Msta_SdcGlobMatch( pPart, pName ) ) continue;
+                        nMatched++;
+                        if ( Msta_SdcIsMinus( pName, pMinus, nMinus ) ) continue;
+                        Msta_SdcArgListPush( &s_Args, (char *)pName, Kind, (char)fQuiet );
+                    }
+                }
+                else
+                {
+                    for ( j = 0; j < pDes->vInsts.nSize; j++ )
+                    {
+                        MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, j );
+                        const char *pInstName = Msta_InstName( pDes, j );
+                        for ( k = 0; k < pInst->nPins && k < pInst->pCell->vPins.nSize; k++ )
+                        {
+                            char *pPinName;
+                            if ( pInst->pNets[k] < 0 ) continue;
+                            pPinName = Msta_SdcArena( "%s/%s", pInstName,
+                                Msta_NameStr( MstaPinArrayAt(&pInst->pCell->vPins,k)->Name ) );
+                            if ( !Msta_SdcGlobMatch( pPart, pPinName ) ) continue;
+                            nMatched++;
+                            if ( Msta_SdcIsMinus( pPinName, pMinus, nMinus ) ) continue;
+                            Msta_SdcArgListPush( &s_Args, pPinName, Kind, (char)fQuiet );
+                        }
+                    }
+                }
+                if ( nMatched == 0 && !fQuiet )
+                    Msta_WarnOnce("sdc：%s 的模式 \"%s\" 没有匹配到任何对象",
+                                  Msta_SdcCollectionName(Kind), pPart);
             }
             else
             {
@@ -1089,9 +1204,11 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     MJsonValue *pCommands;
     pid_t Pid;
     int fd, fdIndex, fdDesign, fHaveIndex = 0, fHaveDesign = 0, Status, i;
+    int nIgnoredBefore = p->nCommandsIgnored;
 
-    /* SDC 里不写 set_units 时，默认单位取库的单位。 */
+    /* SDC 里不写 set_units 时，默认单位取库的单位（每个文件各自从库单位起步）。 */
     p->TimeScalePs = pLib ? pLib->TimeScale : 1000.0;
+    p->CapScaleFf  = 0.0;
 
     fd = mkstemp( sJsonPath );
     if ( fd < 0 )
@@ -1100,14 +1217,13 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
         return 0;
     }
     close( fd );
-    /* -filter 要在 Tcl 侧按属性筛对象，所以只有用到它时才导出网表索引
-       （大设计上这份文件不小，平时不写）。 */
+    /* -filter 要在 Tcl 侧按属性筛对象（source 进来的子文件也可能用到 -filter）。 */
     {
         size_t nSdcSize = 0;
         char *pSdcText = Msta_FileReadAll( pFileName, &nSdcSize );
         if ( pSdcText != NULL )
         {
-            if ( strstr( pSdcText, "-filter" ) != NULL )
+            if ( strstr( pSdcText, "-filter" ) != NULL || strstr( pSdcText, "source" ) != NULL )
             {
                 fdDesign = mkstemp( sDesignPath );
                 if ( fdDesign >= 0 )
@@ -1177,9 +1293,9 @@ int Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
     }
     Msta_SdcScratchFree();
     Msta_JsonFree( pCommands );
-    if ( p->nCommandsIgnored > 0 )
+    if ( p->nCommandsIgnored > nIgnoredBefore )
         Msta_Warn( "sdc \"%s\"：%d 条命令未建模或写错，已忽略\n",
-                   pFileName, p->nCommandsIgnored );
+                   pFileName, p->nCommandsIgnored - nIgnoredBefore );
     if ( fVerbose )
         Msta_Info( "sdc \"%s\"：读入命令 %d 条，忽略 %d 条，时钟 %d 个，路径例外 %d 条\n",
                    pFileName, p->nCommandsRead, p->nCommandsIgnored,
@@ -1341,4 +1457,22 @@ void Msta_SdcFree( MstaSdc *p )
     MstaAocvTableArrayFree(&p->vAocv);
     MstaInterClockUncArrayFree( &p->vInterClockUnc );
     free( p );
+}
+
+void Msta_SdcResetForDesign( MstaSdc **ppSdc )
+{
+    MstaSdc *pOld = ppSdc ? *ppSdc : NULL;
+    MstaSdc *pNew = Msta_SdcStart();
+    if ( pOld != NULL )
+    {
+        pNew->vAocv = pOld->vAocv;
+        pNew->fAocv = pOld->fAocv;
+        memset( &pOld->vAocv, 0, sizeof(pOld->vAocv) );
+        pOld->fAocv = 0;
+        Msta_SdcFree( pOld );
+    }
+    if ( ppSdc )
+        *ppSdc = pNew;
+    else
+        Msta_SdcFree( pNew );
 }

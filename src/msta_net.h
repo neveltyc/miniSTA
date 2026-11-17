@@ -49,6 +49,8 @@ MstaArrayDefine( MstaId, MstaIdArray )
 typedef struct {
     MstaId      Name;       /* 端口名 */
     int         Dir;        /* MstaPortDir */
+    int         Offset;     /* LSB 编号（yosys "offset"，默认 0） */
+    int         fUpto;      /* 1 = [0:N-1] 高位在前倒序（yosys "upto"） */
     MstaIdArray Bits;       /* 端口的每一位 -> 该模块的局部网络号（低位在前） */
 } MstaModPort;
 
@@ -106,6 +108,9 @@ typedef struct {
     MstaId     Name;        /* 含层次路径的实例名 */
     MstaId     ModuleName;
     MstaCell  *pCell;       /* 库里的单元；库里没有则是 msta 造的黑盒占位单元 */
+    MstaId     CellId;      /* 在 pLib->vCells / vCornerCells / vBlackBoxCells 中的下标 */
+    int        fBlackBox;   /* 1 = CellId 指向 pDes->vBlackBoxCells，0 = 指向库 */
+    int        fCornerCell; /* 1 = CellId 指向 pLib->vCornerCells，0 = 指向 pLib->vCells */
     MstaId    *pNets;       /* 与 pCell->vPins 对齐：每个脚连到的全局网络号 */
     int        nPins;
 } MstaInst;
@@ -145,6 +150,31 @@ int         Msta_DesignReadVerilog( MstaDesign *p, const char **ppFiles, int nFi
 
 /* ---- 展平与查询 ---- */
 int         Msta_DesignFlatten( MstaDesign *p, MstaLib *pLib, const char *pTopName, int fVerbose );
+/* 按 CellId / fBlackBox / fCornerCell 读取实例当前关联的单元（安全访问重分配后的库或黑盒数组）。 */
+static inline MstaCell *Msta_InstCell( const MstaDesign *pDes, const MstaLib *pLib, const MstaInst *pInst )
+{
+    if ( pInst == NULL )
+        return NULL;
+    if ( pInst->fBlackBox )
+    {
+        if ( pDes != NULL && pInst->CellId >= 0 && pInst->CellId < pDes->vBlackBoxCells.nSize )
+            return pDes->vBlackBoxCells.pData + pInst->CellId;
+    }
+    else if ( pInst->fCornerCell )
+    {
+        if ( pLib != NULL && pInst->CellId >= 0 && pInst->CellId < pLib->vCornerCells.nSize )
+            return pLib->vCornerCells.pData + pInst->CellId;
+    }
+    else if ( pLib != NULL && pInst->CellId >= 0 && pInst->CellId < pLib->vCells.nSize )
+        return pLib->vCells.pData + pInst->CellId;
+    return pInst->pCell;
+}
+/* 库或黑盒数组重新分配后，按 CellId 重新绑定每个实例的 pCell 指针。 */
+void        Msta_DesignRefreshInstCells( MstaDesign *p, MstaLib *pLib );
+/* 清空上次展平产物，允许同一设计对象反复载入/重展平。 */
+void        Msta_DesignClearFlattened( MstaDesign *p );
+/* 清空已解析的模块表（重新读入新网表前使用）。 */
+void        Msta_DesignClearModules( MstaDesign *p );
 const char *Msta_DesignGuessTop( MstaDesign *p );
 const char *Msta_NetName( MstaDesign *p, MstaId nNet );
 const char *Msta_InstName( MstaDesign *p, MstaId nInst );
@@ -154,6 +184,10 @@ int         Msta_DesignNetByName( MstaDesign *p, const char *pNetName );
 int         Msta_DesignFindInstByName( MstaDesign *p, const char *pInstName );
 /* 某实例某个脚连到的网络号；引脚名如 "D" / "Q"。找不到返回 -1。 */
 int         Msta_DesignInstPinNet( MstaDesign *p, int nInst, const char *pPinName );
+/* 将实例 nInst 在位替换为引脚兼容的新库单元 pNewCell（支持引脚顺序重排，保持网络拓扑号）。
+   可选填出 pPinMapOut[oldPin] = newPin。不兼容返回 0 且网表保持原状。 */
+int         Msta_DesignSwapInstCell( MstaDesign *p, MstaLib *pLib, int nInst, MstaCell *pNewCell,
+                                     int *pPinMapOut, int nPinCap );
 void        Msta_DesignPrintStats( MstaDesign *p, FILE *pFile );
 
 #endif /* MSTA_NET_H */

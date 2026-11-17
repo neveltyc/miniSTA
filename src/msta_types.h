@@ -34,6 +34,8 @@
 #include <assert.h>
 
 #define MSTA_NO_ID      (-1)
+#define MSTA_UNSET      (1e30)       /* 没约束或未声明的量都填这个，判断用 !Msta_IsSet(x) */
+#define Msta_IsSet(x)   ( (x) < MSTA_UNSET / 2.0 )
 
 typedef int             MstaId; /* 数组下标式的对象编号 */
 typedef double          MstaTime;

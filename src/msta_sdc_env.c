@@ -11,6 +11,7 @@
 
 ***********************************************************************/
 
+#include <ctype.h>
 #include <math.h>
 #include <strings.h>
 #include "msta_sdc_int.h"
@@ -67,14 +68,35 @@ static void Msta_SdcSetDrcLimit( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
             fDesign = 1;
         else if ( Kind == 'I' )
         {
-            int nInst = Msta_DesignFindInstByName( pDes, pObj );
-            MstaInst *pInst;
-            if ( nInst < 0 )
-            { Msta_SdcNote( pCmd, "找不到实例 \"%s\"", pObj ); continue; }
-            pInst = MstaInstArrayAt( &pDes->vInsts, nInst );
-            for ( j = 0; j < pInst->nPins && j < pInst->pCell->vPins.nSize; j++ )
-                if ( pInst->pNets[j] >= 0 && pInst->pCell->vPins.pData[j].Dir == MSTA_DIR_OUTPUT )
-                    *MstaSdcIntArrayAppend( &vNets ) = pInst->pNets[j];
+            if ( strpbrk( pObj, "*?" ) != NULL )
+            {
+                int k, nHit = 0;
+                for ( k = 0; k < pDes->vInsts.nSize; k++ )
+                {
+                    MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, k );
+                    if ( !Msta_SdcGlobMatch( pObj, Msta_InstName( pDes, k ) ) ) continue;
+                    nHit++;
+                    for ( j = 0; j < pInst->nPins && j < pInst->pCell->vPins.nSize; j++ )
+                        if ( pInst->pNets[j] >= 0 && pInst->pCell->vPins.pData[j].Dir == MSTA_DIR_OUTPUT )
+                            *MstaSdcIntArrayAppend( &vNets ) = pInst->pNets[j];
+                }
+                if ( nHit == 0 && !Msta_SdcIsQuiet( pObj ) )
+                    Msta_SdcNote( pCmd, "找不到实例 \"%s\"", pObj );
+            }
+            else
+            {
+                int nInst = Msta_DesignFindInstByName( pDes, pObj );
+                MstaInst *pInst;
+                if ( nInst < 0 )
+                {
+                    if ( !Msta_SdcIsQuiet( pObj ) ) Msta_SdcNote( pCmd, "找不到实例 \"%s\"", pObj );
+                    continue;
+                }
+                pInst = MstaInstArrayAt( &pDes->vInsts, nInst );
+                for ( j = 0; j < pInst->nPins && j < pInst->pCell->vPins.nSize; j++ )
+                    if ( pInst->pNets[j] >= 0 && pInst->pCell->vPins.pData[j].Dir == MSTA_DIR_OUTPUT )
+                        *MstaSdcIntArrayAppend( &vNets ) = pInst->pNets[j];
+            }
         }
         else
             Msta_SdcResolveNetsInto( pDes, pObj, &vNets );
@@ -174,32 +196,69 @@ void Msta_SdcSetTimingDerate( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaS
     for ( i = 0; i < (pCmd->nObjs ? pCmd->nObjs : 1); i++ )
     {
         const char *pObj = pCmd->nObjs ? pCmd->ppObjs[i] : NULL;
-        MstaClock *pClock = pObj && Msta_SdcKindOf(pObj) == 'C' ? Msta_SdcFindClock(p,pObj) : NULL;
-        int nInst = pObj && !pClock && Msta_SdcKindOf(pObj) != 'C'
-                  ? Msta_DesignFindInstByName(pDes,pObj) : -1;
+        char Kind = pObj ? Msta_SdcKindOf( pObj ) : 0;
+        MstaClock *pClock = pObj && Kind == 'C' ? Msta_SdcFindClock(p,pObj) : NULL;
         int Check;
-        if ( pObj && !pClock && nInst < 0 )
+        if ( pObj && Kind == 'C' && pClock == NULL )
         {
-            Msta_SdcNote(pCmd, "找不到对象 \"%s\"", pObj);
+            if ( !Msta_SdcIsQuiet( pObj ) ) Msta_SdcNote( pCmd, "找不到对象 \"%s\"", pObj );
             continue;
         }
-        for ( Check = 0; Check < 2; Check++ )
+        if ( pObj && Kind != 'C' && strpbrk( pObj, "*?" ) != NULL )
         {
-            MstaObjDerate *pRec;
-            if ( Check ? !fCellCheck : !fCellDelay ) continue;
-            pRec = MstaObjDerateArrayAppend(&p->vObjDerate);
-            pRec->Kind = !pObj ? 'G' : pClock ? 'C' : 'I';
-            pRec->Inst = nInst;
-            pRec->Name = pClock ? pClock->Name : MSTA_NO_ID;
-            pRec->fRise = Edge == 'r';
-            pRec->fFall = Edge == 'f';
-            pRec->fCellCheck = Check;
-            pRec->fClock = fClock;
-            pRec->fData = fData;
-            pRec->Early = fEarly ? Factor : MSTA_UNSET;
-            pRec->Late = fLate ? Factor : MSTA_UNSET;
+            int k, nHit = 0;
+            for ( k = 0; k < pDes->vInsts.nSize; k++ )
+            {
+                if ( !Msta_SdcGlobMatch( pObj, Msta_InstName( pDes, k ) ) ) continue;
+                nHit++;
+                for ( Check = 0; Check < 2; Check++ )
+                {
+                    MstaObjDerate *pRec;
+                    if ( Check ? !fCellCheck : !fCellDelay ) continue;
+                    pRec = MstaObjDerateArrayAppend(&p->vObjDerate);
+                    pRec->Kind = 'I';
+                    pRec->Inst = k;
+                    pRec->Name = MSTA_NO_ID;
+                    pRec->fRise = Edge == 'r';
+                    pRec->fFall = Edge == 'f';
+                    pRec->fCellCheck = Check;
+                    pRec->fClock = fClock;
+                    pRec->fData = fData;
+                    pRec->Early = fEarly ? Factor : MSTA_UNSET;
+                    pRec->Late = fLate ? Factor : MSTA_UNSET;
+                }
+            }
+            if ( nHit == 0 && !Msta_SdcIsQuiet( pObj ) )
+                Msta_SdcNote( pCmd, "找不到对象 \"%s\"", pObj );
+            else if ( nHit > 0 )
+                nApplied++;
+            continue;
         }
-        nApplied++;
+        {
+            int nInst = pObj && Kind != 'C' ? Msta_DesignFindInstByName(pDes,pObj) : -1;
+            if ( pObj && !pClock && nInst < 0 )
+            {
+                if ( !Msta_SdcIsQuiet( pObj ) ) Msta_SdcNote(pCmd, "找不到对象 \"%s\"", pObj);
+                continue;
+            }
+            for ( Check = 0; Check < 2; Check++ )
+            {
+                MstaObjDerate *pRec;
+                if ( Check ? !fCellCheck : !fCellDelay ) continue;
+                pRec = MstaObjDerateArrayAppend(&p->vObjDerate);
+                pRec->Kind = !pObj ? 'G' : pClock ? 'C' : 'I';
+                pRec->Inst = nInst;
+                pRec->Name = pClock ? pClock->Name : MSTA_NO_ID;
+                pRec->fRise = Edge == 'r';
+                pRec->fFall = Edge == 'f';
+                pRec->fCellCheck = Check;
+                pRec->fClock = fClock;
+                pRec->fData = fData;
+                pRec->Early = fEarly ? Factor : MSTA_UNSET;
+                pRec->Late = fLate ? Factor : MSTA_UNSET;
+            }
+            nApplied++;
+        }
     }
     if ( nApplied == 0 )
         Msta_SdcReject(p,pCmd,"一个对象都没有找到");
@@ -292,6 +351,7 @@ static int Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib, const MstaSdcCmd *p
     int c, fHasK = 0;
     if ( pLib == NULL )
         return 0;
+    p->KFactorDerateLate = p->KFactorDerateEarly = 1.0;
     for ( c = 0; c < 2; c++ )
     {
         int fMax = ( c == 0 );
@@ -311,21 +371,21 @@ static int Msta_SdcUpdateKFactor( MstaSdc *p, MstaLib *pLib, const MstaSdcCmd *p
             continue;
         if ( !Msta_IsSet(v) ) v = pCond->Voltage;
         if ( !Msta_IsSet(t) ) t = pCond->Temperature;
-        if ( pCond->KVolt < 0.0 && pCond->KTemp < 0.0 && pCond->KProcess < 0.0 )
+        if ( !Msta_IsSet(pCond->KVolt) && !Msta_IsSet(pCond->KTemp) && !Msta_IsSet(pCond->KProcess) )
         {
             /* 库里没有 K 因子：表值按读进来的原样用，只把请求的电压/温度报出来。 */
             if ( fWarnNoK &&
-                 ( ( Msta_IsSet(v) && pInfo->NomVoltage >= 0.0 && v != pInfo->NomVoltage ) ||
-                   ( Msta_IsSet(t) && pInfo->NomTemperature >= 0.0 && t != pInfo->NomTemperature ) ) )
+                 ( ( Msta_IsSet(v) && Msta_IsSet(pInfo->NomVoltage) && v != pInfo->NomVoltage ) ||
+                   ( Msta_IsSet(t) && Msta_IsSet(pInfo->NomTemperature) && t != pInfo->NomTemperature ) ) )
                 Msta_SdcNote( pCmd, "库里没有 k_volt/k_temp 系数；"
                               "延迟表按原值使用（指定的电压/温度只记录并在报告里显示）" );
             continue;
         }
         fHasK = 1;
-        dV = ( Msta_IsSet(v) && pInfo->NomVoltage >= 0.0 ) ? v - pInfo->NomVoltage : 0.0;
-        dT = ( Msta_IsSet(t) && pInfo->NomTemperature >= 0.0 ) ? t - pInfo->NomTemperature : 0.0;
-        if ( pCond->KVolt >= 0.0 )    Derate += pCond->KVolt * dV;
-        if ( pCond->KTemp >= 0.0 )    Derate += pCond->KTemp * dT;
+        dV = ( Msta_IsSet(v) && Msta_IsSet(pInfo->NomVoltage) ) ? v - pInfo->NomVoltage : 0.0;
+        dT = ( Msta_IsSet(t) && Msta_IsSet(pInfo->NomTemperature) ) ? t - pInfo->NomTemperature : 0.0;
+        if ( Msta_IsSet(pCond->KVolt) ) Derate += pCond->KVolt * dV;
+        if ( Msta_IsSet(pCond->KTemp) ) Derate += pCond->KTemp * dT;
         if ( Derate <= 0.0 ) Derate = 1.0;
         if ( fMax ) p->KFactorDerateLate = Derate;
         else        p->KFactorDerateEarly = Derate;
@@ -488,7 +548,7 @@ void Msta_SdcSetVoltage( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd
     if ( !Msta_SdcUpdateKFactor( p, pLib, pCmd, 0 ) && pLib != NULL && pLib->vLibs.nSize > 0 )
     {
         double Nominal = MstaLibInfoArrayAt(&pLib->vLibs,0)->NomVoltage;
-        if ( Nominal >= 0.0 && fabs(p->VoltageMax - Nominal) > 1e-6 )
+        if ( Msta_IsSet(Nominal) && fabs(p->VoltageMax - Nominal) > 1e-6 )
             Msta_SdcNote( pCmd, "已记录 %.3f V，但库里没有 k_volt 系数；"
                           "延迟表按原值使用（标称 %.3f V）", p->VoltageMax, Nominal );
     }
@@ -501,12 +561,16 @@ static double Msta_SdcUnitScale( const char *pText, int fTime )
     double Value = strtod(pText,&pEnd);
     if ( pEnd == pText ) { Value = 1.0; pEnd = (char *)pText; }
     if ( Value <= 0.0 ) return 0.0;
+    while ( isspace((unsigned char)*pEnd) )
+        pEnd++;
     if ( fTime )
     {
         if ( !strcasecmp(pEnd,"fs") ) return Value * 0.001;
         if ( !strcasecmp(pEnd,"ps") ) return Value;
         if ( !strcasecmp(pEnd,"ns") ) return Value * 1000.0;
         if ( !strcasecmp(pEnd,"us") ) return Value * 1000000.0;
+        if ( !strcasecmp(pEnd,"ms") ) return Value * 1e9;
+        if ( !strcasecmp(pEnd,"s")  ) return Value * 1e12;
     }
     else
     {
@@ -514,6 +578,9 @@ static double Msta_SdcUnitScale( const char *pText, int fTime )
         if ( !strcasecmp(pEnd,"ff") ) return Value;
         if ( !strcasecmp(pEnd,"pf") ) return Value * 1000.0;
         if ( !strcasecmp(pEnd,"nf") ) return Value * 1000000.0;
+        if ( !strcasecmp(pEnd,"uf") ) return Value * 1e9;
+        if ( !strcasecmp(pEnd,"mf") ) return Value * 1e12;
+        if ( !strcasecmp(pEnd,"f")  ) return Value * 1e15;
     }
     return 0.0;
 }

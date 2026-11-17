@@ -9,24 +9,29 @@
 ```text
 dofile / -c 命令串
   └─ msta_main.c → msta_cmds.c（命令表、全局状态 MstaApp）
-       read_liberty   → msta_lib.c（语法树来自 abc_scl_liberty_tree.inc）
+       read_liberty   → msta_lib.c + msta_liberty_lex.{c,h}
        read_verilog   → 调用 yosys 转 JSON → msta_json.c → msta_net.c
        read_json      → msta_json.c → msta_net.c
        current_design → msta_net.c 按顶层展平
        read_sdc       → msta_sdc*.c（经 tclsh 运行 scripts/sdc_bridge.tcl）
-       report_*       → msta_timing.c 分析 → msta_report.c 打印
+       report_* / explain_arc / dump_graph → msta_timing*.c 分析 → msta_report.c 打印
 ```
 
 | 文件 | 职责 |
 | --- | --- |
 | `msta_types.h`、`msta_util.{c,h}` | 公共类型、单位约定、动态数组模板；字符串、名字表、整数哈希表、日志 |
 | `msta_cmds.{c,h}`、`msta_main.c` | 命令行入口、dofile 切分、命令表 |
-| `msta_lib.{c,h}`、`abc_scl_liberty_tree.inc` | Liberty：单元、引脚、时序弧、NLDM 表、时序单元、工作条件；多库合并 |
+| `msta_lib.{c,h}`、`msta_liberty_lex.{c,h}` | Liberty 词法/语法树与语义：单元、引脚、时序弧、NLDM 轴与双线性插值/拆解、工作条件、多库合并 |
 | `msta_json.{c,h}` | 只读的极简 JSON 解析器（Yosys 网表和 SDC 前端输出共用） |
-| `msta_net.{c,h}` | 读 Yosys JSON，按 `current_design` 展平成扁平网表 |
+| `msta_net.{c,h}` | 读 Yosys JSON，按 `current_design` 展平成扁平网表（含黑盒引脚去重并集与方向再推断） |
 | `msta_sdc.h`、`msta_sdc*.c`、`scripts/sdc_bridge.tcl` | SDC 数据模型、读入与查询，见[第 3 节](#3-sdc-命令的读入) |
-| `msta_timing.{c,h}` | 时序引擎，见[第 2 节](#2-时序分析步骤) |
-| `msta_report.{c,h}` | 路径报告、汇总、时钟树报告；只排版，不改时序结果 |
+| `msta_timing.{c,h}`、`msta_timing_int.h` | 时序引擎总控、`Analyze` 调度、分级增量 `swap_cell`、汇总与网表级查询接口 |
+| `msta_plugin.{c,h}` | C99 静态虚函数表插件接口（`DelayOps` / `WireOps` / `VariationOps` / `PathRefinerOps`）与内置 `nldm` / `zero_rc` / `elmore_rc` / `pba_retrace` |
+| `msta_graph.c`、`msta_clock.c` | 工艺角映射/电容负载/理想网络/迭代拓扑序与逻辑级数；时钟树标号、极性推导与时钟传播 |
+| `msta_prop.c` | 数据到达时间（AT）前向传播（含全设计合并遍）与逆拓扑要求时间（RAT）后向传播 |
+| `msta_cppr.c`、`msta_aocv.{c,h}` | AOCV 深度表解析、完整前后向结构级数、CPPR 公共时钟补偿与起点签名分类 |
+| `msta_check.c`、`msta_drc.c` | 端点检查、捕获沿对齐、路径例外与次优路径、数据/门控检查；四项设计规则检查（DRC） |
+| `msta_report.{c,h}` | 路径报告（`-tran`/`-cap`/`-clock_path`）、汇总、时钟树、`explain_arc`、`report_net`、`dump_graph`；只排版不改时序 |
 
 全工程共用两条约定（`msta_types.h`）：
 
@@ -35,30 +40,31 @@ dofile / -c 命令串
 
 ## 2. 时序分析步骤
 
-流程以 `src/msta_timing.h` 文件头为准；`Msta_TimingAnalyze` 的步骤号与 `msta_timing.c` 的分节编号一致。
+流程以 `src/msta_timing.h` 与 `src/msta_timing.c` 的调度顺序为准；各步骤拆在独立源码文件中。
 
-| 步骤 | 函数 | 做什么 |
+| 步骤 | 函数（模块） | 做什么 |
 | --- | --- | --- |
-| 1 端点 | `BuildChecks` | 时序单元的每条检查（setup/hold、recovery/removal）和每个顶层输出端口各是一个端点；数据脚接常量的检查跳过 |
-| 2 时钟树 | `MarkClockNets`、`AttachClockIds` | 从时钟源沿组合弧正向标出时钟网络，按 `timing_sense` 和 case 值求极性，处理 `set_clock_sense -stop_propagation` |
-| 3 理想网络 | `MarkIdealNets` | `set_ideal_network` 沿组合扇出铺开，这些网络不累计弧延迟 |
-| 4 拓扑序 | `BuildTopoOrder` | 显式栈迭代 DFS（深链不会爆栈）；遇到组合环告警并在该处断开 |
-| 5 时钟传播 | `PropagateClocks`、`SeedGeneratedClock` | 按拓扑序求每个时钟在各时钟网络上 [角][本地边沿][源边沿] 的到达和摆率；生成时钟从主时钟接上源延迟 |
-| 6 数据到达与检查 | `BuildStartClasses`、`EvaluateCandidatePaths`、`CheckDataChecks`、`CheckClockGating` | 见下文 |
-| 7 汇总 | `Msta_TimingAnalyze` 末尾、`CheckDesignRules` | WNS/TNS、未约束端点、设计面积、DRC |
-
-第 5 步排在第 4 步之后执行（要按拓扑序走），但源文件里紧跟第 3 节，因为它和时钟树、理想网络属于同一类逻辑。
+| 1 端点 | `Msta_TiBuildChecks`（`msta_check.c`） | 时序单元的每条检查（setup/hold、recovery/removal）和每个顶层输出端口各是一个端点；数据脚接常量的检查跳过 |
+| 2 时钟树 | `Msta_TiMarkClockNets`、`Msta_TiAttachClockIds`（`msta_clock.c`） | 从时钟源沿组合弧正向标出时钟网络，按 `timing_sense` 和 case 值求极性，处理 `set_clock_sense -stop_propagation` |
+| 3 理想网络 | `Msta_TiMarkIdealNets`（`msta_graph.c`） | `set_ideal_network` 沿组合扇出铺开，这些网络不累计弧延迟 |
+| 4 拓扑序与级数 | `Msta_TiBuildTopoOrder`、`Msta_TiComputeLogicLevels`（`msta_graph.c`） | 显式栈迭代 DFS（深链不会爆栈）并计算每根网络的组合逻辑级数；遇到组合环告警并在该处断开 |
+| 5 时钟传播 | `Msta_TiPropagateClocks`、`SeedGeneratedClock`（`msta_clock.c`） | 按拓扑序求每个时钟在各时钟网络上 [角][本地边沿][源边沿] 的到达和摆率；生成时钟从主时钟接上源延迟 |
+| 6 数据到达、检查与 RAT | `Msta_TiBuildStartClasses`、`Msta_TiEvaluateCandidatePaths`、`Msta_TiCheckDataChecks`、`Msta_TiCheckClockGating`、`Msta_TiPropagateData`、`Msta_TimingPropagateRequired` | 见下文 |
+| 7 汇总与 DRC | `Msta_TimingAnalyze` 末尾、`Msta_TiCheckDesignRules`（`msta_timing.c`、`msta_drc.c`） | WNS/TNS、未约束端点、设计面积、DRC |
 
 第 6 步是引擎的主体：
 
-1. **起点分类**（`BuildStartClasses`）。起点是时序单元输出和带 `set_input_delay` 的输入端口。前向传播在汇聚点只保留最差到达；如果出发沿不同、或命中的 `-from` 例外不同的起点混在一起传，留下的那条可能被例外切掉，或因出发沿不同而并非最差，从而盖住别的候选。因此按"各时钟下的出发相位 + 命中的 `-from` 例外组"给起点分类，同类起点共用一遍传播。
-2. **前向传播**（`PropagateData`）。按 (出发时钟, 起点分类, 出发源边沿标签) 各传一遍：max 角用最坏延迟供 setup，min 角用最好延迟供 hold。每根网络按角和边沿记下前驱，报告据此回溯整条路径。没有后向传播，要求时间直接在端点上算。
-3. **端点检查**（`EvaluateCandidatePaths` → `CheckEndpoint` → `CheckEndpointOne` → `CheckEndpointEdge`）。捕获网络上有几个时钟就各查一遍；每个数据边沿、每个捕获源边沿分别查，保留最差。输出端口按每个时钟各当一次捕获时钟。默认 OCV：setup 的 launch/data 取 max、capture 取 min；hold 相反。single/bc_wc 的 capture 与 data 取同角；统一由 `Msta_SdcCaptureCorner` 选择。
+1. **起点分类**（`Msta_TiBuildStartClasses`）。起点是时序单元输出和带 `set_input_delay` 的输入端口。前向传播在汇聚点只保留最差到达；如果出发沿不同、或命中的 `-from` 例外不同的起点混在一起传，留下的那条可能被例外切掉，或因出发沿不同而并非最差，从而盖住别的候选。因此按"各时钟下的出发相位 + 命中的 `-from` 例外组"给起点分类，同类起点共用一遍传播。
+2. **前向传播**（`Msta_TiPropagateData`）。按 (出发时钟, 起点分类, 出发源边沿标签) 各传一遍：max 角用最坏延迟供 setup，min 角用最好延迟供 hold。每根网络按角和边沿记下前驱及输入加载脚身份，报告据此回溯整条路径并显示真实 `pin <InPin>`。
+3. **端点检查**（`Msta_TiEvaluateCandidatePaths` → `CheckEndpoint` → `CheckEndpointOne` → `CheckEndpointEdge`）。捕获网络上有几个时钟就各查一遍；每个数据边沿、每个捕获源边沿分别查，保留最差。输出端口按每个时钟各当一次捕获时钟。默认 OCV：setup 的 launch/data 取 max、capture 取 min；hold 相反。single/bc_wc 的 capture 与 data 取同角；统一由 `Msta_SdcCaptureCorner` 选择。
 4. **跨时钟边沿对齐**（`FindClockPairEdges`）。出发和捕获时钟周期不同时，在公共周期里找最紧的一对边沿，结果按时钟对缓存，最多搜 1000 拍。
 5. **次优路径**（`CheckEndpointEdge`、`AddPathExclusions`）。`-through`、`-rise_through` 这类例外只切掉命中的那条路径，不切整个端点。某个角的最差路径被切掉时，把命中的 (网络, 边沿) 加入排除表，重新传播，换到下一条路径，直到每个角都找到未被切掉的路径或没有候选。
-6. **附加检查**。`CheckDataChecks` 处理 `set_data_check`，`CheckClockGating` 处理时钟门控检查，它们的最差 slack 在第 7 步计入 WNS/TNS。
+6. **附加检查**。`Msta_TiCheckDataChecks` 处理 `set_data_check`，`Msta_TiCheckClockGating` 处理时钟门控检查，它们的最差 slack 在第 7 步计入 WNS/TNS。
+7. **全设计合并 AT 与逆拓扑后向 RAT**。在所有时钟与起点分类的端点检查结束后，执行一轮跨全时钟域合并的前向传播 `Msta_TiPropagateData(..., -1, -1)`（保证多时钟 DRC 不会丢失非末位时钟的扇出摆率），随后执行逆拓扑序要求时间后向传播 `Msta_TimingPropagateRequired`，把端点检查（含 `EdgeReq[0..1]` 逐边沿 RAT 与 `set_data_check` / `set_clock_gating_check` 辅助 RAT）反推到每根网络的 `Rise`/`Fall` 上，供 `report_net` 与 `dump_graph` 展示全局 AT/RAT/Slack。注意 `report_net` 与 `dump_graph` 呈现的是全设计合并后的单标签 GBA 网络视图，若存在路径例外或 CPPR 细粒度差异，应以 `report_checks` 的逐路径核对结果为准。
 
-延迟计算：一根弧的延迟和输出摆率由 NLDM 表按 (输入摆率, 输出负载) 双线性插值得到，上升、下降各一张表。max/min 两个角各自保留到达时间与摆率，并按 `set_operating_conditions` 选用各角的库。
+延迟计算与互连插件（`msta_plugin.{c,h}`）：引擎通过 `MstaPluginSet` 挂接四组可替换 C99 静态虚函数表（`MstaDelayOps`、`MstaWireOps`、`MstaVariationOps`、`MstaPathRefinerOps`，支持部分覆写，留 `NULL` 的回调自动回退到内置默认实现），默认组合为 `nldm + zero_rc + ocv_aocv_cppr + none`。内置示范线网插件 `elmore_rc` 在 `Msta_TiWireToPin` / `Msta_TiEffCap` 处按扇出引脚下标计算阶梯式 Elmore RC 延迟与 Bakoglu 摆率退化（并将终点线延迟从驱动器坐标下的 RAT 中扣除以维持 `RAT_drv - AT_drv == Slack`）；内置示范路径精修插件 `pba_retrace` 执行面向教学的 **Top-1 获胜路径重溯**，在保留路径快照上按真实路径级摆率与真实路径 AOCV 深度重算延迟和终点约束（不对因消悲观而次序反转的次优路径做穷举 PBA 重排，开启后 `report_net` / `dump_graph` 仍展示全设计合并的 GBA 节点视图）。
+
+增量更新（`Msta_TimingSwapCell`）：`swap_cell` 通过 `Msta_DesignSwapInstCell` 支持引脚重排的在位替换并保持 `vLoads` 顺序不变；在单时钟、单传播上下文且组合弧拓扑不变时启用 `MstaLevelQueue` 分级局部增量更新（先按 `0 .. MaxLogicLevel` 前向重算 AT/Slew，再重算脏端点 `MstaCheck`，再按 `MaxLogicLevel .. 0` 拉取重算 RAT 并更新 WNS/TNS/DRC），`-verify` 将全网表 18 个角数组与全部端点同全量 `Msta_TimingAnalyze` 比对（误差要求 `<= 1e-9 ps`）；不满足局部条件（如时序单元/多时钟/AOCV/例外）时自动回退全量重算。
 
 ## 3. SDC 命令的读入
 
@@ -114,7 +120,7 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 - **正确性优先于功能**。没有建模的命令或选项，宁可告警后忽略或作废整条约束，也不给出一个错误的数。无法用用例核对的实现（例如 K 因子缩放）在告警和文档里写明。
 - **代码风格**。每个函数上方用一行注释说明它做什么；注释解释"是什么、怎么算"，不写选型争论。文件头用 `/**CFile**`、`/**CHeader**` 块说明本文件职责。导出函数以 `Msta_<模块>` 开头，类型以 `Msta` 开头；变量前缀 `p` 指针、`n` 个数或下标、`v` 动态数组、`f` 标志、`s_` 文件内静态变量。
 - **可读性**。局部变量名称应能说明对象或用途；复杂流程按解析、校验、选择、提交等职责组织辅助函数。维度布局优先用具名结构与枚举表达，重复的深度或边沿判断共用查询函数。注释说明职责和必须保留的不变量。
-- **测试**。每个用例目录里一个或多个 `.dofile`；`make test` 运行全部 dofile，再执行 `scripts/check_sdc.sh`、`check_edges.sh`、`check_clock_edges.py`、`check_nonunate_clock.py`、`check_ocv.py`、`check_variation.py` 中的断言。加用例时同步加断言。
+- **测试**。每个用例目录里一个或多个 `.dofile`；`make test` 运行全部 dofile，再执行 `scripts/check_sdc.sh`、`check_edges.sh`、`check_clock_edges.py`、`check_nonunate_clock.py`、`check_ocv.py`、`check_variation.py`、`check_phase1_fixes.py`、`check_phase2_teaching.py`、`check_phase3_plugins.py` 中的断言。加用例时同步加断言。
 - **参考工具只用于对比**。`make compare` 系列用本地编译的 OpenSTA、OpenTimer 运行同一组输入（见[参考工具对比](compare_sta.md)）。OpenSTA 按 GPL-3.0 发布，不复制它的代码和测试。
 
 ## 5. 模型边界
@@ -132,4 +138,4 @@ msta_sdc_query.c 的查询接口 → 时序引擎
 
 OCV 的 derate 记录按全局/实例/时钟、路径类别、延迟/检查、early/late、rise/fall 匹配；未设置的 early/late 存为 `MSTA_UNSET`，查找时跳过。时钟弧按实例 → 时钟 → 全局的优先级查询。单元延迟使用输入边沿，检查值使用数据边沿。non_unate 数据弧对两个输入边沿分别计算完整候选（含 slew 查表与 derate）后取最差，不先按未加弧延迟的输入到达筛选。
 
-AOCV/CPPR 的输入和模型边界见 [variation.md](variation.md)。`msta_aocv.c` 原子读取单调深度曲线并做对象匹配/插值；`msta_aocv_depth.inc` 求完整弧上下文的最短前后向级数。时钟 `Prev[corner][local][source]` 保存实际前驱，CPPR 回溯根前缀并核对反角路径。开启 CPPR 时，起点签名还包含各 clock/corner/source 的 launch net/local edge；不同公共时钟上下文分别传播，相同上下文可合并，避免到达排序掩盖补偿后更差的起点。前驱同时保留 related 输入脚身份，CPPR 回溯向量按真实时钟深度增长并复用。
+AOCV/CPPR 的输入和模型边界见 [variation.md](variation.md)。`msta_aocv.c` 原子读取单调深度曲线并做对象匹配/插值；`msta_cppr.c` 计算完整弧上下文的最短前后向级数并做 CPPR 公共前缀补偿与起点签名分类。时钟 `Prev[corner][local][source]` 保存实际前驱，CPPR 回溯根前缀并核对反角路径。开启 CPPR 时，起点签名还包含各 clock/corner/source 的 launch net/local edge；不同公共时钟上下文分别传播，相同上下文可合并，避免到达排序掩盖补偿后更差的起点。前驱同时保留 related 输入脚身份，CPPR 回溯向量按真实时钟深度增长并复用。

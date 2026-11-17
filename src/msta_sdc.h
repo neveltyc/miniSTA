@@ -25,9 +25,6 @@
 #include "msta_util.h"
 #include "msta_net.h"
 
-#define MSTA_UNSET (1e30)       /* 没约束过的量都填这个，判断用 !Msta_IsSet(x) */
-#define Msta_IsSet(x) ( (x) < MSTA_UNSET / 2.0 )
-
 /* 报告分组的保留名字：group_path -default 的兜底组、异步检查组。 */
 #define MSTA_SDC_GROUP_DEFAULT "**default**"
 #define MSTA_SDC_GROUP_ASYNC   "**async**"
@@ -235,10 +232,13 @@ typedef struct {
     int         fRises;      /* 这个点上的信号边沿：1=上升，0=下降，-1=未知 */
 } MstaSdcObject;
 
-/* 找次优路径时要排除的 (网络, 边沿)：命中 -through 的那一段被排除后重算。 */
+/* 找次优路径时要排除的 (网络, 边沿)：命中 -through 的那一段被排除后重算。
+   Inst/Pin >= 0 表示只排除组合单元某个输入加载脚上的入边沿。 */
 typedef struct {
     int Net;
     int EdgeMask;            /* 1=上升，2=下降，3=两个边沿都排除 */
+    int Inst;
+    int Pin;
 } MstaPathExclude;
 
 /* 一个端点在匹配时的全部信息：对象、所属时钟和信号边沿。 */
@@ -270,6 +270,9 @@ typedef struct MstaSdc {
     MstaExceptionArray vExceptions;
     MstaSdcExIndex     ExIndexTo, ExIndexFrom; /* 按 -to / -from 文本建的例外索引 */
     int                nExIndexed;    /* 建索引时的例外条数；条数变了就重建 */
+    MstaIdArray        ExCandidates, ExHitsTo, ExHitsFrom, ExMerge; /* 例外查询临时数组 */
+    char              *pExMark;       /* 按例外号记命中标记 */
+    int                nExMarkCap;
     MstaPathGroupArray vPathGroups;
     MstaClockGatingSdcArray vClockGating;
     MstaBorrowSdcArray vBorrow;
@@ -302,6 +305,8 @@ typedef struct MstaSdc {
 
 MstaSdc *Msta_SdcStart( void );
 void     Msta_SdcFree( MstaSdc *p );
+/* 重新展平设计后清空依赖旧网表/实例编号的 SDC 状态（保留独立载入的 AOCV 表）。 */
+void     Msta_SdcResetForDesign( MstaSdc **ppSdc );
 void     Msta_SdcSetBridgePath( const char *pExecutable );
 /* 读一个 .sdc 文件。pDes 用来把端口/引脚名解析成全局网络号。 */
 int      Msta_SdcReadFile( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib,
@@ -369,6 +374,12 @@ int  Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
                              const MstaSdcEndpoint *pFrom, const MstaSdcEndpoint *pTo,
                              int fSetup, const MstaSdcObject *pObjects, int nObjects,
                              MstaPathExclude *pOut, int nCap );
+/* 路径被含多个 -through 分组的 false path 命中时，返回第一条多组例外的各分支候选，
+   供调用方逐一排除并保留未被切掉的最差路径。 */
+int  Msta_SdcPathExclusionBranches( MstaSdc *p, MstaDesign *pDes,
+                                    const MstaSdcEndpoint *pFrom, const MstaSdcEndpoint *pTo,
+                                    int fSetup, const MstaSdcObject *pObjects, int nObjects,
+                                    MstaPathExclude *pOut, int nCap );
 int  Msta_SdcExceptionCount( MstaSdc *p );
 /* 按 -from 起点给例外分组、查起点命中哪些 -from 例外：引擎据此把起点分类，
    命中例外不同的起点分开传播（见 msta_timing.c 的 BuildStartClasses）。 */

@@ -55,7 +55,11 @@ int main( int argc, char **argv )
         Msta_CmdsSetScriptFile( pScript );     /* 相对路径找不到时按脚本目录兜底 */
         pText = Msta_FileReadAll( pScript, &nSize );
         if ( pText == NULL )
+        {
+            Msta_AppFree( pApp );
+            Msta_CmdsSetOutput( NULL );
             return 1;
+        }
         Msta_Info( "-- %s\n", pScript );
         fOk = Msta_CmdsRun( pApp, pText );
         free( pText );
@@ -63,5 +67,6 @@ int main( int argc, char **argv )
     if ( fOk && pInline )
         fOk = Msta_CmdsRun( pApp, pInline );
     Msta_AppFree( pApp );
+    Msta_CmdsSetOutput( NULL );
     return fOk ? 0 : 1;
 }

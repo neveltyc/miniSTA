@@ -177,9 +177,10 @@ void Msta_SdcOpCondInfo( MstaSdc *p, MstaLib *pLib, int fMax,
     if ( ppName ) *ppName = Msta_NameStr( pCond ? pCond->Name : pInfo->OpCondName );
     if ( pCond != NULL )
     {
-        if ( pVoltage && !Msta_IsSet(*pVoltage) && pCond->Voltage >= 0.0 )
+        if ( pVoltage && !Msta_IsSet(*pVoltage) && Msta_IsSet(pCond->Voltage) )
             *pVoltage = pCond->Voltage;
-        if ( pTemp && !Msta_IsSet(*pTemp) ) *pTemp = pCond->Temperature;
+        if ( pTemp && !Msta_IsSet(*pTemp) && Msta_IsSet(pCond->Temperature) )
+            *pTemp = pCond->Temperature;
     }
 }
 
@@ -427,9 +428,11 @@ static char *Msta_SdcObjectPinPath( MstaDesign *pDes, const MstaSdcObject *pObj,
 }
 
 /* 把模式匹配到一个端点对象上：时钟只比时钟名，其余比对象名和 "实例/引脚"。
+   fAllowRegClk=1 时（-from 起点），触发器输出起点也匹配同实例的时钟脚（如 ff/CLK）。
    没写模式（MSTA_NO_ID）= 通配。 */
 static int Msta_SdcMatchObject( MstaDesign *pDes, MstaId PatternId, char Kind,
-                                const MstaSdcObject *pObj, const char *pClock )
+                                const MstaSdcObject *pObj, const char *pClock,
+                                int fAllowRegClk )
 {
     const char *pPattern;
     if ( PatternId == MSTA_NO_ID )
@@ -443,13 +446,36 @@ static int Msta_SdcMatchObject( MstaDesign *pDes, MstaId PatternId, char Kind,
         return 1;
     if ( pObj->nInst >= 0 && pObj->nPin >= 0 )
     {
-        char sPath[512];
-        char *pPath = Msta_SdcObjectPinPath( pDes, pObj, sPath, sizeof(sPath) );
-        int fMatch = Msta_SdcNameMatch( pPattern, pPath );
-        if ( pPath != sPath )
-            free( pPath );
-        if ( fMatch )
-            return 1;
+        if ( Kind != 'I' && Kind != 'P' )
+        {
+            char sPath[512];
+            char *pPath = Msta_SdcObjectPinPath( pDes, pObj, sPath, sizeof(sPath) );
+            int fMatch = !strcmp( pPattern, pPath ) || Msta_SdcGlobMatch( pPattern, pPath );
+            if ( pPath != sPath )
+                free( pPath );
+            if ( fMatch )
+                return 1;
+        }
+        if ( fAllowRegClk )
+        {
+            MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, pObj->nInst );
+            MstaCell *pCell = pInst->pCell;
+            MstaPin  *pPin  = MstaPinArrayAt( &pCell->vPins, pObj->nPin );
+            if ( pCell->fSequential && pPin->Dir == MSTA_DIR_OUTPUT )
+            {
+                const char *pInstName = Msta_InstName( pDes, pObj->nInst );
+                int k;
+                for ( k = 0; k < pCell->vRegs.nSize; k++ )
+                {
+                    MstaRegCheck *pReg = MstaRegCheckArrayAt( &pCell->vRegs, k );
+                    char sClk[512];
+                    snprintf( sClk, sizeof(sClk), "%s/%s",
+                              pInstName, Msta_NameStr( pReg->ClkPin ) );
+                    if ( Msta_SdcNameMatch( pPattern, sClk ) )
+                        return 1;
+                }
+            }
+        }
     }
     return 0;
 }
@@ -498,7 +524,7 @@ static int Msta_SdcMatchThroughList( MstaDesign *pDes, const MstaThruObject *pTh
             int k;
             for ( k = i; k < nThru && pThru[k].Kind != MSTA_SDC_THRU_SEP; k++ )
                 if ( Msta_SdcMatchObject(pDes,pThru[k].Text,pThru[k].Kind,
-                                         &pObjects[j], NULL) &&
+                                         &pObjects[j], NULL, 0) &&
                      Msta_SdcEdgeMatches(pThru[k].RF, pObjects[j].fRises) )
                 { fMatched = 1; nHit = j; RF = pThru[k].RF; break; }
             j++;
@@ -532,10 +558,10 @@ static int Msta_SdcExceptionHits( MstaSdc *p, MstaDesign *pDes, MstaException *p
 {
     (void)p;
     if ( !Msta_SdcMatchObject(pDes,pEx->FromText,pEx->FromKind,
-                              pFrom ? pFrom->pObj : NULL, pFrom ? pFrom->pClock : NULL) )
+                              pFrom ? pFrom->pObj : NULL, pFrom ? pFrom->pClock : NULL, 1) )
         return 0;
     if ( !Msta_SdcMatchObject(pDes,pEx->ToText,pEx->ToKind,
-                              pTo ? pTo->pObj : NULL, pTo ? pTo->pClock : NULL) )
+                              pTo ? pTo->pObj : NULL, pTo ? pTo->pClock : NULL, 0) )
         return 0;
     if ( !Msta_SdcEdgeMatches(pEx->FromRF, Msta_SdcEndpointEdge(pFrom,pEx->FromKind)) ||
          !Msta_SdcEdgeMatches(pEx->ToRF, Msta_SdcEndpointEdge(pTo,pEx->ToKind)) )
@@ -557,10 +583,7 @@ static int Msta_SdcCompareDouble( double a, double b )
    只取可能命中的候选（真正是否命中仍由 Msta_SdcExceptionHits 判定）。没写这一侧、通配名、
    时钟例外无法按文本查，放进 always 表，每次都算候选。查名字时在每个 '/' 处的前缀也查一次，
    支持按层次前缀匹配。从两侧候选少的一侧出发，只留另一侧也命中的例外；候选按例外号升序，
-   保证后写的例外覆盖先写的。s_pExMark 按例外号记 to 侧(1)/from 侧(2)已命中，用完即清。 */
-static MstaSdcIntArray s_vExCandidates, s_vExHitsTo, s_vExHitsFrom, s_vExMerge;
-static char *s_pExMark;
-static int   s_nExMarkCap;
+   保证后写的例外覆盖先写的。p->pExMark 按例外号记 to 侧(1)/from 侧(2)已命中，用完即清。 */
 
 static unsigned Msta_SdcStrHash( const char *pText, size_t nLen )
 {
@@ -629,13 +652,13 @@ void Msta_SdcExIndexRelease( MstaSdc *p )
     Msta_SdcExIndexFree( &p->ExIndexTo );
     Msta_SdcExIndexFree( &p->ExIndexFrom );
     p->nExIndexed = 0;
-    MstaSdcIntArrayFree( &s_vExCandidates );
-    MstaSdcIntArrayFree( &s_vExHitsTo );
-    MstaSdcIntArrayFree( &s_vExHitsFrom );
-    MstaSdcIntArrayFree( &s_vExMerge );
-    free( s_pExMark );
-    s_pExMark = NULL;
-    s_nExMarkCap = 0;
+    MstaIdArrayFree( &p->ExCandidates );
+    MstaIdArrayFree( &p->ExHitsTo );
+    MstaIdArrayFree( &p->ExHitsFrom );
+    MstaIdArrayFree( &p->ExMerge );
+    free( p->pExMark );
+    p->pExMark = NULL;
+    p->nExMarkCap = 0;
 }
 
 static void Msta_SdcExIndexUpdate( MstaSdc *p )
@@ -645,18 +668,18 @@ static void Msta_SdcExIndexUpdate( MstaSdc *p )
         return;
     Msta_SdcExIndexBuild( p, &p->ExIndexTo, 1 );
     Msta_SdcExIndexBuild( p, &p->ExIndexFrom, 0 );
-    if ( s_nExMarkCap < nEx + 1 )
+    if ( p->nExMarkCap < nEx + 1 )
     {
-        s_nExMarkCap = nEx + 1;
-        free( s_pExMark );
-        s_pExMark = (char *)calloc( (size_t)s_nExMarkCap, 1 );
-        assert( s_pExMark );
+        p->nExMarkCap = nEx + 1;
+        free( p->pExMark );
+        p->pExMark = (char *)calloc( (size_t)p->nExMarkCap, 1 );
+        assert( p->pExMark );
     }
     p->nExIndexed = nEx;
 }
 
 static void Msta_SdcExIndexLookup( MstaSdc *p, MstaSdcExIndex *pIdx, int fTo,
-                                   const char *pText, size_t nLen, MstaSdcIntArray *vHits )
+                                   const char *pText, size_t nLen, MstaIdArray *vHits )
 {
     char Mark = fTo ? 1 : 2;
     unsigned h = Msta_SdcStrHash( pText, nLen ) & (unsigned)( pIdx->nHeadCap - 1 );
@@ -665,15 +688,15 @@ static void Msta_SdcExIndexLookup( MstaSdc *p, MstaSdcExIndex *pIdx, int fTo,
     {
         MstaException *pEx = MstaExceptionArrayAt( &p->vExceptions, i );
         const char *pKey = Msta_NameStr( fTo ? pEx->ToText : pEx->FromText );
-        if ( ( s_pExMark[i] & Mark ) || strncmp( pKey, pText, nLen ) != 0 || pKey[nLen] != 0 )
+        if ( ( p->pExMark[i] & Mark ) || strncmp( pKey, pText, nLen ) != 0 || pKey[nLen] != 0 )
             continue;
-        s_pExMark[i] |= Mark;
-        *MstaSdcIntArrayAppend( vHits ) = i;
+        p->pExMark[i] |= Mark;
+        *MstaIdArrayAppend( vHits ) = i;
     }
 }
 
 static void Msta_SdcExIndexLookupText( MstaSdc *p, MstaSdcExIndex *pIdx, int fTo,
-                                       const char *pText, MstaSdcIntArray *vHits )
+                                       const char *pText, MstaIdArray *vHits )
 {
     size_t i;
     if ( pText == NULL )
@@ -685,7 +708,7 @@ static void Msta_SdcExIndexLookupText( MstaSdc *p, MstaSdcExIndex *pIdx, int fTo
 }
 
 static void Msta_SdcExIndexHits( MstaSdc *p, MstaDesign *pDes, int fTo,
-                                 const MstaSdcObject *pObj, MstaSdcIntArray *vHits )
+                                 const MstaSdcObject *pObj, MstaIdArray *vHits )
 {
     MstaSdcExIndex *pIdx = fTo ? &p->ExIndexTo : &p->ExIndexFrom;
     vHits->nSize = 0;
@@ -699,6 +722,24 @@ static void Msta_SdcExIndexHits( MstaSdc *p, MstaDesign *pDes, int fTo,
         Msta_SdcExIndexLookupText( p, pIdx, fTo, pPath, vHits );
         if ( pPath != sPath )
             free( pPath );
+        if ( !fTo )
+        {
+            MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, pObj->nInst );
+            MstaCell *pCell = pInst->pCell;
+            MstaPin  *pPin  = MstaPinArrayAt( &pCell->vPins, pObj->nPin );
+            if ( pCell->fSequential && pPin->Dir == MSTA_DIR_OUTPUT )
+            {
+                const char *pInstName = Msta_InstName( pDes, pObj->nInst );
+                int k;
+                for ( k = 0; k < pCell->vRegs.nSize; k++ )
+                {
+                    char sClk[512];
+                    snprintf( sClk, sizeof(sClk), "%s/%s", pInstName,
+                              Msta_NameStr( MstaRegCheckArrayAt(&pCell->vRegs,k)->ClkPin ) );
+                    Msta_SdcExIndexLookupText( p, pIdx, fTo, sClk, vHits );
+                }
+            }
+        }
     }
 }
 
@@ -707,7 +748,7 @@ static int Msta_SdcCompareIntAsc( const void *pA, const void *pB )
     return Msta_SdcCompareInt( *(const int *)pA, *(const int *)pB );
 }
 
-static void Msta_SdcMergeSortedTail( MstaSdcIntArray *v, int nHead )
+static void Msta_SdcMergeSortedTail( MstaSdc *p, MstaIdArray *v, int nHead )
 {
     int i = 0, j = nHead, n = 0;
     if ( v->nSize - nHead <= 0 )
@@ -715,44 +756,44 @@ static void Msta_SdcMergeSortedTail( MstaSdcIntArray *v, int nHead )
     qsort( v->pData + nHead, (size_t)(v->nSize - nHead), sizeof(int), Msta_SdcCompareIntAsc );
     if ( nHead == 0 )
         return;
-    s_vExMerge.nSize = 0;
+    p->ExMerge.nSize = 0;
     while ( i < nHead || j < v->nSize )
     {
         if ( j >= v->nSize || ( i < nHead && v->pData[i] < v->pData[j] ) )
-            *MstaSdcIntArrayAppend( &s_vExMerge ) = v->pData[i++];
+            *MstaIdArrayAppend( &p->ExMerge ) = v->pData[i++];
         else
-            *MstaSdcIntArrayAppend( &s_vExMerge ) = v->pData[j++];
+            *MstaIdArrayAppend( &p->ExMerge ) = v->pData[j++];
         n++;
     }
-    memcpy( v->pData, s_vExMerge.pData, (size_t)n * sizeof(int) );
+    memcpy( v->pData, p->ExMerge.pData, (size_t)n * sizeof(int) );
 }
 
-static void Msta_SdcExIndexCollect( MstaSdcExIndex *pIdx, MstaSdcIntArray *vHits,
+static void Msta_SdcExIndexCollect( MstaSdc *p, MstaSdcExIndex *pIdx, MstaIdArray *vHits,
                                     MstaSdcExIndex *pOther, char OtherMark,
-                                    MstaSdcIntArray *vOut )
+                                    MstaIdArray *vOut )
 {
     int i, nHead;
     for ( i = 0; i < pIdx->nAlways; i++ )
     {
         int e = pIdx->pAlways[i];
-        if ( pOther->pfAlways[e] || ( s_pExMark[e] & OtherMark ) )
-            *MstaSdcIntArrayAppend( vOut ) = e;
+        if ( pOther->pfAlways[e] || ( p->pExMark[e] & OtherMark ) )
+            *MstaIdArrayAppend( vOut ) = e;
     }
     nHead = vOut->nSize;
     for ( i = 0; i < vHits->nSize; i++ )
     {
         int e = vHits->pData[i];
-        if ( pOther->pfAlways[e] || ( s_pExMark[e] & OtherMark ) )
-            *MstaSdcIntArrayAppend( vOut ) = e;
+        if ( pOther->pfAlways[e] || ( p->pExMark[e] & OtherMark ) )
+            *MstaIdArrayAppend( vOut ) = e;
     }
-    Msta_SdcMergeSortedTail( vOut, nHead );
+    Msta_SdcMergeSortedTail( p, vOut, nHead );
 }
 
-static void Msta_SdcExIndexClearMarks( MstaSdcIntArray *vHits )
+static void Msta_SdcExIndexClearMarks( MstaSdc *p, MstaIdArray *vHits )
 {
     int i;
     for ( i = 0; i < vHits->nSize; i++ )
-        s_pExMark[vHits->pData[i]] = 0;
+        p->pExMark[vHits->pData[i]] = 0;
 }
 
 static int Msta_SdcExceptionCandidates( MstaSdc *p, MstaDesign *pDes,
@@ -761,20 +802,20 @@ static int Msta_SdcExceptionCandidates( MstaSdc *p, MstaDesign *pDes,
 {
     int nTo, nFrom;
     Msta_SdcExIndexUpdate( p );
-    s_vExCandidates.nSize = 0;
-    Msta_SdcExIndexHits( p, pDes, 1, pTo ? pTo->pObj : NULL, &s_vExHitsTo );
-    Msta_SdcExIndexHits( p, pDes, 0, pFrom ? pFrom->pObj : NULL, &s_vExHitsFrom );
-    nTo = p->ExIndexTo.nAlways + s_vExHitsTo.nSize;
-    nFrom = p->ExIndexFrom.nAlways + s_vExHitsFrom.nSize;
+    p->ExCandidates.nSize = 0;
+    Msta_SdcExIndexHits( p, pDes, 1, pTo ? pTo->pObj : NULL, &p->ExHitsTo );
+    Msta_SdcExIndexHits( p, pDes, 0, pFrom ? pFrom->pObj : NULL, &p->ExHitsFrom );
+    nTo = p->ExIndexTo.nAlways + p->ExHitsTo.nSize;
+    nFrom = p->ExIndexFrom.nAlways + p->ExHitsFrom.nSize;
     if ( nTo <= nFrom )
-        Msta_SdcExIndexCollect( &p->ExIndexTo, &s_vExHitsTo, &p->ExIndexFrom, 2,
-                                &s_vExCandidates );
+        Msta_SdcExIndexCollect( p, &p->ExIndexTo, &p->ExHitsTo, &p->ExIndexFrom, 2,
+                                &p->ExCandidates );
     else
-        Msta_SdcExIndexCollect( &p->ExIndexFrom, &s_vExHitsFrom, &p->ExIndexTo, 1,
-                                &s_vExCandidates );
-    Msta_SdcExIndexClearMarks( &s_vExHitsTo );
-    Msta_SdcExIndexClearMarks( &s_vExHitsFrom );
-    return s_vExCandidates.nSize;
+        Msta_SdcExIndexCollect( p, &p->ExIndexFrom, &p->ExHitsFrom, &p->ExIndexTo, 1,
+                                &p->ExCandidates );
+    Msta_SdcExIndexClearMarks( p, &p->ExHitsTo );
+    Msta_SdcExIndexClearMarks( p, &p->ExHitsFrom );
+    return p->ExCandidates.nSize;
 }
 
 void Msta_SdcFindExceptionPath( MstaSdc *p, MstaDesign *pDes,
@@ -787,7 +828,7 @@ void Msta_SdcFindExceptionPath( MstaSdc *p, MstaDesign *pDes,
     *pfFalse = 0;
     for ( i = 0; i < nCandidates; i++ )
     {
-        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,s_vExCandidates.pData[i]);
+        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,p->ExCandidates.pData[i]);
         if ( !Msta_SdcExceptionHits(p,pDes,pEx,pFrom,pTo,pObjects,nObjects) )
             continue;
         if ( pEx->fApplySetup ) nSetupCycles = pEx->nSetupCycles;
@@ -808,7 +849,7 @@ double Msta_SdcFindPathDelay( MstaSdc *p, MstaDesign *pDes,
     double Best = MSTA_UNSET;
     for ( i = 0; i < nCandidates; i++ )
     {
-        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,s_vExCandidates.pData[i]);
+        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,p->ExCandidates.pData[i]);
         if ( !pEx->fMaxDelay && !pEx->fMinDelay )
             continue;
         if ( !Msta_SdcExceptionHits(p,pDes,pEx,pFrom,pTo,pObjects,nObjects) )
@@ -821,10 +862,40 @@ double Msta_SdcFindPathDelay( MstaSdc *p, MstaDesign *pDes,
     return Best;
 }
 
-/* 路径被 false path 命中后，为了找次优路径：把命中的那条例外的 -through 匹配到的
-   (网络, 边沿) 收集起来，调用方排除掉这些到达时间再重算。
-   -through 不带边沿时两个边沿都排除（那条例外对这根网络上的任何边沿都成立）；
-   只有 -from/-to 的例外没法细分，返回 0 个。 */
+static void Msta_SdcPushExclusionHit( MstaDesign *pDes, const MstaSdcObject *pObjects,
+                                      int nHitIdx, char RF,
+                                      MstaPathExclude *pOut, int *pnOut, int nCap )
+{
+    const MstaSdcObject *pObj = &pObjects[nHitIdx];
+    int j, fSeen = 0, nInst = -1, nPin = -1;
+    int EdgeMask = ( RF == 'r' ) ? 1 : ( RF == 'f' ) ? 2 : 3;
+    if ( pObj->nNet < 0 )
+        return;
+    if ( pObj->nInst >= 0 && pObj->nPin >= 0 )
+    {
+        MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, pObj->nInst );
+        if ( MstaPinArrayAt( &pInst->pCell->vPins, pObj->nPin )->Dir != MSTA_DIR_OUTPUT )
+        {
+            nInst = pObj->nInst;
+            nPin = pObj->nPin;
+        }
+    }
+    for ( j = 0; j < *pnOut; j++ )
+        if ( pOut[j].Net == pObj->nNet && pOut[j].Inst == nInst && pOut[j].Pin == nPin )
+        { pOut[j].EdgeMask |= EdgeMask; fSeen = 1; break; }
+    if ( !fSeen && *pnOut < nCap )
+    {
+        pOut[*pnOut].Net = pObj->nNet;
+        pOut[*pnOut].EdgeMask = EdgeMask;
+        pOut[*pnOut].Inst = nInst;
+        pOut[*pnOut].Pin = nPin;
+        (*pnOut)++;
+    }
+}
+
+/* 路径被 false path 命中后，收集单个 -through 组命中的 (网络, 边沿) 用于直接排除。
+   多组 -through 串联不能同时全排除（否则把 A && B 错当成 A || B），改由
+   Msta_SdcPathExclusionBranches 返回各分支供时序引擎逐一尝试。 */
 int Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
                             const MstaSdcEndpoint *pFrom, const MstaSdcEndpoint *pTo,
                             int fSetup, const MstaSdcObject *pObjects, int nObjects,
@@ -833,8 +904,8 @@ int Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
     int i, nOut = 0, nCandidates = Msta_SdcExceptionCandidates( p, pDes, pFrom, pTo );
     for ( i = 0; i < nCandidates && nOut < nCap; i++ )
     {
-        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,s_vExCandidates.pData[i]);
-        int nHits[MSTA_SDC_MAX_THRU], nHitCount = 0, g;
+        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,p->ExCandidates.pData[i]);
+        int nHits[MSTA_SDC_MAX_THRU], nHitCount = 0;
         char vRF[MSTA_SDC_MAX_THRU];
         if ( pEx->nThru == 0 )
             continue;
@@ -844,25 +915,39 @@ int Msta_SdcPathExclusions( MstaSdc *p, MstaDesign *pDes,
             continue;
         if ( !Msta_SdcMatchThrough(pDes,pEx,pObjects,nObjects,nHits,vRF,&nHitCount) )
             continue;
-        for ( g = 0; g < nHitCount && nOut < nCap; g++ )
-        {
-            const MstaSdcObject *pObj = &pObjects[nHits[g]];
-            int j, fSeen = 0;
-            int EdgeMask = ( vRF[g] == 'r' ) ? 1 : ( vRF[g] == 'f' ) ? 2 : 3;
-            if ( pObj->nNet < 0 )
-                continue;
-            for ( j = 0; j < nOut; j++ )
-                if ( pOut[j].Net == pObj->nNet )
-                { pOut[j].EdgeMask |= EdgeMask; fSeen = 1; break; }
-            if ( !fSeen )
-            {
-                pOut[nOut].Net = pObj->nNet;
-                pOut[nOut].EdgeMask = EdgeMask;
-                nOut++;
-            }
-        }
+        if ( nHitCount == 1 )
+            Msta_SdcPushExclusionHit( pDes, pObjects, nHits[0], vRF[0], pOut, &nOut, nCap );
     }
     return nOut;
+}
+
+int Msta_SdcPathExclusionBranches( MstaSdc *p, MstaDesign *pDes,
+                                    const MstaSdcEndpoint *pFrom, const MstaSdcEndpoint *pTo,
+                                    int fSetup, const MstaSdcObject *pObjects, int nObjects,
+                                    MstaPathExclude *pOut, int nCap )
+{
+    int i, nCandidates = Msta_SdcExceptionCandidates( p, pDes, pFrom, pTo );
+    for ( i = 0; i < nCandidates; i++ )
+    {
+        MstaException *pEx = MstaExceptionArrayAt(&p->vExceptions,p->ExCandidates.pData[i]);
+        int nHits[MSTA_SDC_MAX_THRU], nHitCount = 0, g, nOut = 0;
+        char vRF[MSTA_SDC_MAX_THRU];
+        if ( pEx->nThru == 0 )
+            continue;
+        if ( !( fSetup ? pEx->fFalseSetup : pEx->fFalseHold ) )
+            continue;
+        if ( !Msta_SdcExceptionHits(p,pDes,pEx,pFrom,pTo,pObjects,nObjects) )
+            continue;
+        if ( !Msta_SdcMatchThrough(pDes,pEx,pObjects,nObjects,nHits,vRF,&nHitCount) )
+            continue;
+        if ( nHitCount <= 1 )
+            continue;
+        for ( g = 0; g < nHitCount && nOut < nCap; g++ )
+            Msta_SdcPushExclusionHit( pDes, pObjects, nHits[g], vRF[g], pOut, &nOut, nCap );
+        if ( nOut > 0 )
+            return nOut;
+    }
+    return 0;
 }
 
 static const MstaException *s_pSortExceptions;
@@ -940,29 +1025,29 @@ int Msta_SdcFromExceptionMatches( MstaSdc *p, MstaDesign *pDes, const MstaSdcObj
 {
     int i, n = 0, nHead;
     Msta_SdcExIndexUpdate( p );
-    Msta_SdcExIndexHits( p, pDes, 0, pObj, &s_vExHitsFrom );
-    Msta_SdcExIndexClearMarks( &s_vExHitsFrom );
-    s_vExCandidates.nSize = 0;
+    Msta_SdcExIndexHits( p, pDes, 0, pObj, &p->ExHitsFrom );
+    Msta_SdcExIndexClearMarks( p, &p->ExHitsFrom );
+    p->ExCandidates.nSize = 0;
     for ( i = 0; i < p->ExIndexFrom.nAlways; i++ )
     {
         MstaException *pEx = MstaExceptionArrayAt( &p->vExceptions, p->ExIndexFrom.pAlways[i] );
         if ( pEx->FromText != MSTA_NO_ID && pEx->FromKind != 'C' )
-            *MstaSdcIntArrayAppend( &s_vExCandidates ) = p->ExIndexFrom.pAlways[i];
+            *MstaIdArrayAppend( &p->ExCandidates ) = p->ExIndexFrom.pAlways[i];
     }
-    nHead = s_vExCandidates.nSize;
-    for ( i = 0; i < s_vExHitsFrom.nSize; i++ )
-        *MstaSdcIntArrayAppend( &s_vExCandidates ) = s_vExHitsFrom.pData[i];
-    Msta_SdcMergeSortedTail( &s_vExCandidates, nHead );
-    for ( i = 0; i < s_vExCandidates.nSize; i++ )
+    nHead = p->ExCandidates.nSize;
+    for ( i = 0; i < p->ExHitsFrom.nSize; i++ )
+        *MstaIdArrayAppend( &p->ExCandidates ) = p->ExHitsFrom.pData[i];
+    Msta_SdcMergeSortedTail( p, &p->ExCandidates, nHead );
+    for ( i = 0; i < p->ExCandidates.nSize; i++ )
     {
-        MstaException *pEx = MstaExceptionArrayAt( &p->vExceptions, s_vExCandidates.pData[i] );
+        MstaException *pEx = MstaExceptionArrayAt( &p->vExceptions, p->ExCandidates.pData[i] );
         if ( pEx->FromText == MSTA_NO_ID || pEx->FromKind == 'C' ||
-             !Msta_SdcMatchObject( pDes, pEx->FromText, pEx->FromKind, pObj, NULL ) )
+             !Msta_SdcMatchObject( pDes, pEx->FromText, pEx->FromKind, pObj, NULL, 1 ) )
             continue;
-        s_vExCandidates.pData[n++] = s_vExCandidates.pData[i];
+        p->ExCandidates.pData[n++] = p->ExCandidates.pData[i];
     }
-    s_vExCandidates.nSize = n;
-    *ppExceptions = s_vExCandidates.pData;
+    p->ExCandidates.nSize = n;
+    *ppExceptions = p->ExCandidates.pData;
     return n;
 }
 
@@ -988,10 +1073,10 @@ static int Msta_SdcPathGroupHits( MstaSdc *p, MstaDesign *pDes, MstaPathGroup *p
 {
     (void)p;
     if ( !Msta_SdcMatchObject(pDes,pGroup->FromText,pGroup->FromKind,
-                              pFrom ? pFrom->pObj : NULL, pFrom ? pFrom->pClock : NULL) )
+                              pFrom ? pFrom->pObj : NULL, pFrom ? pFrom->pClock : NULL, 1) )
         return 0;
     if ( !Msta_SdcMatchObject(pDes,pGroup->ToText,pGroup->ToKind,
-                              pTo ? pTo->pObj : NULL, pTo ? pTo->pClock : NULL) )
+                              pTo ? pTo->pObj : NULL, pTo ? pTo->pClock : NULL, 0) )
         return 0;
     if ( !Msta_SdcEdgeMatches(pGroup->FromRF, Msta_SdcEndpointEdge(pFrom,pGroup->FromKind)) ||
          !Msta_SdcEdgeMatches(pGroup->ToRF, Msta_SdcEndpointEdge(pTo,pGroup->ToKind)) )

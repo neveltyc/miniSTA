@@ -1,130 +1,48 @@
 /**CFile***************************************************************
 
-  FileName    [abc_scl_liberty_tree.inc]
+  FileName    [msta_liberty_lex.c]
 
   SystemName  [msta]
 
   Synopsis    [Liberty 语法树解析器 —— 抄自 berkeley-abc/abc 的 src/map/scl/sclLiberty.c]
 
   ---------------------------------------------------------------------
-  来历与改动
+  来历与改动（UC Berkeley ABC）
   ---------------------------------------------------------------------
-  本文件是 ABC 的 Liberty "语法层"（不是语义层）的最小可独立编译版本：
+  本文件是 ABC 的 Liberty "语法层"（不是语义层）的独立编译单元：
   作者 Alan Mishchenko / Niklas Een, UC Berkeley, 2012。
-  函数名、结构体名和控制流尽量与 ABC 原文件一致。主要改动：
+  函数名、结构体名和控制流尽量与 ABC 原文件一致，主要改动包括：
+    1) 去掉 ABC 依赖：malloc/free 替代 ABC_ALLOC/ABC_FREE；
+    2) 仅保留语法树解析层（语义层在 msta_lib.c）；
+    3) offset 使用 ssize_t 并改 snprintf，防御截断 Liberty 文件越界读。
 
-    1) 去掉 ABC 依赖：ABC_ALLOC/ABC_FREE -> malloc/free，
-       Vec_Str_t 临时缓冲 -> 树里的一块 char*，Abc_Clock 计时 -> 删除。
-    2) 删掉语法层以外的东西：ABC 在同一个文件里还做了
-       "从语法树提取 SC_Cell/SC_Pin 用于工艺映射" 的工作
-       (Scl_LibertyReadCell 等)。本文件只保留语法树解析。
-    3) 修正 ABC 的一个内存安全缺陷：原文件用 long 保存 offset，
-       并对 pError 用 sprintf 拼接；这里统一改成 snprintf，
-       并把 offset 的类型写成 ssize_t，避免 32 位 long 截断。
-    4) 删掉 msta 不调用的调试/辅助函数：Scl_LibertyItemKey、Scl_LibertyItemIsEqua、
-       Scl_LibertyCountChildren、Scl_LibertyDump/DumpItem/DumpChildren，
-       以及只供它们使用的 Scl_ItemForEachChild 宏。
-    5) 加固输入检查：括号/花括号不配对（文件被截断）时按语法错误退出，
-       不越过文件末尾读；没有任何条目时 Scl_LibertyRoot 返回 NULL；
-       节点池用 assert 守住"不会用尽"的不变式。
+  ABC: System for Sequential Synthesis and Verification
+  http://www.eecs.berkeley.edu/~alanmi/abc/
 
-  ABC 的 sclLiberty 只有语法层和工艺映射用的语义层（不读 ff/latch、不认
-  timing_type），STA 需要的 setup/hold、时钟脚等信息它没有，因此这里只复用
-  语法树，语义层（cell/pin/arc/表）在 msta_lib.c 里实现。
+  Copyright (c) The Regents of the University of California. All rights reserved.
 
-  ---------------------------------------------------------------------
-  Liberty 的语法形状（这个解析器只认这三种条目）
-  ---------------------------------------------------------------------
-    过程   key(head){ 条目... }   —— 例如 cell("INV"){ pin("Y"){ ... } }
-    等式   key : value ;          —— 例如 direction : "input";
-    列表   key(head) ; 或 key(head)   —— 例如 index_1("0.01, 0.02");
-  树里每个条目只保存三段 offset：Key / Head / Body（ABC 的 Scl_Pair_t）。
-  字符串永远指回原文件缓冲，不复制 —— 这是 ABC 解析器快的原因之一，
-  代价：树的生命周期内不能释放文件内容。
+  Permission is hereby granted, without written agreement and without license or
+  royalty fees, to use, copy, modify, and distribute this software and its
+  documentation for any purpose, provided that the above copyright notice and
+  the following two paragraphs appear in all copies of this software.
 
-  用法（语义层常用的几个函数）：
-    Scl_Tree_t *p = Scl_LibertyParse( pFileName );
-    Scl_Item_t *pLib = Scl_LibertyFindTop( p, "library" );
-    Scl_ItemForEachChildName( p, pLib, pCell, "cell" ) { ... }
-    const char *pName = Scl_LibertyItemName( p, pCell );     // head 去引号，指向 scratch 缓冲
-    double d = Scl_LibertyItemDouble( p, pItem, 0.0, &fOk ); // EQUA 的数值
-    Scl_LibertyStop( p );
+  IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO ANY PARTY FOR
+  DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF
+  THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF THE UNIVERSITY OF
+  CALIFORNIA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+  THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING,
+  BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE. THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS,
+  AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATION TO PROVIDE MAINTENANCE,
+  SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
 ***********************************************************************/
 
 #include <stdarg.h>
-
-/* ---------------------------------------------------------------------
-   数据结构（对应 ABC sclLiberty.c:43-82）
-   --------------------------------------------------------------------- */
-
-typedef enum {
-    SCL_LIBERTY_NONE = 0,
-    SCL_LIBERTY_PROC,            /* 1: key(head){body} */
-    SCL_LIBERTY_EQUA,            /* 2: key : head;     */
-    SCL_LIBERTY_LIST             /* 3: key(head)       */
-} Scl_LibertyType_t;
-
-typedef struct Scl_Pair_t_ {     /* ABC: Scl_Pair_t —— 一段 [Beg,End) 的字节区间 */
-    ssize_t  Beg;
-    ssize_t  End;
-} Scl_Pair_t;
-
-typedef struct Scl_Item_t_ {     /* ABC: Scl_Item_t —— 语法树的一个节点 */
-    int        Type;
-    ssize_t    iLine;            /* 出错时报行号用 */
-    Scl_Pair_t Key;
-    Scl_Pair_t Head;
-    Scl_Pair_t Body;
-    ssize_t    Next;             /* 兄弟节点（同一层的下一个条目） */
-    ssize_t    Child;            /* 第一个孩子节点 */
-} Scl_Item_t;
-
-typedef struct {                 /* ABC: Scl_Tree_t */
-    char       *pFileName;
-    char       *pContents;       /* 整个文件，一次性读入 */
-    ssize_t     nContents;
-    ssize_t     nLines;          /* 解析过程中递增，用于报错行号 */
-    ssize_t     nItems;
-    ssize_t     nItemsAlloc;
-    Scl_Item_t *pItems;          /* 所有节点存在一个池子里，用下标互指 */
-    char       *pError;
-    char       *pScratch;        /* 取代 ABC 的 Vec_Str_t，给 Scl_LibertyReadString 用 */
-    ssize_t     nScratch;
-} Scl_Tree_t;
-
-/* 前向声明：出错信息里要打印条目名字。 */
-static const char *Scl_LibertyReadString( Scl_Tree_t *pTree, Scl_Pair_t Range );
-
-/* ---------------------------------------------------------------------
-   小工具（对应 ABC sclLiberty.c:85-102）
-   --------------------------------------------------------------------- */
-
-/* 空文件、只有注释或第一个条目就解析失败时一个条目都没有，返回 NULL
-   （池子是 calloc 的，第 0 项的 Next 为 0，直接当根用会在顶层链上原地打转）。 */
-static inline Scl_Item_t *Scl_LibertyRoot( Scl_Tree_t *p )
-{   return p->nItems > 0 ? p->pItems : NULL;  }
-
-static inline Scl_Item_t *Scl_LibertyItem( Scl_Tree_t *p, ssize_t v )
-{   assert( v <= p->nItems ); return v < 0 ? NULL : p->pItems + v;  }
-
-/* 判断某段区间是否恰好等于一个 C 字符串字面量。不复制、不分配。
-   返回值语义与 strcmp 相同：0 表示相等。Scl_ItemForEachChildName 依赖这一点。 */
-static inline int Scl_LibertyCompare( Scl_Tree_t *p, Scl_Pair_t Pair, const char *pStr )
-{
-    size_t n = (size_t)(Pair.End - Pair.Beg);
-    if ( strlen(pStr) != n )
-        return 1;
-    return strncmp( p->pContents + Pair.Beg, pStr, n );
-}
-
-static inline ssize_t Scl_LibertyItemId( Scl_Tree_t *p, Scl_Item_t *pItem )
-{   return pItem - p->pItems;  }
-
-/* 只遍历 pItem 里 key 等于某个名字的孩子。 */
-#define Scl_ItemForEachChildName( p, pItem, pChild, pName ) \
-    for ( pChild = Scl_LibertyItem(p, pItem->Child); pChild; pChild = Scl_LibertyItem(p, pChild->Next) ) \
-        if ( Scl_LibertyCompare(p, pChild->Key, pName) ) {} else
+#include <strings.h>
+#include "msta_liberty_lex.h"
+#include "msta_util.h"
 
 /* ---------------------------------------------------------------------
    词法级辅助（对应 ABC sclLiberty.c:208-360）
@@ -255,8 +173,6 @@ static inline Scl_Pair_t Scl_LibertyUpdateHead( Scl_Tree_t *p, Scl_Pair_t Head )
 static inline Scl_Item_t *Scl_LibertyNewItem( Scl_Tree_t *p, int Type )
 {
     Scl_Item_t *pItem;
-    /* 每个条目都消耗一个不同的 '(' 或 ':'，池子按它们的个数分配，不会用尽；
-       这里只是守住这个不变式。 */
     assert( p->nItems < p->nItemsAlloc );
     pItem = p->pItems + p->nItems++;
     pItem->iLine = p->nLines;
@@ -268,9 +184,6 @@ static inline Scl_Item_t *Scl_LibertyNewItem( Scl_Tree_t *p, int Type )
 
 /* ---------------------------------------------------------------------
    递归下降：读一个条目，返回它的下标。
-     -2 表示 "读到结尾了"（正常结束）
-     -1 表示 "语法错误"（ABC 会记下 pError 并继续用残缺的树）
-   对应 ABC sclLiberty.c:411-521。
    --------------------------------------------------------------------- */
 static ssize_t Scl_LibertyBuildItem( Scl_Tree_t *p, char **ppPos, char *pEnd )
 {
@@ -330,13 +243,13 @@ static ssize_t Scl_LibertyBuildItem( Scl_Tree_t *p, char **ppPos, char *pEnd )
     if ( *pNext == '(' )
     {
         pStop    = Scl_LibertyFindMatch( pNext, pEnd );
-        if ( pStop >= pEnd )            /* 括号没配对（文件被截断）：不能越过 pEnd 往后读 */
+        if ( pStop >= pEnd )
             goto exit;
         Head.Beg = pNext - p->pContents + 1;
         Head.End = pStop - p->pContents;
         *ppPos   = pStop + 1;
         if ( Scl_LibertySkipSpaces(p, ppPos, pEnd, 0) )
-        {   /* 文件到此结束：只能是列表 */
+        {
             pItem = Scl_LibertyNewItem( p, SCL_LIBERTY_LIST );
             pItem->Key  = Key;
             pItem->Head = Scl_LibertyUpdateHead( p, Head );
@@ -344,10 +257,10 @@ static ssize_t Scl_LibertyBuildItem( Scl_Tree_t *p, char **ppPos, char *pEnd )
         }
         pNext = *ppPos;
         if ( *pNext == '{' )
-        {   /* 带 body 的过程：递归解析 body 里的条目 */
+        {
             ssize_t nChild, nNext;
             pStop    = Scl_LibertyFindMatch( pNext, pEnd );
-            if ( pStop >= pEnd )        /* 花括号没配对：同上 */
+            if ( pStop >= pEnd )
                 goto exit;
             Body.Beg = pNext - p->pContents + 1;
             Body.End = pStop - p->pContents;
@@ -367,7 +280,6 @@ static ssize_t Scl_LibertyBuildItem( Scl_Tree_t *p, char **ppPos, char *pEnd )
             pItem->Next = nNext;
             return Scl_LibertyItemId( p, pItem );
         }
-        /* 没有 body：key(head); 形式，仍然是列表 */
         if ( *pNext == ';' )
             *ppPos = pNext + 1;
         pItem = Scl_LibertyNewItem( p, SCL_LIBERTY_LIST );
@@ -398,9 +310,6 @@ exit:
     return -1;
 }
 
-/* 数一数文件里大概有多少个条目，一次把节点池子分足（ABC 的优化）。
-   建树时每个条目都由一个不同的 '(' 或 ':' 触发，所以这个计数是上界；
-   ';' 也计入只是多留余量。 */
 static ssize_t Scl_LibertyCountItems( const char *pBeg, const char *pEnd )
 {
     ssize_t nCounter = 0;
@@ -413,7 +322,7 @@ static ssize_t Scl_LibertyCountItems( const char *pBeg, const char *pEnd )
    对外接口：建树 / 析构 / 取值
    --------------------------------------------------------------------- */
 
-static void Scl_LibertyStop( Scl_Tree_t *p )
+void Scl_LibertyStop( Scl_Tree_t *p )
 {
     if ( p == NULL )
         return;
@@ -425,7 +334,6 @@ static void Scl_LibertyStop( Scl_Tree_t *p )
     free( p );
 }
 
-/* 直接对内存里的文本建树；pContents 会被就地修改（涂注释），所有权转移给树。 */
 static Scl_Tree_t *Scl_LibertyParseString( const char *pFileName, char *pContents, ssize_t nContents )
 {
     Scl_Tree_t *p;
@@ -433,15 +341,15 @@ static Scl_Tree_t *Scl_LibertyParseString( const char *pFileName, char *pContent
 
     p = (Scl_Tree_t *)calloc( 1, sizeof(Scl_Tree_t) );
     assert( p );
-    p->pFileName  = Msta_StrDup( pFileName );
-    p->pContents  = pContents;
-    p->nContents  = nContents;
-    p->nLines     = 1;
+    p->pFileName   = Msta_StrDup( pFileName );
+    p->pContents   = pContents;
+    p->nContents   = nContents;
+    p->nLines      = 1;
     p->nItemsAlloc = 10 + 2 * Scl_LibertyCountItems( pContents, pContents + nContents );
-    p->pItems     = (Scl_Item_t *)calloc( (size_t)p->nItemsAlloc, sizeof(Scl_Item_t) );
+    p->pItems      = (Scl_Item_t *)calloc( (size_t)p->nItemsAlloc, sizeof(Scl_Item_t) );
     assert( p->pItems );
-    p->nScratch   = 1024;
-    p->pScratch   = (char *)malloc( (size_t)p->nScratch );
+    p->nScratch    = 1024;
+    p->pScratch    = (char *)malloc( (size_t)p->nScratch );
     assert( p->pScratch );
 
     Scl_LibertyWipeOutComments( p->pContents, p->pContents + p->nContents );
@@ -455,7 +363,7 @@ static Scl_Tree_t *Scl_LibertyParseString( const char *pFileName, char *pContent
     return p;
 }
 
-static Scl_Tree_t *Scl_LibertyParse( const char *pFileName )
+Scl_Tree_t *Scl_LibertyParse( const char *pFileName )
 {
     size_t nSize = 0;
     char *pContents = Msta_FileReadAll( pFileName, &nSize );
@@ -464,15 +372,13 @@ static Scl_Tree_t *Scl_LibertyParse( const char *pFileName )
     return Scl_LibertyParseString( pFileName, pContents, (ssize_t)nSize );
 }
 
-/* 把区间取成一个 C 字符串（去掉外层引号）。返回的指针在下次调用前有效，
-   语义层要长期保留的话必须自己复制 —— msta_lib.c 里都会立即 intern。 */
-static const char *Scl_LibertyReadString( Scl_Tree_t *p, Scl_Pair_t Pair )
+const char *Scl_LibertyReadString( Scl_Tree_t *p, Scl_Pair_t Pair )
 {
     ssize_t n = Pair.End - Pair.Beg;
     if ( n < 0 ) n = 0;
     if ( n + 1 > p->nScratch )
     {
-        p->nScratch = (int)(n + 100);
+        p->nScratch = n + 100;
         p->pScratch = (char *)realloc( p->pScratch, (size_t)p->nScratch );
         assert( p->pScratch );
     }
@@ -486,20 +392,7 @@ static const char *Scl_LibertyReadString( Scl_Tree_t *p, Scl_Pair_t Pair )
     return p->pScratch;
 }
 
-/* 条目的 head 文本（cell("INV") -> INV；area : 1.2 -> 1.2）。 */
-#define Scl_LibertyItemName(p, pItem)  Scl_LibertyReadString( (p), (pItem)->Head )
-
-/* 条目 head 的原始字节区间，不去引号、不复制。msta_lib.c 用它读 LIST 条目
-   （index_1("...")、capacitive_load_unit(...)）里的数字。 */
-#define Scl_LibertyItemRaw(pTree_, pItem_, ppBeg_, pnLen_)          \
-    do {                                                            \
-        *(ppBeg_) = (pTree_)->pContents + (pItem_)->Head.Beg;       \
-        *(pnLen_) = (ssize_t)((pItem_)->Head.End - (pItem_)->Head.Beg); \
-    } while (0)
-
-/* 取一个等式条目的 double 值；取不到就返回默认值并把 *pfOk 置 0。
-   Liberty 里 "area : 3.2;" 和 "capacitance : 4.2e-05;" 都走这里。 */
-static double Scl_LibertyItemDouble( Scl_Tree_t *p, Scl_Item_t *pItem, double Default, int *pfOk )
+double Scl_LibertyItemDouble( Scl_Tree_t *p, Scl_Item_t *pItem, double Default, int *pfOk )
 {
     char *pEndPtr;
     double Value;
@@ -507,14 +400,13 @@ static double Scl_LibertyItemDouble( Scl_Tree_t *p, Scl_Item_t *pItem, double De
     if ( pItem == NULL || pItem->Type != SCL_LIBERTY_EQUA )
         return Default;
     Value = strtod( Scl_LibertyReadString(p, pItem->Head), &pEndPtr );
-    if ( pEndPtr == Scl_LibertyReadString(p, pItem->Head) )   /* 一个数字都没读到 */
+    if ( pEndPtr == Scl_LibertyReadString(p, pItem->Head) )
         return Default;
     if ( pfOk ) *pfOk = 1;
     return Value;
 }
 
-/* Liberty 的布尔值写成 "true"/"false"，也有直接写 1/0 的。 */
-static int Scl_LibertyItemBool( Scl_Tree_t *pTree, Scl_Item_t *pItem, int fDefault )
+int Scl_LibertyItemBool( Scl_Tree_t *pTree, Scl_Item_t *pItem, int fDefault )
 {
     const char *pText;
     if ( pItem == NULL || pItem->Type != SCL_LIBERTY_EQUA )
@@ -525,8 +417,7 @@ static int Scl_LibertyItemBool( Scl_Tree_t *pTree, Scl_Item_t *pItem, int fDefau
     return fDefault;
 }
 
-/* 在 pRoot 的孩子里找第一个 key 等于 pName 的条目。 */
-static Scl_Item_t *Scl_LibertyFindChild( Scl_Tree_t *p, Scl_Item_t *pRoot, const char *pName )
+Scl_Item_t *Scl_LibertyFindChild( Scl_Tree_t *p, Scl_Item_t *pRoot, const char *pName )
 {
     Scl_Item_t *pChild;
     if ( pRoot == NULL ) return NULL;
@@ -535,10 +426,7 @@ static Scl_Item_t *Scl_LibertyFindChild( Scl_Tree_t *p, Scl_Item_t *pRoot, const
     return NULL;
 }
 
-/* 在顶层条目链上找 key 等于 pName 的条目。
-   ABC 直接假定 pItems[0] 就是 library（大多数库确实如此）；这里沿 Next 链兜底，
-   因为少数库文件会以 version/define 之类的条目开头。 */
-static Scl_Item_t *Scl_LibertyFindTop( Scl_Tree_t *p, const char *pName )
+Scl_Item_t *Scl_LibertyFindTop( Scl_Tree_t *p, const char *pName )
 {
     Scl_Item_t *pItem;
     for ( pItem = Scl_LibertyRoot(p); pItem; pItem = Scl_LibertyItem(p, pItem->Next) )

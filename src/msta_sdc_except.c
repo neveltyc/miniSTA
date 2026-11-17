@@ -97,8 +97,8 @@ static void Msta_SdcAddPathExceptions( MstaSdc *p, const MstaSdcPath *pPath, int
             /* 只在写了 -hold 时用（fApplyHold）：这时命令里的数字 M 不是周期数，
                而是 hold 沿从（由 setup 推出的）默认位置往回拉的拍数。 */
             pEx->nHoldShift = nCycles;
-            pEx->fApplySetup = !fFalse && ( !fHold || fSetup );
-            pEx->fApplyHold = !fFalse && fHold;
+            pEx->fApplySetup = !fFalse && !fMaxDelay && !fMinDelay && ( !fHold || fSetup );
+            pEx->fApplyHold = !fFalse && !fMaxDelay && !fMinDelay && fHold;
             pEx->fFalseSetup = fFalse && ( fSetup || !fHold );
             pEx->fFalseHold = fFalse && ( fHold || !fSetup );
             if ( fMaxDelay ) { pEx->fMaxDelay = 1; pEx->MaxDelay = Delay; }

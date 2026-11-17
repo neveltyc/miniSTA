@@ -71,7 +71,8 @@ void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCm
     if ( pWave )
     {
         char Extra;
-        if ( sscanf( pWave, "%lf %lf %c", &Rise, &Fall, &Extra ) != 2 )
+        if ( sscanf( pWave, "%lf %lf %c", &Rise, &Fall, &Extra ) != 2 ||
+             !isfinite( Rise ) || !isfinite( Fall ) )
         { Msta_SdcReject( p, pCmd, "-waveform 必须正好给两个边沿时间" ); return; }
         if ( Rise < 0.0 || Fall <= Rise || Fall >= Period )
         { Msta_SdcReject( p, pCmd, "-waveform 必须满足 0 <= 上升沿 < 下降沿 < 周期" ); return; }
@@ -105,19 +106,26 @@ void Msta_SdcCreateClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCm
 }
 
 /* 解析 SDC 的列表写法：-edges {1 3 5} 传到 C 侧就是一段 "1 3 5" 文本。
-   花括号、逗号、空格都当分隔符；碰到不是数字的地方停下。返回取到的个数。 */
+   花括号、逗号、空格都当分隔符；碰到非数字尾巴、非有限值或个数超出 nCap 返回 -1。 */
 static int Msta_SdcParseNumberList( const char *pText, double *pOut, int nCap )
 {
     const char *p = pText;
     int n = 0;
-    while ( p != NULL && *p != 0 && n < nCap )
+    while ( p != NULL && *p != 0 )
     {
         char *pEnd;
         double Value;
-        while ( *p == ' ' || *p == '\t' || *p == '{' || *p == '}' || *p == ',' ) p++;
+        while ( *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' ||
+                *p == '{' || *p == '}' || *p == ',' )
+            p++;
         if ( *p == 0 ) break;
         Value = strtod( p, &pEnd );
-        if ( pEnd == p ) break;
+        if ( pEnd == p || !isfinite( Value ) ) return -1;
+        if ( *pEnd && *pEnd != ' ' && *pEnd != '\t' && *pEnd != '\r' &&
+             *pEnd != '\n' && *pEnd != '{' && *pEnd != '}' && *pEnd != ',' )
+            return -1;
+        if ( n >= nCap )
+            return -1;
         pOut[n++] = Value;
         p = pEnd;
     }
@@ -212,7 +220,7 @@ void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, 
             { Msta_SdcReject( p, pCmd, "-edges 的值必须递增" ); return; }
         }
     }
-    /* 主时钟：-master_clock 点名，或者 -source 所在网络上的那个时钟。 */
+    /* 主时钟：-master_clock 点名，或者沿时钟树找唯一到达 -source 网络的时钟。 */
     if ( pMasterName != NULL )
     {
         pMaster = Msta_SdcFindClock( p, pMasterName );
@@ -220,9 +228,35 @@ void Msta_SdcCreateGeneratedClock( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, 
         { Msta_SdcReject( p, pCmd, "找不到主时钟 \"%s\"", pMasterName ); return; }
     }
     else if ( Msta_SdcResolveNets( pDes, pSource, &pNets ) > 0 )
+    {
         for ( i = 0; i < p->vClocks.nSize && pMaster == NULL; i++ )
             if ( Msta_SdcClockByIndex(p,i)->SourceNet == pNets[0] )
                 pMaster = Msta_SdcClockByIndex(p,i);
+        if ( pMaster == NULL && pDes->vNets.nSize > 0 )
+        {
+            char *pfOnNet = (char *)calloc( (size_t)pDes->vNets.nSize, 1 );
+            char *pPol = (char *)calloc( (size_t)pDes->vNets.nSize, 1 );
+            int nFound = 0;
+            MstaClock *pHit = NULL;
+            assert( pfOnNet && pPol );
+            for ( i = 0; i < p->vClocks.nSize; i++ )
+            {
+                MstaClock *pTry = Msta_SdcClockByIndex( p, i );
+                if ( pTry->SourceNet < 0 ) continue;
+                memset( pfOnNet, 0, (size_t)pDes->vNets.nSize );
+                memset( pPol, 0, (size_t)pDes->vNets.nSize );
+                Msta_SdcMarkClockNets( pDes, p, pTry, pfOnNet, pPol );
+                if ( pfOnNet[pNets[0]] )
+                { pHit = pTry; nFound++; }
+            }
+            free( pfOnNet );
+            free( pPol );
+            if ( nFound > 1 )
+            { Msta_SdcReject( p, pCmd, "\"%s\" 上有多个时钟，请用 -master_clock 指定", pSource ); return; }
+            if ( nFound == 1 )
+                pMaster = pHit;
+        }
+    }
     if ( pMaster == NULL )
     { Msta_SdcReject( p, pCmd, "\"%s\" 上找不到主时钟", pSource ); return; }
     if ( Msta_SdcResolveNets( pDes, pTarget, &pNets ) != 1 )

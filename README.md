@@ -65,7 +65,15 @@ report_checks -max_paths 5 -hold
 | Yosys JSON (`write_json`) | 直接读取并按 `current_design` 指定的顶层展平 |
 | SDC (`.sdc`) | 定义时钟、I/O 延迟、负载和路径约束；支持的命令见 [SDC 参考](docs/sdc.md) |
 
-常用报告命令包括 `report_checks -setup`、`report_checks -hold`、`report_summary`、`report_clocks`、`report_clock_tree`、`report_design`、`report_lib` 和 `print_cell`。运行 `./build/msta -c "help"` 可查看完整命令表。路径报告包含到达时间、要求时间和 slack；汇总给出 WNS/TNS、未约束端点及适用的设计规则检查结果。报告时间单位为 ns。
+常用报告命令包括 `report_checks -setup`、`report_checks -hold`（可选 `-tran`、`-cap`、`-clock_path` 展示转换时间、负载电容和启动/捕获时钟路径）、`report_summary`、`report_clocks`、`report_clock_tree`、`report_design`、`report_lib` 和 `print_cell`。面向教学与调试还可直接使用：
+
+- `explain_arc <inst> <in_pin> <out_pin> [-max|-min]`：拆解 NLDM 查表轴向、命中格点、双线性插值权重、OCV/AOCV 缩放系数与最终延迟；
+- `report_net <net>`：查看单个网络的逻辑级数、驱动/扇出、总负载电容以及前后向传播后的逐边沿 AT、RAT、Slack 与 Slew；
+- `dump_graph [-o file.dot] [-max_nodes N]`：导出 Graphviz DOT 时序有向图（按角色与违例着重标注）；
+- `set_wire_model zero_rc|elmore_rc [-r kohm] [-c ff]` 与 `set_path_refiner none|pba_retrace`：切换内置线网 RC / PBA 路径精修示范插件（也可通过 `src/msta_plugin.h` 挂接自定义 C99 算法表）；
+- `swap_cell <inst> <new_cell> [-verify]`：支持引脚兼容的在位替换与分级增量 STA 重算（`-verify` 逐网逐端点比对全量结果）。
+
+运行 `./build/msta -c "help"` 可查看完整命令表。路径报告包含到达时间、要求时间和 slack；汇总给出 WNS/TNS、未约束端点及适用的设计规则检查结果。报告时间单位为 ns。
 
 ## 支持范围
 
@@ -74,7 +82,7 @@ report_checks -max_paths 5 -hold
 - 支持基础 OCV：独立 early/late、clock/data、rise/fall 与 cell delay/check derate，实例覆盖、max/min 工艺库和 `single` / `bc_wc` / `on_chip_variation` 模式切换。示例见 [OCV 用例](testcases/ocv/README.md)。
 - 支持原生深度表 AOCV（保守 GBA）与公共时钟路径 CPPR，使用方法和模型边界见 [AOCV/CPPR](docs/variation.md)。
 
-miniSTA 使用集中电容表示负载，不读取 SPEF/SDF，也不计算线网 RC 延迟；结果适用于前布局估算。当前不建模 SI、CCS/ECSM、POCV/LVF、多场景分析、锁存器透明期提前出数及部分 SDC 选项。未支持的约束会在读取时给出警告；请检查日志和未约束端点数量，再使用分析结果。实现上的取舍见[设计说明的模型边界](docs/design.md#5-模型边界)。
+miniSTA 默认使用集中电容（`zero_rc`）表示负载，不读取 SPEF/SDF；可通过可选的内置 `elmore_rc` 插件或自定义 `MstaWireOps` 估算扇出 RC 延迟与摆率退化，结果适用于前布局估算与教学实验。当前不建模 SI、CCS/ECSM、POCV/LVF、多场景分析、锁存器透明期提前出数及部分 SDC 选项。未支持的约束会在读取时给出警告；请检查日志和未约束端点数量，再使用分析结果。实现上的取舍见[设计说明的模型边界](docs/design.md#5-模型边界)。
 
 ## 示例与验证
 

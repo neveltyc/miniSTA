@@ -7,6 +7,11 @@
 #   check_edges.sh          按数据边沿的约束检查（testcases/check_edges）
 #   check_clock_edges.py    时钟 min/max × rise/fall（testcases/clock_edges）
 #   check_nonunate_clock.py non_unate 时钟（testcases/nonunate_clock）
+#   check_ocv.py            OCV 静态回归（testcases/ocv）
+#   check_variation.py      AOCV/CPPR 回归（testcases/aocv）
+#   check_phase1_fixes.py   Phase 1 修复项（网表/Liberty/SDC/引擎 11 组回归）
+#   check_phase2_teaching.py Phase 2 模块化与教学命令（pin/flags/explain_arc/report_net/dump_graph）
+#   check_phase3_plugins.py Phase 3 C99 插件接口、Elmore RC/PBA 示范插件与分级增量 swap_cell
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,3 +45,6 @@ python3 "${ROOT}/scripts/check_clock_edges.py"
 python3 "${ROOT}/scripts/check_nonunate_clock.py"
 python3 "${ROOT}/scripts/check_ocv.py"
 python3 "${ROOT}/scripts/check_variation.py"
+python3 "${ROOT}/scripts/check_phase1_fixes.py" "${MSTA}"
+python3 "${ROOT}/scripts/check_phase2_teaching.py" "${MSTA}"
+python3 "${ROOT}/scripts/check_phase3_plugins.py" "${MSTA}"

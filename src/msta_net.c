@@ -25,7 +25,11 @@ typedef struct {
     char       *pPath;          /* 当前层次路径，如 "u_core/u_alu" */
     int         nPathLen;
     int         nPathCap;
+    int         nDepth;
+    int         fError;
 } MstaFlatten;
+
+#define MSTA_MAX_HIER_DEPTH 256
 
 /* ---------------------------------------------------------------------
    本文件内部的提前声明（自上而下阅读时先看到接口）
@@ -33,7 +37,7 @@ typedef struct {
 static MstaModPort *Msta_ModulePortByName( MstaModule *pMod, MstaId PinName );
 static int          Msta_GlobalNetForBit( MstaFlatten *pF, MstaModule *pMod,
                                           const int *pMap, int nBit );
-static MstaCell    *Msta_BlackBoxCell( MstaFlatten *pF, MstaModule *pMod, MstaModCell *pCell );
+static int          Msta_BlackBoxCell( MstaFlatten *pF, MstaModule *pMod, MstaModCell *pCell );
 static void         Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap );
 static int          Msta_NewNet( MstaFlatten *pF, MstaId Name, int fConst );
 
@@ -80,15 +84,41 @@ static void Msta_ReadBits( MJsonValue *pArray, MstaIdArray *pOut, int *pnMaxBit 
     }
 }
 
+static void Msta_ModuleClear( MstaModule *pMod )
+{
+    int k;
+    for ( k = 0; k < pMod->vPorts.nSize; k++ )
+        MstaIdArrayFree( &pMod->vPorts.pData[k].Bits );
+    MstaModPortArrayFree( &pMod->vPorts );
+    for ( k = 0; k < pMod->vConns.nSize; k++ )
+        MstaIdArrayFree( &pMod->vConns.pData[k].Bits );
+    MstaModConnArrayFree( &pMod->vConns );
+    MstaModCellArrayFree( &pMod->vCells );
+    MstaIdArrayFree( &pMod->vBitNames );
+    memset( pMod, 0, sizeof(*pMod) );
+}
+
 static MstaModule *Msta_AddModule( MstaDesign *pDes, const char *pName )
 {
-    MstaModule *pMod = MstaModuleArrayAppend( &pDes->vModules );
-    pMod->Name = Msta_NameId( pName );
+    MstaId Name = Msta_NameId( pName );
+    int nOld = Msta_IntMapGet( &pDes->modMap, Name, -1 );
+    MstaModule *pMod;
+    if ( nOld >= 0 )
+    {
+        pMod = MstaModuleArrayAt( &pDes->vModules, nOld );
+        Msta_ModuleClear( pMod );
+        pMod->Name = Name;
+    }
+    else
+    {
+        pMod = MstaModuleArrayAppend( &pDes->vModules );
+        pMod->Name = Name;
+        Msta_IntMapSet( &pDes->modMap, pMod->Name, pDes->vModules.nSize - 1 );
+    }
     MstaModPortArrayInit( &pMod->vPorts );
     MstaModCellArrayInit( &pMod->vCells );
     MstaModConnArrayInit( &pMod->vConns );
     MstaIdArrayInit( &pMod->vBitNames );
-    Msta_IntMapSet( &pDes->modMap, pMod->Name, pDes->vModules.nSize - 1 );
     return pMod;
 }
 
@@ -137,7 +167,9 @@ int Msta_DesignReadYosysJson( MstaDesign *pDes, const char *pJsonFile, int fVerb
             MJsonValue *pJsonPort = Msta_JsonAt( pPorts, i );
             const char *pDirText = Msta_JsonStr( pJsonPort, "direction", "input" );
             MstaModPort *pNew = MstaModPortArrayAppend( &pMod->vPorts );
-            pNew->Name = Msta_NameId( Msta_JsonKeyAt(pPorts, i) );
+            pNew->Name   = Msta_NameId( Msta_JsonKeyAt(pPorts, i) );
+            pNew->Offset = Msta_JsonInt( pJsonPort, "offset", 0 );
+            pNew->fUpto  = Msta_JsonInt( pJsonPort, "upto", 0 );
             MstaIdArrayInit( &pNew->Bits );
             if      ( !strcmp(pDirText, "output") ) pNew->Dir = MSTA_PORT_OUT;
             else if ( !strcmp(pDirText, "inout")  ) pNew->Dir = MSTA_PORT_INOUT;
@@ -165,11 +197,13 @@ int Msta_DesignReadYosysJson( MstaDesign *pDes, const char *pJsonFile, int fVerb
             nCellStmts++;
         }
 
-        /* --- netnames：给每个局部网络一个可读名字，报告里直接能看到 --- */
+        /* --- netnames：给每个局部网络一个可读名字（多位总线带上 [bit] 下标） --- */
         for ( i = 0; i < Msta_JsonCount(pNetNames); i++ )
         {
             MJsonValue *pEntry = Msta_JsonAt( pNetNames, i );
             const char *pNetName = Msta_JsonKeyAt( pNetNames, i );
+            int nOffset = Msta_JsonInt( pEntry, "offset", 0 );
+            int fUpto = Msta_JsonInt( pEntry, "upto", 0 );
             MstaIdArray vBits;
             int b, nDummy = 0;
             MstaIdArrayInit( &vBits );
@@ -179,7 +213,17 @@ int Msta_DesignReadYosysJson( MstaDesign *pDes, const char *pJsonFile, int fVerb
             {
                 int nBit = vBits.pData[b];
                 if ( nBit >= 0 && pMod->vBitNames.pData[nBit] == MSTA_NO_ID )
-                    pMod->vBitNames.pData[nBit] = Msta_NameId( pNetName );
+                {
+                    if ( vBits.nSize == 1 && nOffset == 0 )
+                        pMod->vBitNames.pData[nBit] = Msta_NameId( pNetName );
+                    else
+                    {
+                        char sBitName[8192];
+                        int nIdx = fUpto ? ( nOffset + vBits.nSize - 1 - b ) : ( nOffset + b );
+                        snprintf( sBitName, sizeof(sBitName), "%s[%d]", pNetName, nIdx );
+                        pMod->vBitNames.pData[nBit] = Msta_NameId( sBitName );
+                    }
+                }
             }
             MstaIdArrayFree( &vBits );
         }
@@ -189,6 +233,8 @@ int Msta_DesignReadYosysJson( MstaDesign *pDes, const char *pJsonFile, int fVerb
     }
 
     /* 标出被例化过的模块：没人例化的那个就是顶层。 */
+    for ( i = 0; i < pDes->vModules.nSize; i++ )
+        MstaModuleArrayAt( &pDes->vModules, i )->fInstantiated = 0;
     for ( i = 0; i < pDes->vModules.nSize; i++ )
     {
         MstaModule *pMod = MstaModuleArrayAt( &pDes->vModules, i );
@@ -362,45 +408,101 @@ static int Msta_GlobalNetForBit( MstaFlatten *pF, MstaModule *pMod, const int *p
 }
 
 /* 库里查不到的单元：造一个占位 cell。引脚取第一次遇到该类型时的那些连接名，
-   方向先留 MSTA_DIR_NO，由 Msta_InferBlackBoxDirs 事后推断。 */
-static MstaCell *Msta_BlackBoxCell( MstaFlatten *pF, MstaModule *pMod, MstaModCell *pCell )
+   方向先留 MSTA_DIR_NO，由 Msta_InferBlackBoxDirs 事后推断。返回 vBlackBoxCells 下标。 */
+static int Msta_BlackBoxCell( MstaFlatten *pF, MstaModule *pMod, MstaModCell *pCell )
 {
     MstaDesign *pDes = pF->pDes;
     MstaCell *pNew;
     int i = Msta_IntMapGet( &pDes->blackBoxMap, pCell->Type, -1 );
-    int c;
+    int c, nId;
     if ( i >= 0 )
-        return MstaCellArrayAt( &pDes->vBlackBoxCells, i );
+    {
+        MstaCell *pExisting = MstaCellArrayAt( &pDes->vBlackBoxCells, i );
+        for ( c = 0; c < pCell->ConnCount; c++ )
+        {
+            MstaModConn *pConn = MstaModConnArrayAt( &pMod->vConns, pCell->ConnFirst + c );
+            if ( Msta_CellPinIndexOf( pExisting, pConn->Pin ) < 0 )
+            {
+                MstaPin *pPin = MstaPinArrayAppend( &pExisting->vPins );
+                pPin->Name    = pConn->Pin;
+                pPin->Dir     = MSTA_DIR_NO;     /* 待推断 */
+                pPin->MaxCap  = -1.0;
+                pPin->MinCap  = -1.0;
+                pPin->MaxSlew = -1.0;
+            }
+        }
+        return i;
+    }
 
     pNew = MstaCellArrayAppend( &pDes->vBlackBoxCells );
-    Msta_IntMapSet( &pDes->blackBoxMap, pCell->Type, pDes->vBlackBoxCells.nSize - 1 );
+    nId  = pDes->vBlackBoxCells.nSize - 1;
+    Msta_IntMapSet( &pDes->blackBoxMap, pCell->Type, nId );
     MstaPinArrayInit( &pNew->vPins );
     MstaArcArrayInit( &pNew->vArcs );
     MstaRegCheckArrayInit( &pNew->vRegs );
+    MstaAsyncCheckArrayInit( &pNew->vAsync );
+    MstaGateCheckArrayInit( &pNew->vGates );
     pNew->Name      = pCell->Type;
     pNew->pLibName  = Msta_StrDup( Msta_NameStr(pCell->Type) );
     pNew->fBlackBox = 1;
     for ( c = 0; c < pCell->ConnCount; c++ )
     {
         MstaModConn *pConn = MstaModConnArrayAt( &pMod->vConns, pCell->ConnFirst + c );
-        MstaPin *pPin = MstaPinArrayAppend( &pNew->vPins );
+        MstaPin *pPin;
+        if ( Msta_CellPinIndexOf( pNew, pConn->Pin ) >= 0 )
+            continue;
+        pPin = MstaPinArrayAppend( &pNew->vPins );
         pPin->Name    = pConn->Pin;
         pPin->Dir     = MSTA_DIR_NO;         /* 待推断 */
         pPin->MaxCap  = -1.0;
+        pPin->MinCap  = -1.0;
         pPin->MaxSlew = -1.0;
     }
     pDes->nBlackBoxes++;
     Msta_WarnOnce( "单元 \"%s\" 不在库里：按理想时序的黑盒处理",
                    Msta_NameStr(pCell->Type) );
-    return pNew;
+    return nId;
+}
+
+/* 把非黑盒实例绑定到库主表或 corner 变体表下标，避免库数组扩容后指针悬垂。 */
+static void Msta_BindInstLibCell( MstaInst *pInst, MstaLib *pLib, MstaCell *pCell )
+{
+    pInst->pCell       = pCell;
+    pInst->fBlackBox   = 0;
+    pInst->fCornerCell = 0;
+    pInst->CellId      = MSTA_NO_ID;
+    if ( pLib == NULL || pCell == NULL )
+        return;
+    if ( pLib->vCells.nSize > 0 && pCell >= pLib->vCells.pData &&
+         pCell < pLib->vCells.pData + pLib->vCells.nSize )
+        pInst->CellId = (MstaId)( pCell - pLib->vCells.pData );
+    else if ( pLib->vCornerCells.nSize > 0 && pCell >= pLib->vCornerCells.pData &&
+              pCell < pLib->vCornerCells.pData + pLib->vCornerCells.nSize )
+    {
+        pInst->fCornerCell = 1;
+        pInst->CellId      = (MstaId)( pCell - pLib->vCornerCells.pData );
+    }
 }
 
 static void Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap )
 {
     MstaDesign *pDes = pF->pDes;
     MstaModule *pMod = MstaModuleArrayAt( &pDes->vModules, nModId );
-    int *pNetMap = (int *)malloc( (size_t)(pMod->nBits > 0 ? pMod->nBits : 1) * sizeof(int) );
+    int *pNetMap;
     int k, c, i;
+
+    if ( pF->fError )
+        return;
+    if ( pF->nDepth > MSTA_MAX_HIER_DEPTH )
+    {
+        Msta_Error( "展平层次超过 %d 层（可能存在模块递归例化）\n", MSTA_MAX_HIER_DEPTH );
+        pF->fError = 1;
+        return;
+    }
+    pF->nDepth++;
+
+    pNetMap = (int *)malloc( (size_t)(pMod->nBits > 0 ? pMod->nBits : 1) * sizeof(int) );
+    assert( pNetMap );
 
     /* 1) 本模块实例的每个局部网络 -> 全局网络号 */
     for ( k = 0; k < pMod->nBits; k++ )
@@ -422,11 +524,16 @@ static void Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap
                 pNet = MstaNetArrayAt( &pDes->vNets, pNetMap[nBit] );
                 pNet->fTopPort = 1;
                 pNet->Dir = pPort->Dir;
-                if ( pPort->Bits.nSize == 1 )
+                if ( pPort->Bits.nSize == 1 && pPort->Offset == 0 )
                     snprintf( sPortName, sizeof(sPortName), "%s", Msta_NameStr(pPort->Name) );
                 else
+                {
+                    int nIdx = pPort->fUpto
+                             ? ( pPort->Offset + pPort->Bits.nSize - 1 - b )
+                             : ( pPort->Offset + b );
                     snprintf( sPortName, sizeof(sPortName), "%s[%d]",
-                              Msta_NameStr(pPort->Name), b );
+                              Msta_NameStr(pPort->Name), nIdx );
+                }
                 pNet->Name = Msta_NameId( sPortName );
                 if ( Msta_IntMapGet( &pDes->netNameMap, pNet->Name, -1 ) < 0 )
                     Msta_IntMapSet( &pDes->netNameMap, pNet->Name, pNetMap[nBit] );
@@ -434,7 +541,7 @@ static void Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap
         }
 
     /* 3) 实例 */
-    for ( c = 0; c < pMod->vCells.nSize; c++ )
+    for ( c = 0; c < pMod->vCells.nSize && !pF->fError; c++ )
     {
         MstaModCell *pCell = MstaModCellArrayAt( &pMod->vCells, c );
         int nSubId = Msta_IntMapGet( &pDes->modMap, pCell->Type, -1 );
@@ -488,16 +595,30 @@ static void Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap
 
         /* ---- 叶子单元 ---- */
         {
-            MstaCell *pLibCell = Msta_LibFindCell( pF->pLib, Msta_NameStr( pCell->Type ) );
+            MstaCell *pLibCell = ( pF->pLib != NULL )
+                               ? Msta_LibFindCell( pF->pLib, Msta_NameStr( pCell->Type ) )
+                               : NULL;
             MstaInst *pNew;
             int iConn;
             if ( pLibCell == NULL )
-                pLibCell = Msta_BlackBoxCell( pF, pMod, pCell );
-
-            pNew = MstaInstArrayAppend( &pDes->vInsts );
-            pNew->Name       = Msta_NameId( sFullName );
-            pNew->ModuleName = pMod->Name;
-            pNew->pCell      = pLibCell;
+            {
+                MstaId nCellId = Msta_BlackBoxCell( pF, pMod, pCell );
+                pLibCell = MstaCellArrayAt( &pDes->vBlackBoxCells, nCellId );
+                pNew = MstaInstArrayAppend( &pDes->vInsts );
+                pNew->Name        = Msta_NameId( sFullName );
+                pNew->ModuleName  = pMod->Name;
+                pNew->pCell       = pLibCell;
+                pNew->CellId      = nCellId;
+                pNew->fBlackBox   = 1;
+                pNew->fCornerCell = 0;
+            }
+            else
+            {
+                pNew = MstaInstArrayAppend( &pDes->vInsts );
+                pNew->Name       = Msta_NameId( sFullName );
+                pNew->ModuleName = pMod->Name;
+                Msta_BindInstLibCell( pNew, pF->pLib, pLibCell );
+            }
             pNew->nPins      = pLibCell->vPins.nSize;
             pNew->pNets      = (MstaId *)malloc( (size_t)(pNew->nPins > 0 ? pNew->nPins : 1) * sizeof(MstaId) );
             for ( k = 0; k < pNew->nPins; k++ )
@@ -523,6 +644,7 @@ static void Msta_FlattenModule( MstaFlatten *pF, int nModId, const int *pPortMap
         }
     }
     free( pNetMap );
+    pF->nDepth--;
 }
 
 /* 黑盒方向推断：一根网络没有已知驱动、又只挂着一个"方向未知"的脚，
@@ -537,6 +659,13 @@ static void Msta_InferBlackBoxDirs( MstaDesign *pDes )
     int i, c;
     assert( pKnownDrivers && pUnknownCount && pUnknownInst && pUnknownPin );
 
+    for ( i = 0; i < nNets; i++ )
+    {
+        MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, i );
+        if ( pNet->fConst ||
+             ( pNet->fTopPort && ( pNet->Dir == MSTA_PORT_IN || pNet->Dir == MSTA_PORT_INOUT ) ) )
+            pKnownDrivers[i]++;
+    }
     for ( i = 0; i < pDes->vInsts.nSize; i++ )
     {
         MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, i );
@@ -607,10 +736,145 @@ static void Msta_BuildDrivers( MstaDesign *pDes )
     }
 }
 
+static void Msta_FreeBlackBoxes( MstaDesign *pDes )
+{
+    int i, k;
+    for ( i = 0; i < pDes->vBlackBoxCells.nSize; i++ )
+    {
+        MstaCell *pCell = MstaCellArrayAt( &pDes->vBlackBoxCells, i );
+        free( pCell->pLibName );
+        for ( k = 0; k < pCell->vPins.nSize; k++ )
+            free( pCell->vPins.pData[k].pFunc );
+        MstaPinArrayFree( &pCell->vPins );
+        MstaArcArrayFree( &pCell->vArcs );
+        MstaRegCheckArrayFree( &pCell->vRegs );
+        MstaAsyncCheckArrayFree( &pCell->vAsync );
+        MstaGateCheckArrayFree( &pCell->vGates );
+    }
+    MstaCellArrayFree( &pDes->vBlackBoxCells );
+    Msta_IntMapFree( &pDes->blackBoxMap );
+    Msta_IntMapInit( &pDes->blackBoxMap, 256 );
+    pDes->nBlackBoxes = 0;
+}
+
+void Msta_DesignClearFlattened( MstaDesign *pDes )
+{
+    int i;
+    for ( i = 0; i < pDes->vNets.nSize; i++ )
+        MstaPinRefArrayFree( &pDes->vNets.pData[i].vLoads );
+    MstaNetArrayFree( &pDes->vNets );
+    Msta_IntMapFree( &pDes->netNameMap );
+    Msta_IntMapInit( &pDes->netNameMap, 1 << 16 );
+    for ( i = 0; i < pDes->vInsts.nSize; i++ )
+        free( pDes->vInsts.pData[i].pNets );
+    MstaInstArrayFree( &pDes->vInsts );
+    Msta_FreeBlackBoxes( pDes );
+}
+
+void Msta_DesignClearModules( MstaDesign *pDes )
+{
+    int i;
+    for ( i = 0; i < pDes->vModules.nSize; i++ )
+        Msta_ModuleClear( MstaModuleArrayAt( &pDes->vModules, i ) );
+    MstaModuleArrayFree( &pDes->vModules );
+    MstaModuleArrayInit( &pDes->vModules );
+    Msta_IntMapFree( &pDes->modMap );
+    Msta_IntMapInit( &pDes->modMap, 1 << 14 );
+}
+
+void Msta_DesignRefreshInstCells( MstaDesign *pDes, MstaLib *pLib )
+{
+    int i, k, fResolvedAny = 0;
+    for ( i = 0; i < pDes->vInsts.nSize; i++ )
+    {
+        MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, i );
+        if ( pInst->fBlackBox )
+        {
+            MstaCell *pOldCell = NULL;
+            MstaCell *pResolved;
+            if ( pInst->CellId >= 0 && pInst->CellId < pDes->vBlackBoxCells.nSize )
+                pOldCell = MstaCellArrayAt( &pDes->vBlackBoxCells, pInst->CellId );
+            if ( pOldCell == NULL )
+                continue;
+            pResolved = ( pLib != NULL )
+                      ? Msta_LibFindCell( pLib, Msta_NameStr( pOldCell->Name ) ) : NULL;
+            if ( pResolved != NULL && !pResolved->fIgnore )
+            {
+                int nNewPins = pResolved->vPins.nSize;
+                MstaId *pNewNets = (MstaId *)malloc( (size_t)( nNewPins > 0 ? nNewPins : 1 ) * sizeof(MstaId) );
+                assert( pNewNets );
+                for ( k = 0; k < nNewPins; k++ )
+                    pNewNets[k] = MSTA_NO_ID;
+                for ( k = 0; k < pInst->nPins && k < pOldCell->vPins.nSize; k++ )
+                {
+                    int nDst = Msta_CellPinIndexOf( pResolved, pOldCell->vPins.pData[k].Name );
+                    if ( nDst >= 0 && nDst < nNewPins )
+                        pNewNets[nDst] = pInst->pNets[k];
+                }
+                free( pInst->pNets );
+                pInst->pNets = pNewNets;
+                pInst->nPins = nNewPins;
+                Msta_BindInstLibCell( pInst, pLib, pResolved );
+                fResolvedAny = 1;
+            }
+            else
+            {
+                if ( pOldCell->vPins.nSize > pInst->nPins )
+                {
+                    MstaId *pNewNets = (MstaId *)realloc(
+                        pInst->pNets, (size_t)pOldCell->vPins.nSize * sizeof(MstaId) );
+                    assert( pNewNets );
+                    for ( k = pInst->nPins; k < pOldCell->vPins.nSize; k++ )
+                        pNewNets[k] = MSTA_NO_ID;
+                    pInst->pNets = pNewNets;
+                    pInst->nPins = pOldCell->vPins.nSize;
+                }
+                pInst->pCell = pOldCell;
+            }
+        }
+        else
+            pInst->pCell = Msta_InstCell( pDes, pLib, pInst );
+    }
+    if ( fResolvedAny )
+    {
+        char *pfBbUsed = pDes->vBlackBoxCells.nSize > 0
+                       ? (char *)calloc( (size_t)pDes->vBlackBoxCells.nSize, 1 ) : NULL;
+        int nRemaining = 0;
+        for ( i = 0; i < pDes->vNets.nSize; i++ )
+        {
+            MstaNet *pNet = MstaNetArrayAt( &pDes->vNets, i );
+            pNet->Driver.InstId = MSTA_NO_ID;
+            pNet->Driver.PinId  = MSTA_NO_ID;
+            pNet->vLoads.nSize  = 0;
+        }
+        for ( i = 0; i < pDes->vInsts.nSize; i++ )
+        {
+            MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, i );
+            if ( pInst->fBlackBox && pfBbUsed &&
+                 pInst->CellId >= 0 && pInst->CellId < pDes->vBlackBoxCells.nSize &&
+                 !pfBbUsed[pInst->CellId] )
+            {
+                pfBbUsed[pInst->CellId] = 1;
+                nRemaining++;
+            }
+        }
+        free( pfBbUsed );
+        pDes->nBlackBoxes = nRemaining;
+        for ( i = 0; i < pDes->vBlackBoxCells.nSize; i++ )
+        {
+            MstaCell *pBbCell = MstaCellArrayAt( &pDes->vBlackBoxCells, i );
+            for ( k = 0; k < pBbCell->vPins.nSize; k++ )
+                pBbCell->vPins.pData[k].Dir = MSTA_DIR_NO;
+        }
+        Msta_InferBlackBoxDirs( pDes );
+        Msta_BuildDrivers( pDes );
+    }
+}
+
 int Msta_DesignFlatten( MstaDesign *pDes, MstaLib *pLib, const char *pTopName, int fVerbose )
 {
     MstaFlatten F;
-    int nTop, i;
+    int nTop;
 
     if ( pTopName == NULL )
         pTopName = Msta_DesignGuessTop( pDes );
@@ -628,14 +892,7 @@ int Msta_DesignFlatten( MstaDesign *pDes, MstaLib *pLib, const char *pTopName, i
     pDes->TopName = Msta_NameId( pTopName );
 
     /* 清掉上一次展平的结果，允许换 top 反复展平。 */
-    for ( i = 0; i < pDes->vNets.nSize; i++ )
-        MstaPinRefArrayFree( &pDes->vNets.pData[i].vLoads );
-    MstaNetArrayFree( &pDes->vNets );
-    Msta_IntMapFree( &pDes->netNameMap );
-    Msta_IntMapInit( &pDes->netNameMap, 1 << 16 );
-    for ( i = 0; i < pDes->vInsts.nSize; i++ )
-        free( pDes->vInsts.pData[i].pNets );
-    MstaInstArrayFree( &pDes->vInsts );
+    Msta_DesignClearFlattened( pDes );
 
     memset( &F, 0, sizeof(F) );
     F.pDes = pDes;
@@ -644,9 +901,15 @@ int Msta_DesignFlatten( MstaDesign *pDes, MstaLib *pLib, const char *pTopName, i
     pDes->nConst1Net = Msta_NewNet( &F, Msta_NameId("__const1__"), 2 );
 
     Msta_FlattenModule( &F, nTop, NULL );
+    free( F.pPath );
+    if ( F.fError )
+    {
+        Msta_DesignClearFlattened( pDes );
+        return 0;
+    }
+    Msta_DesignRefreshInstCells( pDes, pLib );
     Msta_InferBlackBoxDirs( pDes );
     Msta_BuildDrivers( pDes );
-    free( F.pPath );
 
     if ( fVerbose )
         Msta_DesignPrintStats( pDes, stdout );
@@ -716,6 +979,132 @@ int Msta_DesignInstPinNet( MstaDesign *pDes, int nInst, const char *pPinName )
     return pInst->pNets[nPin];
 }
 
+/* 在位把实例 nInst 替换为同引脚签名的新单元 pNewCell：
+   1) 严格校验引脚数、引脚名与方向一一对应（允许排列顺序不同）；
+   2) 一次性按 pMap 重映所有关联网络的 Driver.PinId 与 vLoads[j].PinId，
+      即使两脚短接同一网络也绝不会重复重映，并保留 vLoads 原顺序；
+   3) 不符合兼容性要求时完全不改动现有网表，返回 0。 */
+int Msta_DesignSwapInstCell( MstaDesign *pDes, MstaLib *pLib, int nInst, MstaCell *pNewCell,
+                             int *pPinMapOut, int nPinCap )
+{
+    MstaInst *pInst;
+    MstaCell *pOldCell;
+    int nPins, k, j;
+    int vMapStack[64];
+    char vUsedStack[64];
+    int *pMap = vMapStack;
+    char *pUsed = vUsedStack;
+    MstaId *pNewNets;
+
+    if ( pDes == NULL || nInst < 0 || nInst >= pDes->vInsts.nSize || pNewCell == NULL )
+        return 0;
+    pInst = MstaInstArrayAt( &pDes->vInsts, nInst );
+    pOldCell = pInst->pCell;
+    if ( pInst->fBlackBox || pOldCell == NULL || pNewCell->fBlackBox )
+    {
+        Msta_Error( "swap_cell：实例 \"%s\" 涉及黑盒单元，无法替换\n",
+                    Msta_NameStr(pInst->Name) );
+        return 0;
+    }
+    if ( pOldCell->fIgnore || pNewCell->fIgnore )
+    {
+        Msta_Error( "swap_cell：单元 \"%s\" 是忽略单元（无时序模型），无法替换\n",
+                    Msta_NameStr( pNewCell->fIgnore ? pNewCell->Name : pOldCell->Name ) );
+        return 0;
+    }
+    if ( pOldCell->fSequential != pNewCell->fSequential ||
+         pOldCell->fLatch != pNewCell->fLatch )
+    {
+        Msta_Error( "swap_cell：\"%s\" -> \"%s\" 时序/锁存类型不一致，拒绝替换\n",
+                    Msta_NameStr(pOldCell->Name), Msta_NameStr(pNewCell->Name) );
+        return 0;
+    }
+    nPins = pOldCell->vPins.nSize;
+    if ( pInst->nPins != nPins || pNewCell->vPins.nSize != nPins )
+    {
+        Msta_Error( "swap_cell：\"%s\" (%d pins) 与 \"%s\" (%d pins) 引脚数不匹配\n",
+                    Msta_NameStr(pOldCell->Name), nPins,
+                    Msta_NameStr(pNewCell->Name), pNewCell->vPins.nSize );
+        return 0;
+    }
+    if ( nPins > 64 )
+    {
+        pMap = (int *)malloc( (size_t)nPins * sizeof(int) );
+        pUsed = (char *)calloc( (size_t)nPins, 1 );
+        assert( pMap && pUsed );
+    }
+    else
+        memset( pUsed, 0, (size_t)nPins );
+
+    for ( k = 0; k < nPins; k++ )
+    {
+        MstaPin *pOldPin = MstaPinArrayAt( &pOldCell->vPins, k );
+        int nDst = Msta_CellPinIndexOf( pNewCell, pOldPin->Name );
+        MstaPin *pNewPin;
+        if ( nDst < 0 || nDst >= nPins || pUsed[nDst] )
+        {
+            Msta_Error( "swap_cell：目标单元 \"%s\" 缺少或重复引脚 \"%s\"\n",
+                        Msta_NameStr(pNewCell->Name), Msta_NameStr(pOldPin->Name) );
+            if ( nPins > 64 ) { free( pMap ); free( pUsed ); }
+            return 0;
+        }
+        pNewPin = MstaPinArrayAt( &pNewCell->vPins, nDst );
+        if ( pNewPin->Dir != pOldPin->Dir )
+        {
+            Msta_Error( "swap_cell：引脚 \"%s\" 方向在 \"%s\" 与 \"%s\" 间不一致\n",
+                        Msta_NameStr(pOldPin->Name), Msta_NameStr(pOldCell->Name),
+                        Msta_NameStr(pNewCell->Name) );
+            if ( nPins > 64 ) { free( pMap ); free( pUsed ); }
+            return 0;
+        }
+        pMap[k] = nDst;
+        pUsed[nDst] = 1;
+    }
+
+    pNewNets = (MstaId *)malloc( (size_t)( nPins > 0 ? nPins : 1 ) * sizeof(MstaId) );
+    assert( pNewNets );
+    for ( k = 0; k < nPins; k++ )
+        pNewNets[pMap[k]] = pInst->pNets[k];
+
+    /* 按去重后的关联网络一次性刷新 Driver/vLoads 中的 PinId。 */
+    for ( k = 0; k < nPins; k++ )
+    {
+        int nNet = pInst->pNets[k], fDup = 0;
+        MstaNet *pNet;
+        if ( nNet == MSTA_NO_ID || nNet < 0 || nNet >= pDes->vNets.nSize )
+            continue;
+        for ( j = 0; j < k; j++ )
+            if ( pInst->pNets[j] == nNet ) { fDup = 1; break; }
+        if ( fDup )
+            continue;
+        pNet = MstaNetArrayAt( &pDes->vNets, nNet );
+        if ( pNet->Driver.InstId == nInst &&
+             pNet->Driver.PinId >= 0 && pNet->Driver.PinId < nPins )
+            pNet->Driver.PinId = (MstaId)pMap[pNet->Driver.PinId];
+        for ( j = 0; j < pNet->vLoads.nSize; j++ )
+        {
+            MstaPinRef *pRef = MstaPinRefArrayAt( &pNet->vLoads, j );
+            if ( pRef->InstId == nInst && pRef->PinId >= 0 && pRef->PinId < nPins )
+                pRef->PinId = (MstaId)pMap[pRef->PinId];
+        }
+    }
+
+    if ( pPinMapOut != NULL )
+    {
+        int nCopy = nPins < nPinCap ? nPins : nPinCap;
+        for ( k = 0; k < nCopy; k++ )
+            pPinMapOut[k] = pMap[k];
+    }
+
+    free( pInst->pNets );
+    pInst->pNets = pNewNets;
+    pInst->nPins = nPins;
+    Msta_BindInstLibCell( pInst, pLib, pNewCell );
+
+    if ( nPins > 64 ) { free( pMap ); free( pUsed ); }
+    return 1;
+}
+
 const char *Msta_NetName( MstaDesign *pDes, MstaId nNet )
 {
     if ( nNet < 0 || nNet >= pDes->vNets.nSize )
@@ -774,37 +1163,10 @@ MstaDesign *Msta_DesignStart( void )
 
 void Msta_DesignFree( MstaDesign *pDes )
 {
-    int i, k;
     if ( pDes == NULL )
         return;
-    for ( i = 0; i < pDes->vModules.nSize; i++ )
-    {
-        MstaModule *pMod = MstaModuleArrayAt( &pDes->vModules, i );
-        for ( k = 0; k < pMod->vPorts.nSize; k++ )
-            MstaIdArrayFree( &pMod->vPorts.pData[k].Bits );
-        MstaModPortArrayFree( &pMod->vPorts );
-        for ( k = 0; k < pMod->vConns.nSize; k++ )
-            MstaIdArrayFree( &pMod->vConns.pData[k].Bits );
-        MstaModConnArrayFree( &pMod->vConns );
-        MstaModCellArrayFree( &pMod->vCells );
-        MstaIdArrayFree( &pMod->vBitNames );
-    }
-    MstaModuleArrayFree( &pDes->vModules );
-    for ( i = 0; i < pDes->vNets.nSize; i++ )
-        MstaPinRefArrayFree( &pDes->vNets.pData[i].vLoads );
-    MstaNetArrayFree( &pDes->vNets );
-    for ( i = 0; i < pDes->vInsts.nSize; i++ )
-        free( pDes->vInsts.pData[i].pNets );
-    MstaInstArrayFree( &pDes->vInsts );
-    for ( i = 0; i < pDes->vBlackBoxCells.nSize; i++ )
-    {
-        MstaCell *pCell = MstaCellArrayAt( &pDes->vBlackBoxCells, i );
-        free( pCell->pLibName );
-        MstaPinArrayFree( &pCell->vPins );
-        MstaArcArrayFree( &pCell->vArcs );
-        MstaRegCheckArrayFree( &pCell->vRegs );
-    }
-    MstaCellArrayFree( &pDes->vBlackBoxCells );
+    Msta_DesignClearModules( pDes );
+    Msta_DesignClearFlattened( pDes );
     Msta_IntMapFree( &pDes->modMap );
     Msta_IntMapFree( &pDes->netNameMap );
     Msta_IntMapFree( &pDes->blackBoxMap );

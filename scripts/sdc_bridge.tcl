@@ -69,8 +69,19 @@ namespace eval msta {
         set fDesignIndex 1
     }
 
+    # 把集合/filter 中的总线下标 [ 和 ] 转义成字面量，保留 * 和 ? 通配符。
+    proc escapeGlob {pattern} {
+        return [string map [list "\\\[" "\\\[" "\\\]" "\\\]" "\[" "\\\[" "\]" "\\\]"] $pattern]
+    }
+
+    # 将 -filter 字符串字面量里会被 Tcl expr 解释的字符转义，避免 $var / [cmd] 误执行。
+    proc escapeExprString {s} {
+        set mapped [string map [list "\\" "\\\\" "\"" "\\\"" "\$" "\\\$" "\[" "\\\[" "\]" "\\\]"] $s]
+        return "\"${mapped}\""
+    }
+
     # =~ / !~ / ~= 用通配匹配，其余运算符交给 Tcl expr。
-    proc filterMatch {value pattern} { return [string match $pattern $value] }
+    proc filterMatch {value pattern} { return [string match [escapeGlob $pattern] $value] }
 
     # 把 "a =~ b" 翻成 "[msta::filterMatch a b]"；表达式按词切开后逐个替换，
     # 这样 && / || 的优先级仍然由 Tcl 决定。
@@ -80,17 +91,25 @@ namespace eval msta {
         set i 0
         while {$i < $n} {
             set c [string index $expr $i]
-            if {$c eq " " || $c eq "\t"} { incr i; continue }
+            if {$c eq " " || $c eq "\t" || $c eq "\n" || $c eq "\r"} { incr i; continue }
             if {$c eq "\""} {
-                set tok "\""
+                set inner ""
                 incr i
                 while {$i < $n && [string index $expr $i] ne "\""} {
-                    append tok [string index $expr $i]
+                    set ch [string index $expr $i]
+                    if {$ch eq "\\" && $i + 1 < $n} {
+                        set next [string index $expr [expr {$i + 1}]]
+                        if {$next eq "\"" || $next eq "\\"} {
+                            append inner $next
+                            incr i 2
+                            continue
+                        }
+                    }
+                    append inner $ch
                     incr i
                 }
-                append tok "\""
                 incr i
-                lappend tokens $tok
+                lappend tokens "\u0001${inner}"
                 continue
             }
             set two [string range $expr $i [expr {$i + 1}]]
@@ -108,7 +127,7 @@ namespace eval msta {
             while {$i < $n} {
                 set c [string index $expr $i]
                 set two [string range $expr $i [expr {$i + 1}]]
-                if {$c eq " " || $c eq "\t" || $c in {"(" ")" "<" ">" "!"} ||
+                if {$c eq " " || $c eq "\t" || $c eq "\n" || $c eq "\r" || $c in {"(" ")" "<" ">" "!"} ||
                     $two in {"=~" "!~" "~=" "==" "!=" "<=" ">=" "&&" "||"}} { break }
                 append tok $c
                 incr i
@@ -119,15 +138,19 @@ namespace eval msta {
         # 变量写成 $name、字符串写成 "..."：属性名前面补 $，其余裸词加引号。
         set quoted {}
         foreach tok $tokens {
-            if {[string match "\"*" $tok]} {
-                lappend quoted $tok
+            if {[string index $tok 0] eq "\u0001"} {
+                lappend quoted [escapeExprString [string range $tok 1 end]]
             } elseif {[lsearch -exact $attrs $tok] >= 0} {
                 lappend quoted "\$$tok"
+            } elseif {$tok eq "true"} {
+                lappend quoted "1"
+            } elseif {$tok eq "false"} {
+                lappend quoted "0"
             } elseif {[string is double -strict $tok] ||
                 $tok in {"=~" "!~" "~=" "==" "!=" "<=" ">=" "&&" "||" "<" ">" "!" "(" ")"}} {
                 lappend quoted $tok
             } else {
-                lappend quoted "\"$tok\""
+                lappend quoted [escapeExprString $tok]
             }
         }
         set tokens $quoted
@@ -188,7 +211,7 @@ namespace eval msta {
             set name [lindex $obj 0]
             set matched 0
             foreach pattern $names {
-                if {[string match $pattern $name]} { set matched 1; break }
+                if {[string match [escapeGlob $pattern] $name]} { set matched 1; break }
             }
             if {!$matched} { continue }
             switch -- $table {
@@ -510,6 +533,9 @@ namespace eval msta {
         if {[llength $names] == 0} { return $a }
         set parts [splitMarker $a]
         set options [lindex $parts 1]
+        if {$options ne "" && [string index $options end] ne "\u001f"} {
+            append options "\u001f"
+        }
         foreach n $names { append options "minus=$n\u001f" }
         return "[lindex $parts 0]${options}"
     }
@@ -524,7 +550,18 @@ namespace eval msta {
             if {$arg in {-clock -rise_clock -fall_clock}} {
                 incr i
                 if {$i < $n} {
-                    lappend parts "[string range $arg 1 end]=[lindex $args $i]"
+                    set val [lindex $args $i]
+                    set key [string range $arg 1 end]
+                    if {[string match "\u001e*" $val]} {
+                        set mnames [markerNames $val]
+                        if {[llength $mnames] == 0} {
+                            lappend parts "${key}="
+                        } else {
+                            foreach cn $mnames { lappend parts "${key}=$cn" }
+                        }
+                    } else {
+                        lappend parts "${key}=$val"
+                    }
                 }
             } elseif {$form eq "registers" && $arg in {-cells -data_pins -clock_pins -async_pins
                                                       -output_pins -level_sensitive -edge_triggered
@@ -582,9 +619,29 @@ namespace eval msta {
         return $words
     }
 
+    variable aQuoteMap {}
+    lappend aQuoteMap "\\" "\\\\" "\"" "\\\""
+    for {set _qc 1} {$_qc < 32} {incr _qc} {
+        set _qch [format %c $_qc]
+        if {$_qc == 8} {
+            lappend aQuoteMap $_qch "\\b"
+        } elseif {$_qc == 9} {
+            lappend aQuoteMap $_qch "\\t"
+        } elseif {$_qc == 10} {
+            lappend aQuoteMap $_qch "\\n"
+        } elseif {$_qc == 12} {
+            lappend aQuoteMap $_qch "\\f"
+        } elseif {$_qc == 13} {
+            lappend aQuoteMap $_qch "\\r"
+        } else {
+            lappend aQuoteMap $_qch [format "\\u%04x" $_qc]
+        }
+    }
+    unset _qc _qch
+
     proc quote {value} {
-        set value [string map [list \\ \\\\ \" \\" \n \\n \r \\r \t \\t \
-                                    \u001d \\u001d \u001e \\u001e \u001f \\u001f] $value]
+        variable aQuoteMap
+        set value [string map $aQuoteMap $value]
         return "\"${value}\""
     }
 

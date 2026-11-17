@@ -13,7 +13,7 @@ BIN      := build/msta
 
 SRCS     := $(wildcard $(SRC_DIR)/*.c)
 OBJS     := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
-DEPS     := $(wildcard $(SRC_DIR)/*.h) $(wildcard $(SRC_DIR)/*.inc)
+DEPS     := $(wildcard $(SRC_DIR)/*.h)
 
 all: $(BIN)
 

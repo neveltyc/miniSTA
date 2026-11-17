@@ -218,6 +218,10 @@ void Msta_SdcSetUnits( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSdcCmd *
 /* 没点名工作条件时用的角（msta_sdc_query.c 报告工作条件时也用）。 */
 MstaLibInfo *Msta_SdcDefaultOpCond( MstaLib *pLib, MstaId nLibrary, MstaOpCond **ppCond );
 
+/* 沿组合时钟树标记属于 pClock 的网络及其极性（all_registers 与生成时钟追踪共用）。 */
+void Msta_SdcMarkClockNets( MstaDesign *pDes, MstaSdc *pSdc, MstaClock *pClock,
+                            char *pfOnNet, char *pPolarity );
+
 /* ---------------- msta_sdc_query.c ---------------- */
 
 /* 释放例外表索引及查询用的临时数组（Msta_SdcFree 调用）。 */

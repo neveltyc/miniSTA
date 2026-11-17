@@ -11,7 +11,7 @@
     D. 库级解析入口（单位、工作条件、Msta_LibRead）
     E. 查询接口（含 NLDM 双线性插值、report_lib 打印）
 
-  Liberty 的语法树解析器来自 ABC 的 sclLiberty（见 abc_scl_liberty_tree.inc
+  Liberty 的语法树解析器来自 ABC 的 sclLiberty（见 msta_liberty_lex.{c,h}
   的文件头与 THIRD_PARTY_NOTICES.md），本文件其余部分是 STA 语义层。
 
 ***********************************************************************/
@@ -20,7 +20,7 @@
 #include <ctype.h>
 #include "msta_lib.h"
 #include "msta_util.h"
-#include "abc_scl_liberty_tree.inc"
+#include "msta_liberty_lex.h"
 
 /* =====================================================================
    A. 数值与表的解析
@@ -81,10 +81,7 @@ typedef struct {
     MstaId Name;
     double *pRow;  int nRow;
     double *pCol;  int nCol;
-    int fRowIsLoad;
-    int fColIsSlew;
-    int fRowUsesSecond;
-    int fColUsesFirst;
+    MstaTableAxis Axis[2];
 } MstaTemplate;
 
 MstaArrayDefine( MstaTemplate, MstaTemplateArray )
@@ -176,15 +173,13 @@ static int Msta_LibReadTable( Scl_Tree_t *pTree, Scl_Item_t *pItem,
     pRow = Msta_LibFitAxis( pRow, nRowAxis, nRow );
     pCol = Msta_LibFitAxis( pCol, nColAxis, nCol );
 
-    /* 单位换算：轴是摆率还是负载看模板标志（默认行=摆率，列=负载）；
+    /* 单位换算：轴是摆率还是负载看模板轴类型（默认行=摆率，列=负载）；
        表值要么是延迟要么是 setup/hold 时间，都是时间量纲。 */
     snprintf( pOut->sTag, sizeof(pOut->sTag), "%s", pTagName );
     {
         MstaTemplate *pT = Msta_LibFindTemplate( pTemplates, Scl_LibertyItemName(pTree, pItem) );
-        pOut->fRowIsLoad = pT ? pT->fRowIsLoad : 0;
-        pOut->fColIsSlew = pT ? pT->fColIsSlew : 0;
-        pOut->fRowUsesSecond = pT ? pT->fRowUsesSecond : 0;
-        pOut->fColUsesFirst = pT ? pT->fColUsesFirst : 0;
+        pOut->Axis[0] = pT ? pT->Axis[0] : MSTA_AXIS_SLEW;
+        pOut->Axis[1] = pT ? pT->Axis[1] : MSTA_AXIS_LOAD;
     }
     pOut->nRows    = nRow;
     pOut->nCols    = nCol;
@@ -192,9 +187,9 @@ static int Msta_LibReadTable( Scl_Tree_t *pTree, Scl_Item_t *pItem,
     pOut->pRowIndex = pRow;
     pOut->pColIndex = pCol;
     for ( i = 0; i < nRow; i++ )
-        pOut->pRowIndex[i] *= pOut->fRowIsLoad ? pLib->CurCapScale : pLib->CurTimeScale;
+        pOut->pRowIndex[i] *= (pOut->Axis[0] == MSTA_AXIS_LOAD) ? pLib->CurCapScale : pLib->CurTimeScale;
     for ( i = 0; i < nCol; i++ )
-        pOut->pColIndex[i] *= pOut->fColIsSlew ? pLib->CurTimeScale : pLib->CurCapScale;
+        pOut->pColIndex[i] *= (pOut->Axis[1] == MSTA_AXIS_LOAD) ? pLib->CurCapScale : pLib->CurTimeScale;
     for ( i = 0; i < nRow * nCol; i++ )
         pOut->pValues[i] *= pLib->CurTimeScale;
     return 1;
@@ -229,6 +224,12 @@ static void Msta_LibReadTiming( Scl_Tree_t *pTree, Scl_Item_t *pTiming,
     pArc->Type   = ( pType == NULL ) ? MSTA_TT_COMBINATIONAL
               : Msta_TimingTypeFromName( Scl_LibertyItemName(pTree, pType) );
     pArc->Sense  = MSTA_SENSE_UNKNOWN;
+    pArc->pWhen  = NULL;
+    {
+        Scl_Item_t *pWhen = Scl_LibertyFindChild( pTree, pTiming, "when" );
+        if ( pWhen != NULL )
+            pArc->pWhen = Msta_StrDup( Scl_LibertyItemName(pTree, pWhen) );
+    }
     if ( pSense )
     {
         const char *p = Scl_LibertyItemName(pTree, pSense);
@@ -304,13 +305,22 @@ static void Msta_LibReadPin( Scl_Tree_t *pTree, Scl_Item_t *pPin,
         pNew->Cap = Scl_LibertyItemDouble(pTree, pItem, 0.0, NULL) * pLib->CurCapScale;
     pItem = Scl_LibertyFindChild( pTree, pPin, "max_capacitance" );
     if ( pItem )
-        pNew->MaxCap = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL) * pLib->CurCapScale;
+    {
+        double Val = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL);
+        if ( Val >= 0.0 ) pNew->MaxCap = Val * pLib->CurCapScale;
+    }
     pItem = Scl_LibertyFindChild( pTree, pPin, "min_capacitance" );
     if ( pItem )
-        pNew->MinCap = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL) * pLib->CurCapScale;
+    {
+        double Val = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL);
+        if ( Val >= 0.0 ) pNew->MinCap = Val * pLib->CurCapScale;
+    }
     pItem = Scl_LibertyFindChild( pTree, pPin, "max_transition" );
     if ( pItem )
-        pNew->MaxSlew = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL) * pLib->CurTimeScale;
+    {
+        double Val = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL);
+        if ( Val >= 0.0 ) pNew->MaxSlew = Val * pLib->CurTimeScale;
+    }
     pItem = Scl_LibertyFindChild( pTree, pPin, "clock" );
     if ( pItem )
         pNew->fClock = Scl_LibertyItemBool(pTree, pItem, 0);
@@ -345,11 +355,20 @@ static void Msta_LibReadStore( Scl_Tree_t *pTree, Scl_Item_t *pStore, MstaCell *
         pItem = Scl_LibertyFindChild( pTree, pStore, "enable" );
     if ( pItem == NULL )
         return;
-    /* 用 pin 的 fClock 位记下 "这是时钟脚"。clocked_on 的值整串当一个脚名匹配，
-       写成 "!CK" 或多脚表达式时这里匹配不到任何脚。 */
+    /* 用 pin 的 fClock 位记下 "这是时钟脚"，剥去常见的单脚取反前缀/后缀（如 "!CK"、"CK'"）。 */
     {
-        MstaId Name = Msta_NameTableId( Msta_Names(), Scl_LibertyItemName(pTree, pItem) );
+        const char *pRaw = Scl_LibertyItemName(pTree, pItem);
+        size_t nLen;
+        char sPin[256];
+        MstaId Name;
         int i;
+        while ( *pRaw && ( isspace((unsigned char)*pRaw) || *pRaw == '!' || *pRaw == '~' ) )
+            pRaw++;
+        snprintf( sPin, sizeof(sPin), "%s", pRaw );
+        nLen = strlen( sPin );
+        while ( nLen > 0 && ( isspace((unsigned char)sPin[nLen - 1]) || sPin[nLen - 1] == '\'' ) )
+            sPin[--nLen] = 0;
+        Name = Msta_NameTableId( Msta_Names(), sPin );
         for ( i = 0; i < pCell->vPins.nSize; i++ )
             if ( pCell->vPins.pData[i].Name == Name )
                 pCell->vPins.pData[i].fClock = 1;
@@ -647,33 +666,64 @@ static void Msta_LibCellFinish( MstaCell *pCell )
    D. 库级解析入口
    ===================================================================== */
 
-/* "1ns"/"1ps"/"1us" -> 乘多少倍能变成 ps。 */
-static double Msta_LibTimeScaleOf( const char *pUnit )
+/* 跳过单位字符串前头的数值部分（含科学记数法 "1e-9"）和空白标点。 */
+static const char *Msta_LibUnitSuffix( const char *pUnit, double *pFactor )
 {
-    while ( *pUnit && !isalpha((unsigned char)*pUnit) ) pUnit++;
-    switch ( *pUnit )
+    double Val = 1.0;
+    while ( *pUnit && ( isspace((unsigned char)*pUnit) || *pUnit == '"' || *pUnit == ',' ) )
+        pUnit++;
+    if ( isdigit((unsigned char)*pUnit) || *pUnit == '+' || *pUnit == '-' || *pUnit == '.' )
     {
-        case 'f': return 0.001;      /* fs */
-        case 'p': return 1.0;        /* ps */
-        case 'n': return 1000.0;     /* ns */
-        case 'u': return 1000000.0;  /* us */
-        case 'm': return 1000000000.0;
-        default:  return 1000.0;     /* 没写就按 ns，和大多数库一致 */
+        char *pEnd;
+        double Parsed = strtod( pUnit, &pEnd );
+        if ( pEnd > pUnit )
+        {
+            if ( Parsed > 0.0 )
+                Val = Parsed;
+            pUnit = pEnd;
+        }
     }
+    while ( *pUnit && !isalpha((unsigned char)*pUnit) )
+        pUnit++;
+    if ( pFactor != NULL )
+        *pFactor = Val;
+    return pUnit;
 }
 
-/* "ff"/"pf"/"uf" -> 乘多少倍能变成 fF。 */
+/* "1ns"/"1ps"/"1us"/"1e-9s" -> 乘多少倍能变成 ps。 */
+static double Msta_LibTimeScaleOf( const char *pUnit )
+{
+    double Factor = 1.0, UnitPs = 1000.0;
+    pUnit = Msta_LibUnitSuffix( pUnit, &Factor );
+    switch ( tolower((unsigned char)*pUnit) )
+    {
+        case 'f': UnitPs = 0.001;        break; /* fs */
+        case 'p': UnitPs = 1.0;          break; /* ps */
+        case 'n': UnitPs = 1000.0;       break; /* ns */
+        case 'u': UnitPs = 1000000.0;    break; /* us */
+        case 'm': UnitPs = 1000000000.0; break; /* ms */
+        case 's': UnitPs = 1e12;         break; /* s */
+        default:  return 1000.0;                /* 没写就按 ns，和大多数库一致 */
+    }
+    return Factor * UnitPs;
+}
+
+/* "ff"/"pf"/"uf"/"F" -> 乘多少倍能变成 fF。 */
 static double Msta_LibCapScaleOf( const char *pUnit )
 {
-    while ( *pUnit && !isalpha((unsigned char)*pUnit) ) pUnit++;
-    switch ( *pUnit )
+    double Factor = 1.0, UnitFf = 1.0;
+    pUnit = Msta_LibUnitSuffix( pUnit, &Factor );
+    switch ( tolower((unsigned char)*pUnit) )
     {
-        case 'a': return 1e-3;       /* af */
-        case 'f': return 1.0;        /* ff */
-        case 'p': return 1000.0;     /* pf */
-        case 'n': return 1e6;        /* nf */
+        case 'a': UnitFf = 1e-3;  break; /* af */
+        case 'f': UnitFf = ( tolower((unsigned char)pUnit[1]) == 'f' ) ? 1.0 : 1e15; break; /* ff 或 F */
+        case 'p': UnitFf = 1000.0; break; /* pf */
+        case 'n': UnitFf = 1e6;   break; /* nf */
+        case 'u': UnitFf = 1e9;   break; /* uf */
+        case 'm': UnitFf = 1e12;  break; /* mf */
         default:  return 1.0;
     }
+    return Factor * UnitFf;
 }
 
 /* 在已读的库里按名字找 operating condition，可再用库名限定。 */
@@ -700,6 +750,21 @@ MstaLibInfo *Msta_LibFindOpCond( MstaLib *pLib, const char *pName, MstaId Librar
     return NULL;
 }
 
+static MstaTableAxis Msta_LibAxisFromName( const char *pVar, MstaTableAxis Default )
+{
+    if ( pVar == NULL || !pVar[0] )
+        return Default;
+    if ( !strcasecmp(pVar, "total_output_net_capacitance") )
+        return MSTA_AXIS_LOAD;
+    if ( !strcasecmp(pVar, "constrained_pin_transition") )
+        return MSTA_AXIS_CONSTRAINED_SLEW;
+    if ( !strcasecmp(pVar, "related_pin_transition") )
+        return MSTA_AXIS_RELATED_SLEW;
+    if ( !strcasecmp(pVar, "input_net_transition") || !strcasecmp(pVar, "input_transition_time") )
+        return MSTA_AXIS_SLEW;
+    return Default;
+}
+
 /* 库级属性：单位、默认值、工艺角、以及 lu_table_template。 */
 /* fFirstLib：只有第一个库决定单位（即 SDC 默认的时间/电容单位）。 */
 static void Msta_LibReadLibraryAttrs( Scl_Tree_t *pTree, Scl_Item_t *pLibrary, MstaLib *pLib,
@@ -711,11 +776,11 @@ static void Msta_LibReadLibraryAttrs( Scl_Tree_t *pTree, Scl_Item_t *pLibrary, M
     {
         MstaLibInfo *pInfo = MstaLibInfoArrayAt( &pLib->vLibs, pLib->vLibs.nSize - 1 );
         pItem = Scl_LibertyFindChild( pTree, pLibrary, "nom_voltage" );
-        if ( pItem ) pInfo->NomVoltage = Scl_LibertyItemDouble( pTree, pItem, -1.0, NULL );
+        if ( pItem ) pInfo->NomVoltage = Scl_LibertyItemDouble( pTree, pItem, MSTA_UNSET, NULL );
         pItem = Scl_LibertyFindChild( pTree, pLibrary, "nom_temperature" );
-        if ( pItem ) pInfo->NomTemperature = Scl_LibertyItemDouble( pTree, pItem, -1.0, NULL );
+        if ( pItem ) pInfo->NomTemperature = Scl_LibertyItemDouble( pTree, pItem, MSTA_UNSET, NULL );
         pItem = Scl_LibertyFindChild( pTree, pLibrary, "nom_process" );
-        if ( pItem ) pInfo->NomProcess = Scl_LibertyItemDouble( pTree, pItem, -1.0, NULL );
+        if ( pItem ) pInfo->NomProcess = Scl_LibertyItemDouble( pTree, pItem, MSTA_UNSET, NULL );
         pItem = Scl_LibertyFindChild( pTree, pLibrary, "default_operating_conditions" );
         if ( pItem )
             pInfo->OpCondName = Msta_NameTableId( Msta_Names(),
@@ -724,29 +789,29 @@ static void Msta_LibReadLibraryAttrs( Scl_Tree_t *pTree, Scl_Item_t *pLibrary, M
         {
             MstaOpCond *pCond = MstaOpCondArrayAppend( &pInfo->vOpConds );
             pCond->Name = Msta_NameTableId( Msta_Names(), Scl_LibertyItemName(pTree,pChild) );
-            pCond->Voltage = pCond->Temperature = pCond->Process = -1.0;
-            pCond->KVolt = pCond->KTemp = pCond->KProcess = -1.0;
+            pCond->Voltage = pCond->Temperature = pCond->Process = MSTA_UNSET;
+            pCond->KVolt = pCond->KTemp = pCond->KProcess = MSTA_UNSET;
             {
                 Scl_Item_t *pField;
                 if ( ( pField = Scl_LibertyFindChild(pTree,pChild,"voltage") ) != NULL )
-                    pCond->Voltage = Scl_LibertyItemDouble( pTree, pField, -1.0, NULL );
+                    pCond->Voltage = Scl_LibertyItemDouble( pTree, pField, MSTA_UNSET, NULL );
                 if ( ( pField = Scl_LibertyFindChild(pTree,pChild,"temperature") ) != NULL )
-                    pCond->Temperature = Scl_LibertyItemDouble( pTree, pField, -1.0, NULL );
+                    pCond->Temperature = Scl_LibertyItemDouble( pTree, pField, MSTA_UNSET, NULL );
                 if ( ( pField = Scl_LibertyFindChild(pTree,pChild,"process") ) != NULL )
-                    pCond->Process = Scl_LibertyItemDouble( pTree, pField, -1.0, NULL );
+                    pCond->Process = Scl_LibertyItemDouble( pTree, pField, MSTA_UNSET, NULL );
                 if ( ( pField = Scl_LibertyFindChild(pTree,pChild,"k_volt") ) != NULL )
-                    pCond->KVolt = Scl_LibertyItemDouble( pTree, pField, -1.0, NULL );
+                    pCond->KVolt = Scl_LibertyItemDouble( pTree, pField, MSTA_UNSET, NULL );
                 if ( ( pField = Scl_LibertyFindChild(pTree,pChild,"k_temp") ) != NULL )
-                    pCond->KTemp = Scl_LibertyItemDouble( pTree, pField, -1.0, NULL );
+                    pCond->KTemp = Scl_LibertyItemDouble( pTree, pField, MSTA_UNSET, NULL );
                 if ( ( pField = Scl_LibertyFindChild(pTree,pChild,"k_process") ) != NULL )
-                    pCond->KProcess = Scl_LibertyItemDouble( pTree, pField, -1.0, NULL );
+                    pCond->KProcess = Scl_LibertyItemDouble( pTree, pField, MSTA_UNSET, NULL );
             }
         }
     }
-    pLib->CurTimeScale = pLib->TimeScale;
-    pLib->CurCapScale = pLib->CapScale;
-    pLib->CurDefaultMaxSlew = pLib->DefaultMaxSlew;
-    pLib->CurDefaultCap = pLib->DefaultCap;
+    pLib->CurTimeScale = 1000.0;
+    pLib->CurCapScale = 1.0;
+    pLib->CurDefaultMaxSlew = -1.0;
+    pLib->CurDefaultCap = 0.0;
     pItem = Scl_LibertyFindChild( pTree, pLibrary, "time_unit" );
     if ( pItem )
         pLib->CurTimeScale = Msta_LibTimeScaleOf( Scl_LibertyItemName(pTree, pItem) );
@@ -754,21 +819,18 @@ static void Msta_LibReadLibraryAttrs( Scl_Tree_t *pTree, Scl_Item_t *pLibrary, M
     pItem = Scl_LibertyFindChild( pTree, pLibrary, "capacitive_load_unit" );
     if ( pItem )
     {
-        /* capacitive_load_unit(1.0, "pf") —— 第一个数是倍数，第二个是单位 */
-        char *pText; ssize_t nLen; double *pNums; int nNums;
-        Scl_LibertyItemRaw( pTree, pItem, &pText, &nLen );
-        Msta_LibParseNumbers( pText, nLen, &pNums, &nNums );
-        if ( nNums >= 1 && pNums[0] > 0 )
-        {
-            double Scale = pNums[0] * Msta_LibCapScaleOf( pText );
+        double Scale = Msta_LibCapScaleOf( Scl_LibertyItemName(pTree, pItem) );
+        if ( Scale > 0.0 )
             pLib->CurCapScale = Scale;
-        }
-        free( pNums );
     }
     if ( fFirstLib ) pLib->CapScale = pLib->CurCapScale;
     pItem = Scl_LibertyFindChild( pTree, pLibrary, "default_max_transition" );
     if ( pItem )
-        pLib->CurDefaultMaxSlew = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL) * pLib->CurTimeScale;
+    {
+        double Val = Scl_LibertyItemDouble(pTree, pItem, -1.0, NULL);
+        if ( Val >= 0.0 )
+            pLib->CurDefaultMaxSlew = Val * pLib->CurTimeScale;
+    }
     pItem = Scl_LibertyFindChild( pTree, pLibrary, "default_input_pin_cap" );
     if ( pItem )
         pLib->CurDefaultCap = Scl_LibertyItemDouble(pTree, pItem, 0.0, NULL) * pLib->CurCapScale;
@@ -787,22 +849,12 @@ static void Msta_LibReadLibraryAttrs( Scl_Tree_t *pTree, Scl_Item_t *pLibrary, M
         pT->Name  = Msta_NameTableId( Msta_Names(), Scl_LibertyItemName(pTree, pChild) );
         pT->pRow  = Msta_LibItemNumbers( pTree, Scl_LibertyFindChild(pTree, pChild, "index_1"), &pT->nRow );
         pT->pCol  = Msta_LibItemNumbers( pTree, Scl_LibertyFindChild(pTree, pChild, "index_2"), &pT->nCol );
-        pT->fRowIsLoad = pVar1 && !strcasecmp( Scl_LibertyItemName(pTree,pVar1),
-                                               "total_output_net_capacitance" );
-        pT->fColIsSlew = pVar2 && ( !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                 "input_net_transition")
-                                  || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                  "constrained_pin_transition")
-                                  || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                  "related_pin_transition") );
-        pT->fRowUsesSecond = pT->fRowIsLoad || (pVar1 &&
-            !strcasecmp(Scl_LibertyItemName(pTree,pVar1), "constrained_pin_transition"));
-        pT->fColUsesFirst = pVar2 && ( !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                  "input_net_transition")
-                                      || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                     "input_transition_time")
-                                      || !strcasecmp(Scl_LibertyItemName(pTree,pVar2),
-                                                     "related_pin_transition") );
+        pT->Axis[0] = pVar1
+            ? Msta_LibAxisFromName( Scl_LibertyItemName(pTree, pVar1), MSTA_AXIS_SLEW )
+            : MSTA_AXIS_SLEW;
+        pT->Axis[1] = pVar2
+            ? Msta_LibAxisFromName( Scl_LibertyItemName(pTree, pVar2), MSTA_AXIS_LOAD )
+            : MSTA_AXIS_LOAD;
     }
 }
 
@@ -815,6 +867,11 @@ int Msta_LibRead( MstaLib *pLib, const char *pFileName, int fVerbose )
 
     if ( pTree == NULL )
         return 0;
+    if ( pTree->pError != NULL && pTree->pError[0] != 0 )
+    {
+        Scl_LibertyStop( pTree );
+        return 0;
+    }
 
     /* Liberty 的顶层形状是
          library("NAME"){ define(...); cell(...){...} }
@@ -837,7 +894,7 @@ int Msta_LibRead( MstaLib *pLib, const char *pFileName, int fVerbose )
         pInfo->pFileName = Msta_StrDup( pFileName );
         pInfo->nCells    = 0;
         pInfo->OpCondName = MSTA_NO_ID;
-        pInfo->NomVoltage = pInfo->NomTemperature = pInfo->NomProcess = -1.0;
+        pInfo->NomVoltage = pInfo->NomTemperature = pInfo->NomProcess = MSTA_UNSET;
         MstaOpCondArrayInit( &pInfo->vOpConds );
         pLib->CurLibName = pInfo->Name;
     }
@@ -972,6 +1029,11 @@ MstaCell *Msta_LibCellForCorner( MstaLib *pLib, MstaCell *pCell, MstaId LibraryN
     int i;
     if ( pCell == NULL || LibraryName == MSTA_NO_ID || pCell->LibName == LibraryName )
         return pCell;
+    {
+        MstaCell *pBase = Msta_LibFindCellByName( pLib, pCell->Name );
+        if ( pBase != NULL && pBase->LibName == LibraryName )
+            return pBase;
+    }
     for ( i = 0; i < pLib->vCornerCells.nSize; i++ )
     {
         MstaCell *pAlt = MstaCellArrayAt(&pLib->vCornerCells,i);
@@ -1052,7 +1114,7 @@ static int BoolAtom( MstaBoolExpr *p )
     int Value = 0, i;
     if ( ++p->nDepth > 256 ) { p->fValid = 0; p->nDepth--; return 0; }
     BoolSpace(p);
-    if ( *p->pText == '!' ) { p->pText++; Value = !BoolAtom(p); }
+    if ( *p->pText == '!' || *p->pText == '~' ) { p->pText++; Value = !BoolAtom(p); }
     else if ( *p->pText == '(' )
     {
         p->pText++; Value = BoolOr(p); BoolSpace(p);
@@ -1089,9 +1151,10 @@ static int BoolAnd( MstaBoolExpr *p )
     {
         BoolSpace(p);
         char Op = *p->pText;
-        int Implicit = isalnum((unsigned char)Op) || Op == '_' || Op == '(' || Op == '!';
+        int Implicit = isalnum((unsigned char)Op) || Op == '_' || Op == '(' || Op == '!' || Op == '~';
         if ( Op != '&' && Op != '*' && !Implicit ) break;
-        if ( !Implicit ) p->pText++;
+        if ( !Implicit )
+            p->pText += ( Op == '&' && p->pText[1] == '&' ) ? 2 : 1;
         Value &= BoolXor(p);
     }
     return Value;
@@ -1112,9 +1175,65 @@ static int BoolOr( MstaBoolExpr *p )
     while ( p->fValid )
     {
         BoolSpace(p); if ( *p->pText != '|' && *p->pText != '+' ) break;
-        p->pText++; Value |= BoolAnd(p);
+        p->pText += ( *p->pText == '|' && p->pText[1] == '|' ) ? 2 : 1;
+        Value |= BoolAnd(p);
     }
     return Value;
+}
+
+/* 判定一条弧是否可用于组合传播（排除检查弧、未知弧和 clear/preset）。 */
+int Msta_ArcIsComb( const MstaCell *pCell, const MstaArc *pArc )
+{
+    if ( pCell->fSequential )
+        return pArc->Type == MSTA_TT_COMBINATIONAL;
+    return pArc->Type == MSTA_TT_COMBINATIONAL ||
+           pArc->Type == MSTA_TT_RISE_EDGE || pArc->Type == MSTA_TT_FALL_EDGE ||
+           pArc->Type == MSTA_TT_RISE_BOTH || pArc->Type == MSTA_TT_FALL_BOTH;
+}
+
+/* 按侧输入 case/常量值检查 Liberty when 条件是否仍可能成立。 */
+int Msta_LibArcWhenActive( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases )
+{
+    int i, nFree = 0, Known = 0, Free[8];
+    signed char *Values;
+    if ( pArc == NULL || pArc->pWhen == NULL || pCases == NULL )
+        return 1;
+    for ( i = 0; i < pCell->vPins.nSize; i++ )
+        if ( pCell->vPins.pData[i].Dir != MSTA_DIR_OUTPUT )
+        {
+            if ( pCases[i] >= 0 ) Known = 1;
+            else if ( nFree < 8 ) Free[nFree++] = i;
+        }
+    if ( !Known )
+        return 1;
+    if ( nFree >= 8 )
+    {
+        /* 仅当所有超过 8 个自由引脚都没有在 when 中或无法穷举时保守返回 1。 */
+        int nExtra = 0;
+        for ( i = 0; i < pCell->vPins.nSize; i++ )
+            if ( pCell->vPins.pData[i].Dir != MSTA_DIR_OUTPUT && pCases[i] < 0 )
+                nExtra++;
+        if ( nExtra > 8 )
+            return 1;
+    }
+    Values = (signed char *)malloc( (size_t)pCell->vPins.nSize );
+    assert( Values );
+    memcpy( Values, pCases, (size_t)pCell->vPins.nSize );
+    for ( i = 0; i < (1 << nFree); i++ )
+    {
+        MstaBoolExpr Expr = { pArc->pWhen, pCell, Values, 1, 0 };
+        int k, Res;
+        for ( k = 0; k < nFree; k++ ) Values[Free[k]] = (i >> k) & 1;
+        Res = BoolOr( &Expr );
+        BoolSpace( &Expr );
+        if ( !Expr.fValid || *Expr.pText || Res )
+        {
+            free( Values );
+            return 1;
+        }
+    }
+    free( Values );
+    return 0;
 }
 
 /* 判定时钟弧在 case 值下的极性：枚举不超过 8 个自由侧输入的全部取值，每种取值下把输入脚
@@ -1123,9 +1242,13 @@ int Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char 
 {
     int In = Msta_CellPinIndexOf(pCell,pArc->InPin);
     int Out = Msta_CellPinIndexOf(pCell,pArc->OutPin);
-    int i, nFree = 0, Known = 0, Positive = 0, Negative = 0;
+    int i, nFree = 0, Known = 0, Positive = 0, Negative = 0, FuncSense;
     int Free[8];
     signed char *Values;
+    if ( In >= 0 && pCases != NULL && pCases[In] >= 0 )
+        return -1;
+    if ( !Msta_LibArcWhenActive( pCell, pArc, pCases ) )
+        return -1;
     if ( In < 0 || Out < 0 || pCell->vPins.pData[Out].pFunc == NULL ) return pArc->Sense;
     for ( i = 0; i < pCell->vPins.nSize; i++ )
         if ( i != In && pCell->vPins.pData[i].Dir != MSTA_DIR_OUTPUT )
@@ -1140,28 +1263,42 @@ int Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char 
     memcpy(Values,pCases,(size_t)pCell->vPins.nSize);
     for ( i = 0; i < (1 << nFree); i++ )
     {
-        int k, f, Result[2];
+        int k, f, Result[2], WhenOk = ( pArc->pWhen == NULL );
         for ( k = 0; k < nFree; k++ ) Values[Free[k]] = (i >> k) & 1;
         for ( f = 0; f < 2; f++ )
         {
             MstaBoolExpr Expr = {pCell->vPins.pData[Out].pFunc,pCell,Values,1,0};
             Values[In] = (signed char)f;
+            if ( pArc->pWhen != NULL && !WhenOk )
+            {
+                MstaBoolExpr WExpr = {pArc->pWhen,pCell,Values,1,0};
+                int WRes = BoolOr(&WExpr);
+                BoolSpace(&WExpr);
+                if ( !WExpr.fValid || *WExpr.pText ) { free(Values); return pArc->Sense; }
+                if ( WRes ) WhenOk = 1;
+            }
             Result[f] = BoolOr(&Expr);
             BoolSpace(&Expr);
             if ( !Expr.fValid || *Expr.pText ) { free(Values); return pArc->Sense; }
         }
+        if ( !WhenOk ) continue;
         if ( Result[0] == 0 && Result[1] == 1 ) Positive = 1;
         if ( Result[0] == 1 && Result[1] == 0 ) Negative = 1;
     }
     free(Values);
-    return Positive && Negative ? MSTA_SENSE_NONUNATE : Positive ? MSTA_SENSE_POSITIVE
-           : Negative ? MSTA_SENSE_NEGATIVE : -1;
+    FuncSense = Positive && Negative ? MSTA_SENSE_NONUNATE : Positive ? MSTA_SENSE_POSITIVE
+              : Negative ? MSTA_SENSE_NEGATIVE : -1;
+    if ( FuncSense < 0 )
+        return -1;
+    if ( pArc->Sense == MSTA_SENSE_POSITIVE )
+        return Positive ? MSTA_SENSE_POSITIVE : -1;
+    if ( pArc->Sense == MSTA_SENSE_NEGATIVE )
+        return Negative ? MSTA_SENSE_NEGATIVE : -1;
+    return FuncSense;
 }
 
-/* 组合弧查找：同一个 (in,out) 可能有多条（不同 timing_type），
-   FF 单元里只认 combinational 弧；非 FF 单元取第一条匹配的，但异步
-   clear/preset 弧一律不算（没有检查弧、被当成透明缓冲的 latch 也有这种弧，
-   当组合弧会让复位脚到输出凭空多出一条数据路径）。 */
+/* 组合弧查找：同一个 (in,out) 可能有多条（不同 timing_type / when 条件），
+   返回第一条可用于组合传播的弧；遍历全部弧应循环配合 Msta_ArcIsComb。 */
 MstaArc *Msta_CellCombArc( MstaCell *pCell, MstaId InPin, MstaId OutPin )
 {
     int i;
@@ -1170,9 +1307,7 @@ MstaArc *Msta_CellCombArc( MstaCell *pCell, MstaId InPin, MstaId OutPin )
         MstaArc *pArc = MstaArcArrayAt( &pCell->vArcs, i );
         if ( pArc->InPin != InPin || pArc->OutPin != OutPin )
             continue;
-        if ( pCell->fSequential && pArc->Type != MSTA_TT_COMBINATIONAL )
-            continue;
-        if ( pArc->Type == MSTA_TT_CLEAR || pArc->Type == MSTA_TT_PRESET )
+        if ( !Msta_ArcIsComb( pCell, pArc ) )
             continue;
         return pArc;
     }
@@ -1239,30 +1374,104 @@ static int Msta_TableAxisFind( const double *pAxis, int n, double x, double *pfW
     return 0;
 }
 
-double Msta_TableLookup( const MstaTable *pTable, double Slew, double Load )
+const char *Msta_LibAxisName( MstaTableAxis Axis )
 {
-    double wRow, wCol;
-    double RowValue = pTable->fRowUsesSecond ? Load : Slew;
-    double ColValue = pTable->fColUsesFirst ? Slew : Load;
-    int iRow, iCol;
+    switch ( Axis )
+    {
+    case MSTA_AXIS_SLEW:             return "input_slew";
+    case MSTA_AXIS_LOAD:             return "output_load";
+    case MSTA_AXIS_CONSTRAINED_SLEW: return "constrained_slew";
+    case MSTA_AXIS_RELATED_SLEW:     return "related_slew";
+    }
+    return "input_slew";
+}
+
+static inline double Msta_AxisSelectInput( MstaTableAxis Axis, double Slew, double Load )
+{
+    return ( Axis == MSTA_AXIS_LOAD || Axis == MSTA_AXIS_CONSTRAINED_SLEW ) ? Load : Slew;
+}
+
+int Msta_TableExplain( const MstaTable *p, double Slew, double Load, MstaTableExplain *pOut )
+{
+    double wRow = 0.0, wCol = 0.0;
+    double RowValue, ColValue;
+    int iRow = 0, iCol = 0;
     const double *v;
 
-    if ( pTable->nRows == 0 )
+    if ( pOut == NULL )
+        return 0;
+    memset( pOut, 0, sizeof(MstaTableExplain) );
+    if ( p == NULL || p->nRows == 0 || p->nCols == 0 )
+        return 0;
+
+    RowValue = Msta_AxisSelectInput( p->Axis[0], Slew, Load );
+    ColValue = Msta_AxisSelectInput( p->Axis[1], Slew, Load );
+    pOut->Axis[0]  = p->Axis[0];
+    pOut->Axis[1]  = p->Axis[1];
+    pOut->RowInput = RowValue;
+    pOut->ColInput = ColValue;
+
+    v = p->pValues;
+    if ( p->nRows == 1 && p->nCols == 1 )
+    {
+        pOut->nDim   = 1;
+        pOut->Row0   = p->pRowIndex ? p->pRowIndex[0] : 0.0;
+        pOut->Col0   = p->pColIndex ? p->pColIndex[0] : 0.0;
+        pOut->V00    = v[0];
+        pOut->Result = v[0];
+        return 1;
+    }
+
+    iRow = Msta_TableAxisFind( p->pRowIndex, p->nRows, RowValue, &wRow );
+    iCol = Msta_TableAxisFind( p->pColIndex, p->nCols, ColValue, &wCol );
+    pOut->iRow = iRow;
+    pOut->iCol = iCol;
+    pOut->wRow = wRow;
+    pOut->wCol = wCol;
+
+    if ( p->nCols == 1 )
+    {
+        pOut->nDim   = 2;
+        pOut->Row0   = p->pRowIndex[iRow];
+        pOut->Row1   = p->pRowIndex[iRow + 1];
+        pOut->Col0   = p->pColIndex ? p->pColIndex[0] : 0.0;
+        pOut->V00    = v[iRow];
+        pOut->V10    = v[iRow + 1];
+        pOut->Result = pOut->V00 * (1.0 - wRow) + pOut->V10 * wRow;
+        return 1;
+    }
+    if ( p->nRows == 1 )
+    {
+        pOut->nDim   = 3;
+        pOut->Row0   = p->pRowIndex ? p->pRowIndex[0] : 0.0;
+        pOut->Col0   = p->pColIndex[iCol];
+        pOut->Col1   = p->pColIndex[iCol + 1];
+        pOut->V00    = v[iCol];
+        pOut->V01    = v[iCol + 1];
+        pOut->Result = pOut->V00 * (1.0 - wCol) + pOut->V01 * wCol;
+        return 1;
+    }
+
+    pOut->nDim = 4;
+    pOut->Row0 = p->pRowIndex[iRow];
+    pOut->Row1 = p->pRowIndex[iRow + 1];
+    pOut->Col0 = p->pColIndex[iCol];
+    pOut->Col1 = p->pColIndex[iCol + 1];
+    pOut->V00  = v[(iRow + 0) * p->nCols + iCol + 0];
+    pOut->V01  = v[(iRow + 0) * p->nCols + iCol + 1];
+    pOut->V10  = v[(iRow + 1) * p->nCols + iCol + 0];
+    pOut->V11  = v[(iRow + 1) * p->nCols + iCol + 1];
+    pOut->Result = ( pOut->V00 * (1.0 - wCol) + pOut->V01 * wCol ) * (1.0 - wRow)
+                 + ( pOut->V10 * (1.0 - wCol) + pOut->V11 * wCol ) * wRow;
+    return 1;
+}
+
+double Msta_TableLookup( const MstaTable *pTable, double Slew, double Load )
+{
+    MstaTableExplain Exp;
+    if ( !Msta_TableExplain( pTable, Slew, Load, &Exp ) )
         return 0.0;
-    if ( pTable->nRows == 1 && pTable->nCols == 1 )
-        return pTable->pValues[0];
-
-    iRow = Msta_TableAxisFind( pTable->pRowIndex, pTable->nRows, RowValue, &wRow );
-    iCol = Msta_TableAxisFind( pTable->pColIndex, pTable->nCols, ColValue, &wCol );
-
-    v = pTable->pValues;
-    if ( pTable->nCols == 1 )
-        return v[(iRow+0)*pTable->nCols] * (1-wRow) + v[(iRow+1)*pTable->nCols] * wRow;
-    if ( pTable->nRows == 1 )
-        return v[iCol+0] * (1-wCol) + v[iCol+1] * wCol;
-
-    return ( v[(iRow+0)*pTable->nCols + iCol+0] * (1-wCol) + v[(iRow+0)*pTable->nCols + iCol+1] * wCol ) * (1-wRow)
-         + ( v[(iRow+1)*pTable->nCols + iCol+0] * (1-wCol) + v[(iRow+1)*pTable->nCols + iCol+1] * wCol ) * wRow;
+    return Exp.Result;
 }
 
 int Msta_TableExists( const MstaTable *pTable ) { return pTable->nRows > 0; }
@@ -1284,6 +1493,7 @@ static void Msta_CellFree( MstaCell *pCell )
     for ( i = 0; i < pCell->vArcs.nSize; i++ )
     {
         MstaArc *pArc = MstaArcArrayAt( &pCell->vArcs, i );
+        free( pArc->pWhen );
         Msta_TableFree( &pArc->DelayRise );  Msta_TableFree( &pArc->DelayFall );
         Msta_TableFree( &pArc->TransRise );  Msta_TableFree( &pArc->TransFall );
         Msta_TableFree( &pArc->ConstraintRise );  Msta_TableFree( &pArc->ConstraintFall );

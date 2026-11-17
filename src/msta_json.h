@@ -58,6 +58,7 @@ void        Msta_JsonFree( MJsonValue *p );
 /* ---- 查询助手：取不到就返回默认值，调用方不必层层判空 ---- */
 MJsonValue *Msta_JsonGet( MJsonValue *pObj, const char *pKey );
 const char *Msta_JsonStr( MJsonValue *pObj, const char *pKey, const char *pDefault );
+int         Msta_JsonInt( MJsonValue *pObj, const char *pKey, int nDefault );
 int         Msta_JsonIsArray( MJsonValue *pValue );
 const char *Msta_JsonKeyAt( MJsonValue *pObj, int i );
 MJsonValue *Msta_JsonAt( MJsonValue *pValue, int i );

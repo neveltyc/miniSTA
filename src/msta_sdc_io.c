@@ -237,10 +237,10 @@ void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSd
     const char *pMult     = Msta_SdcOptValue( pCmd, "-multiply_by" );
     const char *pInRise   = Msta_SdcOptValue( pCmd, "-input_transition_rise" );
     const char *pInFall   = Msta_SdcOptValue( pCmd, "-input_transition_fall" );
-    double Mult = 1.0, InRise = 0.0, InFall = 0.0, Slew = 0.0;
+    double Mult = 1.0, InRise = 0.0, InFall = 0.0;
     char sCellQual[512];
     MstaCell *pCell;
-    int *pNets, nNets, i, k;
+    int *pNets, nNets, i;
 
     if ( !Msta_SdcRequire( p, pCmd, "-lib_cell" ) )
         return;
@@ -257,15 +257,6 @@ void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSd
     pCell = Msta_LibFindCell( pLib, pCellName );
     if ( pCell == NULL )
     { Msta_SdcReject( p, pCmd, "单元 \"%s\" 不在指定的库里", pCellName ); return; }
-    for ( k = 0; k < pCell->vArcs.nSize && Slew <= 0.0; k++ )
-    {
-        MstaArc *pArc = MstaArcArrayAt( &pCell->vArcs, k );
-        if ( pPinName && pArc->OutPin != Msta_NameId(pPinName) ) continue;
-        if ( Msta_TableExists( &pArc->TransRise ) )
-            Slew = pArc->TransRise.pValues[0] * pLib->TimeScale;
-        else if ( Msta_TableExists( &pArc->TransFall ) )
-            Slew = pArc->TransFall.pValues[0] * pLib->TimeScale;
-    }
     if ( ( nNets = Msta_SdcObjectNets( p, pDes, pCmd, pCmd->ppObjs, pCmd->nObjs, &pNets ) ) < 0 )
         return;
     for ( i = 0; i < nNets; i++ )
@@ -275,12 +266,8 @@ void Msta_SdcSetDrivingCell( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, MstaSd
         pCons->DrivingPin     = pPinName ? Msta_NameId( pPinName ) : MSTA_NO_ID;
         pCons->DrivingFromPin = pFromPin ? Msta_NameId( pFromPin ) : MSTA_NO_ID;
         pCons->DriveMultiply  = Mult;
-        if ( pInRise ) pCons->DriveInSlewRise = InRise * p->TimeScalePs;
-        if ( pInFall ) pCons->DriveInSlewFall = InFall * p->TimeScalePs;
-        if ( !Msta_IsSet( pCons->InputSlewMaxRise ) ) pCons->InputSlewMaxRise = Slew;
-        if ( !Msta_IsSet( pCons->InputSlewMaxFall ) ) pCons->InputSlewMaxFall = Slew;
-        if ( !Msta_IsSet( pCons->InputSlewMinRise ) ) pCons->InputSlewMinRise = Slew;
-        if ( !Msta_IsSet( pCons->InputSlewMinFall ) ) pCons->InputSlewMinFall = Slew;
+        pCons->DriveInSlewRise = pInRise ? InRise * p->TimeScalePs : MSTA_UNSET;
+        pCons->DriveInSlewFall = pInFall ? InFall * p->TimeScalePs : MSTA_UNSET;
     }
 }
 

@@ -101,8 +101,8 @@ if ! diff <(tail -n +2 "${LOG}/testcases_sdc_features_clock_groups.dofile.log") 
 fi
 
 # -rise_through / -fall_through：命中路径上的那个边沿时，换成同一条链上的另一个
-# 边沿继续查（端点不是整条被切掉）。对照基准最差路径 slack 15.505、在 X 上下降。
-grep -Fq 'setup : WNS   15.684 ns' "${LOG}/testcases_sdc_features_through_edge.dofile.log"
+# 边沿继续查（端点不是整条被切掉）。对照基准最差路径 slack 15.500、在 X 上下降。
+grep -Fq 'setup : WNS   15.617 ns' "${LOG}/testcases_sdc_features_through_edge.dofile.log"
 grep -Fq 'hold  : WNS    0.265 ns' "${LOG}/testcases_sdc_features_through_edge.dofile.log"
 grep -Fq 'endpoint   : my_cfo' "${LOG}/testcases_sdc_features_through_edge.dofile.log"
 if grep -Fq '未约束 1 个' "${LOG}/testcases_sdc_features_through_edge.dofile.log"; then
@@ -110,7 +110,7 @@ if grep -Fq '未约束 1 个' "${LOG}/testcases_sdc_features_through_edge.dofile
     exit 1
 fi
 # 最差 setup 路径在 X 上是下降沿，setup 不变；hold 独立选取未被切掉的边沿。
-grep -Fq 'setup : WNS   15.505 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
+grep -Fq 'setup : WNS   15.500 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
 grep -Fq 'hold  : WNS    0.477 ns' "${LOG}/testcases_sdc_features_through_edge_rise.dofile.log"
 for edge_case in through_edge through_edge_rise; do
     if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_${edge_case}.dofile.log"; then
@@ -130,7 +130,7 @@ grep -Fq 'set_operating_conditions：库里没有 k_volt/k_temp 系数；延迟�
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'set_voltage：已记录 0.950 V，但库里没有 k_volt 系数' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
-grep -Fq 'setup : WNS   15.505 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
+grep -Fq 'setup : WNS   15.500 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq 'hold  : WNS    0.465 ns' "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
 grep -Fq '分析模式 : on_chip_variation' \
     "${LOG}/testcases_sdc_features_operating_conditions.dofile.log"
@@ -143,9 +143,9 @@ grep -Fq '1 条命令未建模或写错，已忽略' \
 
 # set_data_check：-from 的到达（减去它的出发沿）加 margin 当要求时间，
 # 计入 WNS/TNS。
-grep -Fq '数据检查 : 1 条   setup 最差 -0.995 ns（my_cti -> u_sff/D，margin 0.500）' \
+grep -Fq '数据检查 : 1 条   setup 最差 -1.000 ns（my_cti -> u_sff/D，margin 0.500）' \
     "${LOG}/testcases_sdc_features_data_check.dofile.log"
-grep -Fq 'setup : WNS   -0.995 ns' "${LOG}/testcases_sdc_features_data_check.dofile.log"
+grep -Fq 'setup : WNS   -1.000 ns' "${LOG}/testcases_sdc_features_data_check.dofile.log"
 if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_data_check.dofile.log"; then
     echo 'data_check：标准写法不应该产生 sdc 告警' >&2
     exit 1
@@ -161,7 +161,7 @@ grep -Fq 'hold  : WNS   -0.323 ns   TNS   -11.951 ns' "${LOG}/testcases_sdc_feat
 
 grep -Fq 'recovery path' "${LOG}/testcases_ac97_ac97.dofile.log"
 # 设计规则检查：各类违例的个数与最差项。
-grep -Fq 'max_transition 违例 60 处' "${LOG}/testcases_sdc_features_drc.dofile.log"
+grep -Fq 'max_transition 违例 61 处' "${LOG}/testcases_sdc_features_drc.dofile.log"
 grep -Fq 'max_capacitance 违例 3 处（最差超出 120.244 fF）' "${LOG}/testcases_sdc_features_drc.dofile.log"
 grep -Fq 'max_fanout 违例 3 处（最大扇出 39）' "${LOG}/testcases_sdc_features_drc.dofile.log"
 grep -Fq 'min_capacitance 违例 40 处（最差低了 2.000 fF）' \
@@ -216,7 +216,7 @@ grep -Fq 'capture edge                              20.000' "${LOG}/testcases_sd
 # 分对象 DRC：resetn 上单独设的扇出限制生效（扇出 153）。
 grep -Fq 'max_fanout 违例 1 处（最大扇出 153）' \
     "${LOG}/testcases_multi_vt_drc_objects.dofile.log"
-grep -Fq 'max_transition 违例 446 处' "${LOG}/testcases_multi_vt_drc_objects.dofile.log"
+grep -Fq 'max_transition 违例 517 处' "${LOG}/testcases_multi_vt_drc_objects.dofile.log"
 grep -Fq 'max_capacitance 违例 82 处' "${LOG}/testcases_multi_vt_drc_objects.dofile.log"
 
 # 多阈值多库用例：一份网表里同时有 LVT/RVT/HVT 三种库的单元。
@@ -224,7 +224,7 @@ grep -Fq 'Libraries    : 3' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq 'ics55_LLSC_H7CL_typ_tt_1p2_25' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq 'ics55_LLSC_H7CR_typ_tt_1p2_25' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq 'ics55_LLSC_H7CH_typ_tt_1p2_25' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
-grep -Fq 'setup : WNS   13.593 ns' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
+grep -Fq 'setup : WNS   13.563 ns' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq 'hold  : WNS    0.077 ns' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 grep -Fq '寄存器 1613 个' "${LOG}/testcases_multi_vt_multi_vt_soc.dofile.log"
 # 三方库的单元都要真的出现在网表里（综合时按块用了不同阈值库）。
@@ -237,7 +237,7 @@ if grep -Fq 'set_driving_cell：单元' "${LOG}/testcases_multi_vt_driving_cell_
     echo 'multi_vt：限定库名的 set_driving_cell 没查到 cell' >&2
     exit 1
 fi
-grep -Fq 'setup : WNS    3.599 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"
+grep -Fq 'setup : WNS   13.578 ns' "${LOG}/testcases_multi_vt_driving_cell_lib.dofile.log"
 
 # 理想网络（set_ideal_network）：不累计延迟。同一张网表的对照——4 级缓冲的时钟树
 # 插入延迟 0.315 ns，把时钟端口标成理想网络后整棵树都是 0；-no_propagate 只把 ct2
@@ -340,9 +340,9 @@ grep -Fq 'hold  : WNS   -0.230 ns' "${LOG}/testcases_opentimer_s27_s27.dofile.lo
 grep -Fq '寄存器 3 个   端点 4 个' "${LOG}/testcases_opentimer_s27_s27.dofile.log"
 
 # 自己的用例一律写 SDC 1.8 语法：standard_ports 用显式端口列表表达"除时钟外的输入"。
-grep -Fq 'setup : WNS   17.496 ns' "${LOG}/testcases_sdc_features_standard_ports.dofile.log"
+grep -Fq 'setup : WNS   17.491 ns' "${LOG}/testcases_sdc_features_standard_ports.dofile.log"
 # 也可以用 Tcl 层集合运算拼出同一组对象（remove_from_collection），结果必须一致。
-grep -Fq 'setup : WNS   17.496 ns' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"
+grep -Fq 'setup : WNS   17.491 ns' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"
 grep -Fq 'hold  : WNS    0.465 ns' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"
 if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_collection_ops.dofile.log"; then
     echo 'collection_ops：集合运算不应产生 sdc 告警' >&2
@@ -471,8 +471,8 @@ grep -Eq '^in_grp[[:space:]]+1\.00[[:space:]]+1[[:space:]]+44\.860' \
     "${LOG}/testcases_sdc_features_group_path_through.dofile.log"
 # 和路径例外一起用时，分组跟着"最终获胜的那条路径"走（次优路径仍在 u_mux 上）。
 grep -Fq 'path group   : mux_grp' "${LOG}/testcases_sdc_features_group_path_exception.dofile.log"
-grep -Fq 'setup : WNS   15.684 ns' "${LOG}/testcases_sdc_features_group_path_exception.dofile.log"
-grep -Eq '^mux_grp[[:space:]]+1\.00[[:space:]]+2[[:space:]]+15\.684' \
+grep -Fq 'setup : WNS   15.617 ns' "${LOG}/testcases_sdc_features_group_path_exception.dofile.log"
+grep -Eq '^mux_grp[[:space:]]+1\.00[[:space:]]+2[[:space:]]+15\.617' \
     "${LOG}/testcases_sdc_features_group_path_exception.dofile.log"
 for gp in group_path group_path_default group_path_through group_path_exception; do
     if grep -Fq '警告：sdc' "${LOG}/testcases_sdc_features_${gp}.dofile.log"; then

@@ -340,6 +340,12 @@ const char *Msta_JsonStr( MJsonValue *pObj, const char *pKey, const char *pDefau
     return ( p && p->Kind == MJSON_STRING ) ? p->pStr : pDefault;
 }
 
+int Msta_JsonInt( MJsonValue *pObj, const char *pKey, int nDefault )
+{
+    MJsonValue *p = Msta_JsonGet( pObj, pKey );
+    return ( p && p->Kind == MJSON_NUMBER ) ? (int)p->Num : nDefault;
+}
+
 
 int Msta_JsonIsArray( MJsonValue *pValue )
 {   return pValue && pValue->Kind == MJSON_ARRAY;  }

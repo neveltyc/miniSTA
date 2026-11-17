@@ -41,9 +41,20 @@
 #include "msta_lib.h"
 #include "msta_net.h"
 #include "msta_sdc.h"
+#include "msta_plugin.h"
 
 /* 最短结构深度尚不可达，不能据此查询较深的 AOCV 采样点。 */
 #define MSTA_AOCV_DEPTH_INF 1000000000
+
+typedef enum {
+    MSTA_CORNER_MIN = 0,      /* hold / early 角 */
+    MSTA_CORNER_MAX = 1       /* setup / late 角 */
+} MstaCornerKind;
+
+typedef enum {
+    MSTA_EDGE_FALL = 0,       /* 下降沿 */
+    MSTA_EDGE_RISE = 1        /* 上升沿 */
+} MstaEdgeDir;
 
 typedef struct {
     double Slack;
@@ -60,10 +71,19 @@ typedef struct {
     double CaptureTime;       /* capture 边沿 */
     int    *pPath;            /* 终点 -> 起点，获胜路径的快照 */
     double *pPathArrival;
+    int    *pPathEdge;        /* 获胜路径每个网络点的数据边沿（1=rise, 0=fall） */
+    int    *pPathLoadPin;     /* 驱动该点所用组合单元的输入引脚下标（-1=起点/端口） */
     int     nPath;
     /* 跨时钟时最差的那对边沿不一定都在第 0 拍：出发沿在第 k 拍时，报告里的
        路径时间整体平移 k 个出发周期（slack 只跟两个边沿的差有关）。 */
     double LaunchShift;
+    /* 这一角分别记录 data fall(0)/rise(1) 端点反推到第 0 拍坐标系的 RAT，
+       避免某条最差数据边沿覆盖掉另一边沿的端点约束。 */
+    double EdgeReq[2];
+    char   fEdgeReq[2];
+    /* 这一角实际采用的捕获时钟与路径预算标记（max_delay/min_delay）。 */
+    MstaId CaptureClock;
+    int    fPathBudget;
     /* 这条检查归在哪个路径分组（group_path）。没有 group_path 时按捕获时钟名字
        归组，异步检查归入 MSTA_SDC_GROUP_ASYNC 组。分组只影响报告与按组统计，不影响 slack。 */
     MstaId Group;
@@ -72,7 +92,7 @@ typedef struct {
 /* 一条时序检查（路径端点）。
    fToRegister=1：终点是某个 FF 的数据脚（reg2reg 或 input2reg）
    fToRegister=0：终点是顶层输出脚（reg2out） */
-typedef struct {
+typedef struct MstaCheck {
     MstaId InstId;            /* fToRegister=1 时是那个 FF */
     int    nCheck;            /* 该 cell 的 vRegs 下标 */
     int    nDataPin;          /* 数据脚在 vPins 里的下标 */
@@ -132,6 +152,7 @@ typedef struct {
 typedef struct {
     int Net;                  /* 前驱网络；-1 = 这个点就是起点 */
     int Edge;                 /* 前驱网络上的边沿：1 = 上升，0 = 下降 */
+    int LoadPin;              /* 下游逻辑单元上的输入引脚下标；-1 = 起点或主输出 */
 } MstaPrev;
 
 /* 找次优路径时排除的 (网络, 边沿) 个数上限。 */
@@ -150,6 +171,9 @@ typedef struct {
 typedef struct {
     double *pArr;              /* [nNets] 到达时间（max 角用于 setup 遍，min 角用于 hold 遍） */
     double *pArrRise, *pArrFall;
+    double *pReq;              /* [nNets] 后向传播后的要求时间（与到达同坐标系，不带 launch shift） */
+    double *pReqRise, *pReqFall;
+    double *pAuxReqRise, *pAuxReqFall; /* set_data_check / set_clock_gating_check 的辅助 RAT */
     double *pSlew;             /* [nNets] 输出摆率，驱动下一级查表用 */
     double *pSlewRise, *pSlewFall;
     /* 起点信息：这根网络上的数据是从哪个时钟、哪一拍出发的。
@@ -167,6 +191,7 @@ typedef struct MstaTiming {
     MstaDesign *pDes;
     MstaLib    *pLib;
     MstaSdc    *pSdc;
+    MstaPluginSet Plugins;
 
     MstaCheckArray vChecks;
 
@@ -185,6 +210,8 @@ typedef struct MstaTiming {
     /* "找次优路径"用的排除表 */
     MstaPathExclude vPathExclude[MSTA_MAX_PATH_EXCLUDE];
     int     nPathExclude;
+    MstaSdcObject *pPathObjects;
+    int     nPathObjectsCap;
     MstaClockPair vClockPairs[MSTA_MAX_CLOCK_PAIRS];
     MstaClockPath vCpprPaths[MSTA_CPPR_PATH_COUNT]; /* 按真实时钟深度增长、重复使用 */
     int     nStartClasses;
@@ -193,9 +220,15 @@ typedef struct MstaTiming {
 
     int    *pTopoOrder;        /* [nNets] 拓扑序：网络编号的数组 */
     int     nTopoOrder;
+    int    *pLevel;            /* [nNets] 组合逻辑级数（PI/时钟/FF.Q 为 0） */
     int    *pState;            /* DFS 用的 0/1/2 标记 */
     int    *pStartClass;       /* [nNets] 起点分类号，-1 = 不是起点（见 BuildStartClasses） */
     int     nCombLoops;
+    int     fAnalyzed;         /* 1 = 最近一轮 Analyze 已完成（供教学查询命令复用） */
+    int     MaxLogicLevel;     /* pLevel 的最大值，供分桶增量队列使用 */
+    int    *pFirstCheck;       /* [nNets] 网络 -> 关联 MstaCheck 链头，-1 = 无 */
+    int    *pNextCheck;        /* [vChecks.nSize] 同一 nEndNet 上下一条检查 */
+    int     fIncrEligible;     /* 1 = 单时钟/单传播上下文，支持分级局部增量更新 */
     int *pAocvDataForward, *pAocvDataBackward; /* 完整路径的最短结构深度 */
     int *pAocvClockForward, *pAocvClockBackward; /* [clock][net] */
 
@@ -230,9 +263,24 @@ typedef struct MstaTiming {
 
 MstaTiming *Msta_TimingStart( MstaDesign *pDes, MstaLib *pLib, MstaSdc *pSdc );
 void        Msta_TimingFree( MstaTiming *p );
+void        Msta_TimingSetPlugins( MstaTiming *p, const MstaPluginSet *pSet );
+
+/* 换单元后分级增量 STA 的统计与一致性自检结果。 */
+typedef struct {
+    int    fIncremental;    /* 1 = 分级增量重算，0 = 回退全量重算 */
+    int    nDirtyNets;      /* 前向与后向合计触发重算的网络数 */
+    int    nChecksUpdated;  /* 重算的端点检查条数 */
+    int    nTotalNets;
+    double ElapsedMs;
+    double MaxDiffPs;       /* -verify 模式下增量结果相对全量重算的最大绝对误差（ps） */
+} MstaSwapStats;
 
 /* 完整一遍分析，步骤 1-7 见文件头的"分析流程"。 */
 int         Msta_TimingAnalyze( MstaTiming *p, int fVerbose );
+/* 把实例 nInst 原地替换为新库单元 pNewCell 并更新时序。满足单上下文局部拓扑不变条件时
+   走分级增量重算，否则自动回退全量重算；fVerify=1 时再跑一次全量对比所有网络和端点误差。 */
+int         Msta_TimingSwapCell( MstaTiming *p, int nInst, MstaCell *pNewCell,
+                                 int fVerify, MstaSwapStats *pStats );
 
 /* ---- 查询：报告层只用这些 ---- */
 /* 把端点按 slack 从小到大排（setup 或 hold 两种排法）。 */
@@ -249,8 +297,27 @@ double      Msta_TimingNetArrival( MstaTiming *p, int nNet, int fMax );
 int         Msta_TimingClockNetCount( MstaTiming *p );
 /* 时钟树按时钟分别传播：报告层要按 (时钟, 网络) 取到达与归属。 */
 int         Msta_TimingAocvDataDepth( MstaTiming *p, int nInNet, int nOutNet );
+int         Msta_TimingAocvClockDepth( MstaTiming *p, int nClock, int nInNet, int nOutNet );
 int         Msta_TimingClockCount( MstaTiming *p );
 int         Msta_TimingNetHasClock( MstaTiming *p, int nClock, int nNet );
 const MstaClockArr *Msta_TimingClockArr( MstaTiming *p, int nClock, int nNet );
+
+/* 教学与模块化查询接口：后向 RAT、网络级物理/时序属性、时钟路径展开与弧检查。 */
+void        Msta_TimingPropagateRequired( MstaTiming *p, int fMax );
+double      Msta_TimingNetLoad( MstaTiming *p, int nNet, int fMax );
+double      Msta_TimingNetSlewEdge( MstaTiming *p, int nNet, int fMax, int fRise );
+double      Msta_TimingNetArrivalEdge( MstaTiming *p, int nNet, int fMax, int fRise );
+double      Msta_TimingNetRequiredEdge( MstaTiming *p, int nNet, int fMax, int fRise );
+int         Msta_TimingTimeValid( double Value );
+/* 回溯时钟树路径并按 source -> ... -> sink 正序写入 pOut，返回点数。 */
+int         Msta_TimingTraceClock( MstaTiming *p, int nClock, int nClkNet, int fMax,
+                                   int fLocalRise, int fSourceRise,
+                                   MstaClockPrev *pOut, int nCap );
+int         Msta_TimingDataArcActive( MstaTiming *p, int nInst, const MstaCell *pCombCell, const MstaArc *pArc );
+double      Msta_TimingAocvArcFactor( MstaTiming *p, int nInst, int nClock, int nInNet, int nOutNet,
+                                      int fMax, int fInRise, int fClock );
+void        Msta_TimingPinWireDelay( MstaTiming *p, int nNet, int nInst, int nPin,
+                                     int fMax, int fRise, int fClockPath,
+                                     double DrvSlew, double *pWireDelay, double *pSinkSlew );
 
 #endif /* MSTA_TIMING_H */

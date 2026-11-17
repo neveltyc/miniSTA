@@ -74,26 +74,46 @@ MstaTimingType Msta_TimingTypeFromName( const char *pName );
    NLDM 查表
    --------------------------------------------------------------------- */
 /* Liberty 的 table_lookup 模型：二维表，默认行(index_1)是输入摆率、列(index_2)是
-   输出负载；实际含义由模板的 variable_1/2 决定，记在下面四个标志里。
+   输出负载；实际变量含义由模板的 variable_1/2 映射到下面的枚举轴类型。
    查表 = 双线性插值 + 越界外插。抄自 ABC sclLib.h:Scl_LibLookup 的算法。 */
+typedef enum {
+    MSTA_AXIS_SLEW = 0,          /* input_net_transition / input_transition_time */
+    MSTA_AXIS_LOAD,              /* total_output_net_capacitance */
+    MSTA_AXIS_CONSTRAINED_SLEW,  /* constrained_pin_transition（借用 Load 形参槽位） */
+    MSTA_AXIS_RELATED_SLEW       /* related_pin_transition（借用 Slew 形参槽位） */
+} MstaTableAxis;
+
 typedef struct {
-    int     nRows;       /* index_1 的长度；0 表示这张表不存在 */
-    int     nCols;       /* index_2 的长度 */
-    int     fRowIsLoad;  /* index_1 是负载轴 */
-    int     fColIsSlew;  /* index_2 是摆率轴（约束表和 load/slew delay 表） */
-    int     fRowUsesSecond; /* index_1 取 Msta_TableLookup 的第二个参数 Load，否则取 Slew */
-    int     fColUsesFirst;  /* index_2 取第一个参数 Slew，否则取 Load */
-    double *pRowIndex;   /* index_1：默认输入摆率(ps)，fRowIsLoad 时为负载(fF)；单调递增 */
-    double *pColIndex;   /* index_2：默认输出负载(fF)，fColIsSlew 时为摆率(ps)；单调递增 */
-    double *pValues;     /* nRows * nCols, 行优先 */
-    char    sTag[32];    /* 表名，如 "delay_template_7x7"，只用于打印 */
+    int           nRows;       /* index_1 的长度；0 表示这张表不存在 */
+    int           nCols;       /* index_2 的长度 */
+    MstaTableAxis Axis[2];     /* [0]=行轴(variable_1)，[1]=列轴(variable_2) */
+    double       *pRowIndex;   /* index_1（ps 或 fF），单调递增 */
+    double       *pColIndex;   /* index_2（fF 或 ps），单调递增 */
+    double       *pValues;     /* nRows * nCols, 行优先 */
+    char          sTag[32];    /* 表名，如 "delay_template_7x7"，只用于打印 */
 } MstaTable;
+
+/* 单次 NLDM 查表的完整中间量（供教学解释命令 explain_arc 打印格点与双线性算式）。 */
+typedef struct {
+    int           nDim;        /* 0=空表，1=1x1 标量，2=1D 行，3=1D 列，4=2D 双线性 */
+    MstaTableAxis Axis[2];
+    double        RowInput, ColInput;
+    int           iRow, iCol;
+    double        wRow, wCol;
+    double        Row0, Row1;
+    double        Col0, Col1;
+    double        V00, V01, V10, V11;
+    double        Result;
+} MstaTableExplain;
 
 void   Msta_TableFree( MstaTable *p );
 int    Msta_TableExists( const MstaTable *p );
+const char *Msta_LibAxisName( MstaTableAxis Axis );
 /* 给定输入摆率和输出负载，插值出一个值。表不存在时返回 0。
    约束表借用这两个参数传 (时钟脚摆率, 数据脚摆率)。 */
 double Msta_TableLookup( const MstaTable *p, double Slew, double Load );
+/* 执行与 Msta_TableLookup 完全一致的查表计算，并返回命中的 2x2 格点与权重。 */
+int    Msta_TableExplain( const MstaTable *p, double Slew, double Load, MstaTableExplain *pOut );
 
 /* ---------------------------------------------------------------------
    时序弧
@@ -103,6 +123,7 @@ typedef struct {
     MstaId        OutPin;     /* 终点引脚名 id；setup/hold 弧这是被检查的数据脚 */
     MstaTimingType Type;
     MstaSense     Sense;
+    char         *pWhen;      /* Liberty "when" 条件表达式（可能为 NULL） */
     /* 组合/clk2q 弧用 delay 表；setup/hold 弧用 Constraint 表。
        同一个 timing() 组里两类不会同时出现，所以放在一起不冲突。 */
     MstaTable DelayRise;      /* cell_rise      */
@@ -203,8 +224,8 @@ MstaArrayDefine( MstaCell, MstaCellArray )
 /* Liberty 的 operating_conditions(...) 组：工艺角的名字与电压/温度/工艺。 */
 typedef struct {
     MstaId Name;
-    double Voltage, Temperature, Process;   /* -1 表示这个组里没写 */
-    /* Liberty 的 K 因子：延迟缩放用（没有就保持 -1）。 */
+    double Voltage, Temperature, Process;   /* MSTA_UNSET 表示这个组里没写 */
+    /* Liberty 的 K 因子：延迟缩放用（没有就保持 MSTA_UNSET）。 */
     double KVolt, KTemp, KProcess;
 } MstaOpCond;
 MstaArrayDefine( MstaOpCond, MstaOpCondArray )
@@ -214,7 +235,7 @@ typedef struct {
     char           *pFileName;
     int             nCells;       /* 这个库贡献了多少 cell */
     MstaId          OpCondName;   /* default_operating_conditions，MSTA_NO_ID = 没写 */
-    double          NomVoltage, NomTemperature, NomProcess;  /* -1 = 没写 */
+    double          NomVoltage, NomTemperature, NomProcess;  /* MSTA_UNSET = 没写 */
     MstaOpCondArray vOpConds;     /* 这个库里声明的所有 operating_conditions */
 } MstaLibInfo;
 MstaArrayDefine( MstaLibInfo, MstaLibInfoArray )
@@ -263,6 +284,10 @@ MstaPin  *Msta_LibPinForCorner( MstaLib *p, MstaCell *pCell, MstaId PinId,
 int       Msta_CellPinIndexOf( MstaCell *p, MstaId NameId );     /* -1 表示没有这个脚 */
 /* 时钟弧按侧输入 case 值裁剪；-1=无翻转，其他为 MstaSense。pCases: -1/0/1。 */
 int       Msta_LibClockSense( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases );
+/* 这条弧是不是可用于组合传播的弧（排除约束弧和异步 clear/preset）。 */
+int       Msta_ArcIsComb( const MstaCell *pCell, const MstaArc *pArc );
+/* 按 case/常量引脚值检查 Liberty when 条件是否仍可能激活（1=可能激活，0=不可能）。 */
+int       Msta_LibArcWhenActive( MstaCell *pCell, const MstaArc *pArc, const signed char *pCases );
 /* 组合弧：输入脚 InPin 翻转到输出脚 OutPin。找不到返回 NULL。 */
 MstaArc  *Msta_CellCombArc( MstaCell *p, MstaId InPin, MstaId OutPin );
 int       Msta_CellHasAsyncArc( MstaCell *p, MstaId InPin, MstaId OutPin );

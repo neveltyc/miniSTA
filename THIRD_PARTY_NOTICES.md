@@ -6,9 +6,9 @@
 
 ## ABC（sclLiberty）
 
-文件：`src/abc_scl_liberty_tree.inc`
+文件：`src/msta_liberty_lex.h`、`src/msta_liberty_lex.c`（原合并为 `src/abc_scl_liberty_tree.inc`）
 
-该文件是 ABC `src/map/scl/sclLiberty.c` 中 Liberty 语法树解析部分的最小独立版本
+上述两个文件是 ABC `src/map/scl/sclLiberty.c` 中 Liberty 语法树解析部分的最小独立版本
 （https://github.com/berkeley-abc/abc）。函数名、结构体名和控制流刻意与原文件保持
 一致，便于对照阅读；具体改动列在文件头注释里。
 

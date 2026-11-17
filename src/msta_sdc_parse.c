@@ -13,6 +13,7 @@
 ***********************************************************************/
 
 #include <ctype.h>
+#include <math.h>
 #include <stdarg.h>
 #include "msta_sdc_int.h"
 
@@ -38,20 +39,21 @@ int Msta_SdcGlobMatch( const char *pPattern, const char *pText )
     return *pPattern == 0;
 }
 
-/* 判断一个词是不是完整的浮点数。 */
+/* 判断一个词是不是完整的有限浮点数（拒绝 nan / inf）。 */
 static int Msta_SdcIsNumber( const char *pText )
 {
     char *pEnd;
+    double Val;
     if ( pText == NULL || pText[0] == 0 )
         return 0;
-    (void)strtod( pText, &pEnd );
-    return pEnd != pText && *pEnd == 0;
+    Val = strtod( pText, &pEnd );
+    return pEnd != pText && *pEnd == 0 && isfinite( Val );
 }
 
 /* SDC 时间默认取库单位（set_units 可覆盖），内部一律 ps。 */
 double Msta_SdcToPs( MstaSdc *p, const char *pText )
 {
-    return atof( pText ) * p->TimeScalePs;
+    return strtod( pText, NULL ) * p->TimeScalePs;
 }
 
 /* 端口名 / "实例路径/引脚名" / 网络名 -> 一组全局网络号。
@@ -65,15 +67,42 @@ int Msta_SdcResolveNetsInto( MstaDesign *pDes, const char *pTarget, MstaSdcIntAr
 
     if ( strpbrk(pTarget, "*?") != NULL )
     {
-        for ( i = 0; i < pDes->vNets.nSize; i++ )
+        if ( Kind != 'G' )
         {
-            MstaNet *pNet = MstaNetArrayAt(&pDes->vNets,i);
-            if ( Kind == 'P' && !pNet->fTopPort ) continue;
-            if ( !Msta_SdcGlobMatch(pTarget,Msta_NetName(pDes,i)) ) continue;
-            *MstaSdcIntArrayAppend( vOut ) = i;
+            for ( i = 0; i < pDes->vNets.nSize; i++ )
+            {
+                MstaNet *pNet = MstaNetArrayAt(&pDes->vNets,i);
+                if ( pNet->fConst ) continue;
+                if ( Kind == 'P' && !pNet->fTopPort ) continue;
+                if ( !Msta_SdcGlobMatch(pTarget,Msta_NetName(pDes,i)) ) continue;
+                *MstaSdcIntArrayAppend( vOut ) = i;
+            }
+        }
+        if ( Kind == 'G' || ( Kind != 'P' && vOut->nSize == nBeg && strchr(pTarget, '/') != NULL ) )
+        {
+            int j, k;
+            for ( i = 0; i < pDes->vInsts.nSize; i++ )
+            {
+                MstaInst *pInst = MstaInstArrayAt( &pDes->vInsts, i );
+                const char *pInstName = Msta_InstName( pDes, i );
+                for ( j = 0; j < pInst->nPins && j < pInst->pCell->vPins.nSize; j++ )
+                {
+                    int nPinNet = pInst->pNets[j], fSeen = 0;
+                    char *pPinPath;
+                    if ( nPinNet < 0 ) continue;
+                    pPinPath = Msta_SdcArena( "%s/%s", pInstName,
+                                              Msta_NameStr( pInst->pCell->vPins.pData[j].Name ) );
+                    if ( !Msta_SdcGlobMatch( pTarget, pPinPath ) ) continue;
+                    for ( k = nBeg; k < vOut->nSize; k++ )
+                        if ( vOut->pData[k] == nPinNet ) { fSeen = 1; break; }
+                    if ( !fSeen )
+                        *MstaSdcIntArrayAppend( vOut ) = nPinNet;
+                }
+            }
         }
         if ( vOut->nSize == nBeg && !Msta_SdcIsQuiet(pTarget) )
-            Msta_WarnOnce("sdc：模式 \"%s\" 没有匹配到任何网络",pTarget);
+            Msta_WarnOnce("sdc：模式 \"%s\" 没有匹配到任何%s", pTarget,
+                          Kind == 'P' ? "端口" : Kind == 'G' ? "引脚" : "网络");
         return vOut->nSize - nBeg;
     }
 
@@ -97,6 +126,12 @@ int Msta_SdcResolveNetsInto( MstaDesign *pDes, const char *pTarget, MstaSdcIntAr
     }
     if ( vOut->nSize > nBeg )
         return vOut->nSize - nBeg;
+    if ( Kind == 'P' )
+    {
+        if ( !Msta_SdcIsQuiet(pTarget) )
+            Msta_WarnOnce( "sdc：对象 \"%s\" 不是本设计里的端口", pTarget );
+        return 0;
+    }
     /* "u_core/u_alu/U7/D"：前缀是实例路径，最后一截是引脚名 */
     pBuf = Msta_SdcArena( "%s", pTarget );
     {
@@ -593,8 +628,25 @@ int Msta_SdcObjectInsts( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, const Msta
     MstaSdcIntArrayInit( &vInsts );
     for ( i = 0; i < nNames; i++ )
     {
-        int nInst = Msta_DesignFindInstByName( pDes, ppNames[i] );
-        MstaCell *pCell = ( nInst < 0 && fCellNames ) ? Msta_LibFindCell( pLib, ppNames[i] ) : NULL;
+        const char *pName = ppNames[i];
+        char Kind = Msta_SdcKindOf( pName );
+        if ( strpbrk( pName, "*?" ) != NULL )
+        {
+            int nBefore = vInsts.nSize;
+            for ( k = 0; k < pDes->vInsts.nSize; k++ )
+                if ( Msta_SdcGlobMatch( pName, Msta_InstName( pDes, k ) ) )
+                    *MstaSdcIntArrayAppend( &vInsts ) = k;
+            if ( vInsts.nSize == nBefore && fCellNames && Kind != 'I' )
+                for ( k = 0; k < pDes->vInsts.nSize; k++ )
+                    if ( Msta_SdcGlobMatch( pName, Msta_NameStr( MstaInstArrayAt(&pDes->vInsts,k)->pCell->Name ) ) )
+                        *MstaSdcIntArrayAppend( &vInsts ) = k;
+            if ( vInsts.nSize == nBefore && !Msta_SdcIsQuiet( pName ) )
+                Msta_SdcNote( pCmd, fCellNames ? "找不到实例或单元 \"%s\"" : "找不到实例 \"%s\"",
+                              pName );
+            continue;
+        }
+        int nInst = Msta_DesignFindInstByName( pDes, pName );
+        MstaCell *pCell = ( nInst < 0 && fCellNames && Kind != 'I' ) ? Msta_LibFindCell( pLib, pName ) : NULL;
         if ( nInst >= 0 )
             *MstaSdcIntArrayAppend( &vInsts ) = nInst;
         else if ( pCell != NULL )
@@ -603,9 +655,9 @@ int Msta_SdcObjectInsts( MstaSdc *p, MstaDesign *pDes, MstaLib *pLib, const Msta
                 if ( MstaInstArrayAt(&pDes->vInsts,k)->pCell == pCell )
                     *MstaSdcIntArrayAppend( &vInsts ) = k;
         }
-        else
+        else if ( !Msta_SdcIsQuiet( pName ) )
             Msta_SdcNote( pCmd, fCellNames ? "找不到实例或单元 \"%s\"" : "找不到实例 \"%s\"",
-                          ppNames[i] );
+                          pName );
     }
     *ppInsts = (int *)Msta_SdcArenaKeep( vInsts.pData );
     if ( vInsts.nSize == 0 )
